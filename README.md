@@ -1,118 +1,131 @@
-# ZAI Auth — ATProto Login (Django)
+# Corliss — ATProto login, OIDC out
 
-Members sign into the cluster with their **ATProto handle** instead of a separate
-Open WebUI account. This Django app runs its own ATProto OAuth client (handle →
-PDS authorize → authenticated), persists a DID-keyed identity, and exposes an
-OIDC provider that Open WebUI consumes.
+Corliss lets people sign in with their **ATProto handle** (Bluesky et al.)
+instead of yet another account, and re-exposes that session to your own
+services as a standard **OIDC provider**.
 
-See the spec: [`docs/specs/0002-spec-atproto-login/`](../../docs/specs/0002-spec-atproto-login/).
+It is a bridge between two protocols:
 
-> **Scope:** authentication only, **app-only** (runs locally). Deployment
-> (CT/role/nginx/TLS), Open WebUI, and Postgres are prerequisites / later specs.
+- **In** — a full ATProto OAuth *client*: handle → DID → PDS discovery → PAR +
+  PKCE + DPoP + `private_key_jwt`, ending in a DID-keyed Django session.
+- **Out** — an OIDC *provider*: discovery, authorize, token, JWKS, minting an
+  RS256 `id_token` whose `sub` is the member's DID.
 
-## Architecture
+Anything that speaks OIDC (Open WebUI, Grafana, …) can sit behind it.
 
-| App | Responsibility |
-| --- | -------------- |
-| `accounts` | DID-keyed custom `User` model (handle in `username`, `pds_url`, `last_seen`). |
-| `atproto_oauth` | ATProto OAuth client: DID/handle resolution → PDS discovery → PAR → DPoP-bound token exchange; serves `client-metadata.json`. |
-| `oidc` | OIDC provider (discovery, authorize, token) minting an RS256 `id_token`; serves the JWKS endpoint. |
-| `zai_auth.signing` | Loads the signing keys and builds the JWKS (shared by both clients). |
+## Layout
 
-Two signing keys, one JWKS: **ES256 (P-256)** for atproto DPoP + client assertion
-(atproto mandates it) and **RS256 (RSA)** for the OIDC `id_token` (broad OIDC
-client compatibility).
+Corliss is a **single Django app**. Three models, one URL table; the two
+protocol halves are plain modules, not sub-apps. A future subsystem earns its
+own app only by being genuinely standalone.
+
+| Module | Responsibility |
+| ------ | -------------- |
+| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`. |
+| `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
+| `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting. |
+| `corliss/views.py` | Every HTTP endpoint, both halves. |
+| `corliss/urls.py` | Every route, flat and un-namespaced. |
+| `corliss/signing.py` | Loads the signing keys, builds the JWKS. |
+
+Two signing keys, one JWKS: **ES256 (P-256)** for atproto DPoP + client
+assertion (atproto mandates it) and **RS256 (RSA)** for the OIDC `id_token`
+(broad OIDC-client compatibility).
 
 ## Run locally
 
-Requires [uv](https://docs.astral.sh/uv/) and a reachable Postgres. uv builds
-the venv against Python 3.13 (Django 5.2's ceiling, and what the cluster's
-Debian 13 CTs ship natively — see `docs/roles/zai-auth.md`), fetching that
-interpreter itself if your machine doesn't have one.
+Requires [uv](https://docs.astral.sh/uv/) and a reachable Postgres.
 
 ```bash
-cd apps/zai-auth
-uv venv --python 3.13 .venv
+uv venv .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 
 cp .env.example .env            # then edit DATABASE_URL etc.
-createdb zai_auth               # or point DATABASE_URL at an existing DB
+createdb corlissdb              # or point DATABASE_URL at an existing DB
 .venv/bin/python manage.py generate_keys   # dev signing keys, written to ./keys/
 
 .venv/bin/python manage.py migrate
+.venv/bin/python manage.py collectstatic --noinput   # whitenoise manifest storage needs this
 .venv/bin/python manage.py runserver
 ```
 
-### Environment
+Configuration is entirely env-driven — see [`.env.example`](.env.example) for
+the full list. `.env` is git-ignored; **never commit secrets or private keys**.
+`CHAT_URL` drives the nav's "Chat" link and can be left blank.
 
-All configuration is env-driven; see [`.env.example`](.env.example) for the full
-list. `.env` is git-ignored — **never commit secrets or private keys**.
-`CHAT_URL` (Open WebUI's public origin) drives the nav's "Chat" link — leave it
-blank locally if you have no Open WebUI to point at.
-
-### UI / static assets
-
-The login and account pages share `templates/base.html` (nav + footer chrome)
-and `static/css/base.css` (design tokens, ported from
-[`docs/design_handoff_auth_page/`](../../docs/design_handoff_auth_page/)).
-Fonts (Inter, IBM Plex Mono) are vendored under `static/fonts/` — no
-`fonts.googleapis.com` call at runtime. Run `manage.py collectstatic` before
-serving in production (whitenoise serves the collected output; see
-`ansible/roles/zai-auth`'s task for the deployment step).
+**Local-dev `client_id` caveat:** atproto requires `client_id` to be a public
+HTTPS URL serving `client-metadata.json`, so a real end-to-end login from
+`runserver` needs a tunnel (e.g. `cloudflared tunnel --url
+http://127.0.0.1:8000`) with `PUBLIC_BASE_URL`, `CSRF_TRUSTED_ORIGINS`, and
+`ALLOWED_HOSTS` pointed at it.
 
 ### Tests
 
 ```bash
+.venv/bin/python manage.py collectstatic --noinput   # once; page tests render {% static %}
 .venv/bin/python manage.py test
 ```
 
-## Open questions / known limitations
+### Admin
 
-- **Local-dev `client_id`**: atproto requires `client_id` to be a public HTTPS
-  URL hosting `client-metadata.json`. Local `runserver` testing relies on
-  atproto's localhost client-development convention or a temporary tunnel; the
-  real public hostname/TLS is a deployment-spec decision.
-- **OIDC claims — email (resolved)**: the `id_token` now carries `email` +
-  `email_verified` whenever the member's PDS supplied one. Sourced via the
-  `transition:email` scope + `com.atproto.server.getSession` against the
-  member's PDS directly (`atproto_oauth.client.fetch_session_email`) — the
-  same approach Graze's AIP uses. It's best-effort: a member who declines the
-  scope or has no email on their PDS simply gets no `email` claim.
+```bash
+manage.py make_admin alice.bsky.social   # promote an ATProto identity (keyed on DID)
+manage.py ensure_admin                   # idempotent break-glass local admin;
+                                         #   reads CORLISS_ADMIN_PASSWORD
+```
 
-## Open WebUI OIDC configuration
+## Endpoints
 
-ZAI Auth is a standard OIDC provider. Point Open WebUI at it with these
-environment variables (substitute `PUBLIC_BASE_URL` for the real public origin):
+| Endpoint | Path |
+| -------- | ---- |
+| Landing (authenticated) | `/` |
+| Login / logout | `/login`, `/logout` |
+| ATProto callback | `/oauth/callback` |
+| ATProto client metadata (**is** the `client_id`) | `/client-metadata.json` |
+| OIDC discovery | `/.well-known/openid-configuration` |
+| JWKS | `/.well-known/jwks.json` |
+| OIDC authorize / token | `/oidc/authorize`, `/oidc/token` |
+| Django admin | `/admin/` |
+
+Discovery and JWKS sit at the root deliberately: an OIDC issuer of
+`https://example.com` must serve its discovery document at
+`https://example.com/.well-known/openid-configuration`.
+
+## Wiring up a relying party (Open WebUI shown)
 
 ```bash
 ENABLE_OAUTH_SIGNUP=true
 OAUTH_CLIENT_ID=open-webui                       # must equal OIDC_CLIENT_ID here
 OAUTH_CLIENT_SECRET=<shared secret>              # must equal OIDC_CLIENT_SECRET here
-OPENID_PROVIDER_URL=https://PUBLIC_BASE_URL/.well-known/openid-configuration
-OAUTH_PROVIDER_NAME=ZAI
+OPENID_PROVIDER_URL=https://<PUBLIC_BASE_URL>/.well-known/openid-configuration
 OAUTH_SCOPES=openid email profile
 OAUTH_USERNAME_CLAIM=handle                      # we emit `handle` (= the atproto handle)
 OAUTH_EMAIL_CLAIM=email                          # present when the member's PDS supplied one
 ```
 
-Register Open WebUI's redirect URI in this app's `OIDC_REDIRECT_URIS`
+Register the RP's redirect URI in Corliss's `OIDC_REDIRECT_URIS`
 (e.g. `https://chat.example.com/oauth/oidc/callback`).
 
-| Provider endpoint | Path |
-| ----------------- | ---- |
-| Discovery | `/.well-known/openid-configuration` |
-| JWKS | `/.well-known/jwks.json` |
-| Authorize | `/oidc/authorize` |
-| Token | `/oidc/token` |
-
-**id_token claims:** `sub` = DID, `handle` = atproto handle (also as
-`preferred_username`), plus `iss`/`aud`/`exp`/`iat`/`nonce`, and `email` +
-`email_verified` when the member's PDS supplied one. RS256, verifiable via
-JWKS.
+**`id_token` claims:** `sub` = DID, `handle` (also `preferred_username`),
+`iss`/`aud`/`exp`/`iat`/`nonce`, plus `email` + `email_verified` when the
+member's PDS supplied one. Email is best-effort — sourced at login via the
+`transition:email` scope and `com.atproto.server.getSession` — so a member who
+declines the scope simply gets no `email` claim. DID is the only stable
+identifier; never key on handle or email.
 
 ## Deployment
 
-Cluster deployment (CT, systemd unit, secrets, Caddy route, Open WebUI wiring)
-is handled by the [`zai-auth` Ansible role](../../docs/roles/zai-auth.md) — see
-`docs/decisions/0005-zai-auth-over-aip.md` for why this app, not AIP, is the
-cluster's login bridge.
+Corliss runs under gunicorn + whitenoise against Postgres; every deployment
+value is an environment variable, so it has no opinion about how it's shipped.
+It is deployed to the Z-Space AI cluster by the `corliss` Ansible role in
+[zai-ops](https://github.com/Z-Space-Society/zai-ops), which clones this repo
+at a pinned ref, builds the venv, migrates, collects static, and renders the
+env file.
+
+Required in production: `SECRET_KEY`, `DATABASE_URL`, `ALLOWED_HOSTS`,
+`PUBLIC_BASE_URL`, `CSRF_TRUSTED_ORIGINS`, the two key paths, and the
+`OIDC_CLIENT_*` values.
+
+> **History:** Corliss began as the `zai-auth` app inside
+> [zai-ops](https://github.com/Z-Space-Society/zai-ops) and was extracted here;
+> pre-extraction history lives in that repo.

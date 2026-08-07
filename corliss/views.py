@@ -1,0 +1,338 @@
+"""All of Corliss's HTTP endpoints — the ATProto client half and the OIDC
+provider half, in the order a member meets them.
+
+ATProto client (people):
+- `client_metadata`: serves the client metadata at the `client_id` URL.
+- `login`: handle form → resolve → discover → PAR → redirect to the PDS.
+- `callback`: validate `state` → DPoP-bound token exchange → upsert the member,
+  store tokens server-side, establish the Django session.
+- `landing`: the authenticated page a member lands on.
+- `logout`: ends this device's Corliss session. Local-session-only for now (no
+  upstream ATProto/OIDC RP-initiated logout) — a relying party like Open WebUI
+  ending its own session doesn't end this one, so a member who wants a real
+  logout has to hit this too.
+
+OIDC provider (machines):
+- `jwks`: published public keys.
+- `openid_configuration`: discovery document.
+- `authorize`: the RP sends the member here; if signed in we issue an auth code
+  and redirect back, otherwise we bounce through atproto login and resume.
+- `token`: the RP redeems the code (with its client secret) for an `id_token`.
+"""
+
+import base64
+import hmac
+import secrets
+from urllib.parse import urlencode
+
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.contrib.auth import login as auth_login
+from django.contrib.auth import logout as auth_logout
+from django.contrib.auth.decorators import login_required
+from django.http import HttpResponseBadRequest, JsonResponse
+from django.shortcuts import redirect, render
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+
+from . import atproto, oidc, signing
+from .models import AtprotoToken, OidcAuthCode
+
+User = get_user_model()
+
+SESSION_PREFIX = "corliss:oauth:"
+
+# Key in the Django session for "where to resume after atproto login".
+POST_LOGIN_REDIRECT = "post_login_redirect"
+
+
+# --- ATProto OAuth client endpoints ----------------------------------------
+
+
+def client_metadata(request):
+    """Serve the ATProto OAuth client metadata at the `client_id` URL."""
+    return JsonResponse(atproto.client_metadata())
+
+
+def login(request):
+    if request.method != "POST":
+        return render(request, "login.html")
+
+    handle = request.POST.get("handle", "").strip()
+    if not handle:
+        return render(request, "login.html", {"error": "Enter a handle."})
+
+    try:
+        did = atproto.resolve_handle_to_did(handle)
+        doc = atproto.fetch_did_document(did)
+        pds_url = atproto.pds_endpoint_from_doc(doc)
+        meta = atproto.discover_auth_server(pds_url)
+        dpop_key = atproto.generate_key()
+        verifier, challenge = atproto.pkce_pair()
+        state = secrets.token_urlsafe(32)
+        request_uri, nonce = atproto.pushed_authorization_request(
+            meta,
+            dpop_key=dpop_key,
+            state=state,
+            code_challenge=challenge,
+            login_hint=handle,
+        )
+    except atproto.OAuthError as exc:
+        return render(request, "login.html", {"error": str(exc)})
+
+    # Pending-flow state lives in the server-side Django session, keyed by the
+    # opaque `state` we just minted (validated on callback — CSRF defense).
+    request.session[SESSION_PREFIX + state] = {
+        "code_verifier": verifier,
+        "dpop_pem": atproto.key_to_pem(dpop_key),
+        "dpop_nonce": nonce,
+        "issuer": meta["issuer"],
+        "token_endpoint": meta["token_endpoint"],
+        "did": did,
+        "pds_url": pds_url,
+        "handle": handle,
+    }
+    return redirect(atproto.authorization_url(meta, request_uri))
+
+
+def callback(request):
+    state = request.GET.get("state")
+    pending = (
+        request.session.pop(SESSION_PREFIX + state, None) if state else None
+    )
+    # Unknown/expired/missing state → reject (CSRF / replay protection).
+    if not state or pending is None:
+        return HttpResponseBadRequest("Invalid or expired authorization state.")
+
+    if request.GET.get("error"):
+        return render(
+            request,
+            "login.html",
+            {"error": f"Authorization denied: {request.GET.get('error')}"},
+        )
+
+    # RFC 9207 mix-up defense: the authorization response must carry the exact
+    # issuer we started the flow with, else a code could be redeemed against a
+    # different authorization server.
+    if request.GET.get("iss") != pending["issuer"]:
+        return HttpResponseBadRequest("Issuer mismatch in authorization response.")
+
+    code = request.GET.get("code")
+    if not code:
+        return HttpResponseBadRequest("Missing authorization code.")
+
+    dpop_key = atproto.key_from_pem(pending["dpop_pem"])
+    meta = {
+        "issuer": pending["issuer"],
+        "token_endpoint": pending["token_endpoint"],
+    }
+    try:
+        token_data, nonce = atproto.exchange_code(
+            meta,
+            code=code,
+            code_verifier=pending["code_verifier"],
+            dpop_key=dpop_key,
+            nonce=pending["dpop_nonce"],
+        )
+    except atproto.OAuthError as exc:
+        return render(request, "login.html", {"error": str(exc)})
+
+    # The token's `sub` is the PDS-authenticated DID — authoritative and
+    # required. Never fall back to the unverified pre-resolved DID.
+    did = token_data.get("sub")
+    if not did or did != pending["did"]:
+        return HttpResponseBadRequest("DID mismatch in token response.")
+
+    # Best-effort: read email straight from the member's PDS (requires the
+    # transition:email grant). Never blocks login — see fetch_session_email.
+    email, email_confirmed = atproto.fetch_session_email(
+        pending["pds_url"],
+        token_data.get("access_token", ""),
+        dpop_key=dpop_key,
+        nonce=nonce,
+    )
+
+    user = _upsert_member(
+        did=did,
+        handle=pending["handle"],
+        pds_url=pending["pds_url"],
+        email=email,
+        email_confirmed=email_confirmed,
+    )
+    _store_tokens(user, token_data, dpop_key, nonce, pending)
+
+    auth_login(
+        request, user, backend="django.contrib.auth.backends.ModelBackend"
+    )
+    user.touch_last_seen()
+
+    # Resume an in-progress OIDC authorize (the RP) if one bounced us here.
+    # Only honour a safe same-site path (single leading slash, no scheme/host).
+    next_url = request.session.pop(POST_LOGIN_REDIRECT, None)
+    if next_url and next_url.startswith("/") and not next_url.startswith("//"):
+        return redirect(next_url)
+    return redirect("landing")
+
+
+@login_required
+def landing(request):
+    return render(request, "landing.html")
+
+
+def logout(request):
+    """End this device's Corliss session. GET-friendly (no CSRF risk beyond
+    forcing a re-login) since it's meant to be hit directly for now."""
+    auth_logout(request)
+    return redirect("login")
+
+
+def _upsert_member(*, did, handle, pds_url, email="", email_confirmed=False):
+    """Create the member on first login; refresh their PDS-sourced fields
+    (handle, pds_url, email) on every login thereafter."""
+    user, created = User.objects.get_or_create(
+        did=did,
+        defaults={
+            "username": handle,
+            "pds_url": pds_url,
+            "email": email,
+            "email_confirmed": email_confirmed,
+        },
+    )
+    if not created:
+        user.username = handle
+        user.pds_url = pds_url
+        user.email = email
+        user.email_confirmed = email_confirmed
+        user.save(
+            update_fields=["username", "pds_url", "email", "email_confirmed"]
+        )
+    return user
+
+
+def _store_tokens(user, token_data, dpop_key, nonce, pending):
+    AtprotoToken.objects.update_or_create(
+        user=user,
+        defaults={
+            "pds_url": pending["pds_url"],
+            "issuer": pending["issuer"],
+            "token_endpoint": pending["token_endpoint"],
+            "access_token": token_data.get("access_token", ""),
+            "refresh_token": token_data.get("refresh_token", ""),
+            "dpop_private_pem": atproto.key_to_pem(dpop_key),
+            "dpop_nonce": nonce or "",
+        },
+    )
+
+
+# --- OIDC provider endpoints -----------------------------------------------
+
+
+def jwks(request):
+    """Publish the public halves of the signing keys (ES256 + RS256)."""
+    return JsonResponse(signing.jwks())
+
+
+def openid_configuration(request):
+    return JsonResponse(oidc.discovery_document())
+
+
+def _error(error, description, status=400):
+    return JsonResponse(
+        {"error": error, "error_description": description}, status=status
+    )
+
+
+@require_http_methods(["GET"])
+def authorize(request):
+    client_id = request.GET.get("client_id")
+    redirect_uri = request.GET.get("redirect_uri")
+    response_type = request.GET.get("response_type")
+    scope = request.GET.get("scope", "")
+    state = request.GET.get("state", "")
+    nonce = request.GET.get("nonce", "")
+
+    # Validate the relying party before doing anything else.
+    if client_id != settings.OIDC_CLIENT_ID:
+        return _error("unauthorized_client", "unknown client_id")
+    if redirect_uri not in settings.OIDC_REDIRECT_URIS:
+        return _error("invalid_request", "redirect_uri not registered")
+    if response_type != "code":
+        return _error("unsupported_response_type", "only 'code' is supported")
+    if "openid" not in scope.split():
+        return _error("invalid_scope", "missing 'openid' scope")
+
+    # Member must be signed in (atproto). If not, bounce through login and resume.
+    if not request.user.is_authenticated:
+        request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
+        return redirect("login")
+
+    code = oidc.issue_code(
+        request.user,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        nonce=nonce,
+        scope=scope,
+    )
+    params = {"code": code}
+    if state:
+        params["state"] = state
+    return redirect(f"{redirect_uri}?{urlencode(params)}")
+
+
+def _client_credentials(request):
+    """Read client_id/secret from POST body or HTTP Basic (the two RP methods)."""
+    cid = request.POST.get("client_id")
+    secret = request.POST.get("client_secret")
+    auth = request.META.get("HTTP_AUTHORIZATION", "")
+    if not cid and auth.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(auth[6:]).decode()
+            cid, secret = decoded.split(":", 1)
+        except (ValueError, UnicodeDecodeError):
+            return None, None
+    return cid, secret
+
+
+@csrf_exempt  # token endpoint is machine-to-machine, authenticated by client secret
+@require_http_methods(["POST"])
+def token(request):
+    cid, secret = _client_credentials(request)
+    # Constant-time comparison so the token endpoint doesn't leak the secret.
+    cid_ok = hmac.compare_digest(cid or "", settings.OIDC_CLIENT_ID)
+    secret_ok = hmac.compare_digest(secret or "", settings.OIDC_CLIENT_SECRET)
+    if not (cid_ok and secret_ok):
+        return _error("invalid_client", "client authentication failed", status=401)
+
+    if request.POST.get("grant_type") != "authorization_code":
+        return _error("unsupported_grant_type", "only authorization_code")
+
+    code_value = request.POST.get("code", "")
+    redirect_uri = request.POST.get("redirect_uri", "")
+
+    try:
+        code = OidcAuthCode.objects.select_related("user").get(code=code_value)
+    except OidcAuthCode.DoesNotExist:
+        return _error("invalid_grant", "unknown code")
+
+    if not code.is_valid():
+        return _error("invalid_grant", "code expired or already used")
+    if code.client_id != cid or code.redirect_uri != redirect_uri:
+        return _error("invalid_grant", "code/client/redirect mismatch")
+
+    # Single-use, race-safe: only the request that flips used False→True wins,
+    # so concurrent redemptions of the same code can't both mint a token.
+    claimed = OidcAuthCode.objects.filter(code=code_value, used=False).update(
+        used=True
+    )
+    if not claimed:
+        return _error("invalid_grant", "code already used")
+
+    id_token = oidc.mint_id_token(code.user, client_id=cid, nonce=code.nonce)
+    return JsonResponse(
+        {
+            "access_token": id_token,  # we don't issue a separate RP access token
+            "token_type": "Bearer",
+            "expires_in": oidc.ID_TOKEN_TTL_SECONDS,
+            "id_token": id_token,
+        }
+    )
