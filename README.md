@@ -79,9 +79,9 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | Endpoint | Path |
 | -------- | ---- |
 | Landing (authenticated) | `/` |
-| Login / logout | `/login`, `/logout` |
-| ATProto callback | `/oauth/callback` |
-| ATProto client metadata (**is** the `client_id`) | `/client-metadata.json` |
+| Login / logout | `/auth/login`, `/auth/logout` |
+| ATProto callback | `/auth/oauth/callback` |
+| ATProto client metadata (**is** the `client_id`) | `/auth/client-metadata.json` |
 | OIDC discovery | `/.well-known/openid-configuration` |
 | JWKS | `/.well-known/jwks.json` |
 | OIDC authorize / token | `/oidc/authorize`, `/oidc/token` |
