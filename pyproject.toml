@@ -1,0 +1,32 @@
+[project]
+name = "corliss"
+version = "0.1.0"
+description = "ATProto login, OIDC out"
+requires-python = ">=3.14"
+
+# Kept deliberately small. The ATProto OAuth flow (DID resolution, PDS discovery,
+# PAR, DPoP, PKCE, private_key_jwt) is implemented directly on top of `requests`
+# + `PyJWT` rather than a turnkey OAuth library: atproto's DID/PDS specifics and
+# its mandated ES256 keys make a transparent, unit-testable implementation easier
+# to reason about than wrapping a generic client.
+#
+# Every direct dependency is pinned exactly. uv.lock pins the full tree including
+# transitives; these `==` pins make the deliberate choices legible here, so a
+# version bump is a reviewable one-line diff rather than a move inside the lock.
+# See the README's "Checking for updates" for the upgrade procedure.
+dependencies = [
+    "django==6.1",             # current stable; 6.2 LTS lands Dec 2026
+    "psycopg[binary]==3.3.4",  # Postgres driver (psycopg 3)
+    "django-environ==0.14.0",  # 12-factor env-driven settings
+    "pyjwt==2.13.0",           # JWT sign/verify for DPoP, client assertion, id_token
+    "cryptography==50.0.0",    # EC (P-256) + RSA key handling, backs PyJWT
+    "requests==2.34.2",        # HTTP to the PDS / DID resolution
+    "dnspython==2.8.0",        # DNS TXT handle resolution (_atproto.<handle>) for make_admin
+    "gunicorn==26.0.0",        # production WSGI server (deployment; not used by runserver)
+    "whitenoise==6.12.0",      # serves collected static straight from gunicorn
+]
+
+# Corliss is a Django site, not an installable distribution: no [build-system],
+# so `uv sync` provisions dependencies without trying to build the app itself.
+[tool.uv]
+package = false

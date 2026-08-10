@@ -27,7 +27,15 @@ if _env_file.exists():
 # SECRET_KEY has an insecure default ONLY so `manage.py` runs out of the box in
 # development; any real run sets it from the environment.
 SECRET_KEY = env("SECRET_KEY", default="dev-insecure-key-do-not-use-in-prod")
-DEBUG = env("DEBUG")
+
+# The DEBUG this environment actually asked for, and the runtime DEBUG, which
+# are not always the same value: Django's test runner forces `settings.DEBUG`
+# off for the duration of a test run. Runtime gates (is this route live?) want
+# the mutable one; deploy-time system checks (did the operator misconfigure
+# this?) want DEBUG_FROM_ENV, or they fire during `manage.py test` on any
+# machine with a development flag set and block the suite.
+DEBUG_FROM_ENV = env("DEBUG")
+DEBUG = DEBUG_FROM_ENV
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
 # Origins Django trusts for unsafe (POST) requests' CSRF Origin check. Needed
@@ -59,6 +67,25 @@ OIDC_REDIRECT_URIS = env.list("OIDC_REDIRECT_URIS", default=[])
 # Public origin of the cluster's chat app (Open WebUI). Blank hides the nav's
 # "Chat" link entirely — e.g. local dev with no Open WebUI configured.
 CHAT_URL = env("CHAT_URL", default="")
+
+# --- Local development escape hatch ------------------------------------------
+# A real atproto login can't complete over loopback: the authorization server
+# fetches our client-metadata.json server-side over public HTTPS, so `client_id`
+# must be publicly reachable (see the README's "Local dev without atproto").
+#
+# DEV_LOGIN_ENABLED exposes /auth/dev-login, which mints a full session for any
+# handle typed into it WITHOUT authenticating anything. It is a complete
+# authentication bypass and must never be on in production.
+#
+# Three independent guards, because this is an auth service:
+#   1. it defaults to off, so enabling it is always explicit;
+#   2. the route is only registered when this AND DEBUG are true, and the view
+#      re-checks both and 404s otherwise (corliss.views.dev_login);
+#   3. corliss.apps raises a system-check ERROR when it is set without DEBUG, so
+#      a production config carrying it fails `manage.py check` — and therefore
+#      the deploy's migrate/collectstatic — instead of quietly serving an open
+#      door.
+DEV_LOGIN_ENABLED = env.bool("DEV_LOGIN_ENABLED", default=False)
 
 # --- Applications ---------------------------------------------------------
 

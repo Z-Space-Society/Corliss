@@ -1,5 +1,11 @@
-#!/usr/bin/env python
-"""Django's command-line utility for administrative tasks."""
+#!/usr/bin/env -S uv run
+"""Django's command-line utility for administrative tasks.
+
+The `uv run` shebang syncs the environment from uv.lock before executing, so
+`./manage.py <command>` always runs against the locked dependencies without a
+venv to activate first. Deployment is unaffected: the zai-ops role invokes
+`<venv>/bin/python manage.py ...`, which never consults this line.
+"""
 import os
 import sys
 

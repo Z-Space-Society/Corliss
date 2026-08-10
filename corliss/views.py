@@ -11,6 +11,10 @@ ATProto client (people):
   upstream ATProto/OIDC RP-initiated logout) — a relying party like Open WebUI
   ending its own session doesn't end this one, so a member who wants a real
   logout has to hit this too.
+- `dev_login`: LOCAL DEVELOPMENT ONLY. Mints a session for any handle with no
+  authentication whatsoever, so the rest of the app is workable without the
+  public-HTTPS `client_id` a real atproto login demands. Off by default and
+  refused outside DEBUG — see settings.DEV_LOGIN_ENABLED.
 
 OIDC provider (machines):
 - `jwks`: published public keys.
@@ -30,7 +34,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponseBadRequest, JsonResponse
+from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -168,6 +172,53 @@ def callback(request):
 
     # Resume an in-progress OIDC authorize (the RP) if one bounced us here.
     # Only honour a safe same-site path (single leading slash, no scheme/host).
+    next_url = request.session.pop(POST_LOGIN_REDIRECT, None)
+    if next_url and next_url.startswith("/") and not next_url.startswith("//"):
+        return redirect(next_url)
+    return redirect("landing")
+
+
+@require_http_methods(["POST"])
+def dev_login(request):
+    """LOCAL DEVELOPMENT ONLY — sign in as anyone, verifying nothing.
+
+    A real atproto login can't complete over loopback (the authorization server
+    fetches our client-metadata.json over public HTTPS), so this exists to make
+    the rest of the app — the OIDC half, the templates, the admin, relying-party
+    wiring — workable without a tunnel. It skips the entire handshake: no DID
+    resolution, no PDS discovery, no PAR, no DPoP, no token exchange.
+
+    Consequently it proves nothing about the atproto client. Use a tunnel for
+    that (README, "Real atproto login locally").
+
+    Gated on DEBUG *and* DEV_LOGIN_ENABLED here as well as at the URLconf, and
+    corliss.apps.check_dev_login_requires_debug fails startup if the flag is set
+    without DEBUG. See the DEV_LOGIN_ENABLED note in settings.py.
+    """
+    if not (settings.DEBUG and settings.DEV_LOGIN_ENABLED):
+        raise Http404("dev login is not enabled")
+
+    handle = request.POST.get("handle", "").strip().lstrip("@")
+    if not handle:
+        return render(request, "login.html", {"error": "Enter a handle."})
+
+    # `did:dev:` is not a registered DID method, so these rows can never collide
+    # with a real atproto DID and are obvious as fakes in the admin and the DB.
+    # Deriving it from the handle keeps repeat logins landing on the same member.
+    user = _upsert_member(
+        did=f"did:dev:{handle}",
+        handle=handle,
+        pds_url="",
+        email=f"{handle}@dev.invalid",
+        email_confirmed=False,
+    )
+    auth_login(
+        request, user, backend="django.contrib.auth.backends.ModelBackend"
+    )
+    user.touch_last_seen()
+
+    # Resume an in-progress OIDC authorize, exactly as `callback` does, so the
+    # relying-party flow is testable end to end without atproto.
     next_url = request.session.pop(POST_LOGIN_REDIRECT, None)
     if next_url and next_url.startswith("/") and not next_url.startswith("//"):
         return redirect(next_url)

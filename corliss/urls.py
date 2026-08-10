@@ -13,6 +13,7 @@ Two path families, deliberately shaped:
   bare origin.
 """
 
+from django.conf import settings
 from django.contrib import admin
 from django.urls import path
 
@@ -40,3 +41,12 @@ urlpatterns = [
     path("oidc/token", views.token, name="token"),
     path("", views.landing, name="landing"),
 ]
+
+# Local-development auth bypass, registered only when explicitly enabled AND in
+# DEBUG. In every other configuration the route simply does not exist, so there
+# is nothing to probe for. See settings.DEV_LOGIN_ENABLED for the full rationale
+# and the startup check that backs this up.
+if settings.DEBUG and settings.DEV_LOGIN_ENABLED:
+    urlpatterns += [
+        path("auth/dev-login", views.dev_login, name="dev_login"),
+    ]
