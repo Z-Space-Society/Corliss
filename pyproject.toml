@@ -2,6 +2,8 @@
 name = "corliss"
 version = "0.1.0"
 description = "ATProto login, OIDC out"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.14"
 
 # Kept deliberately small. The ATProto OAuth flow (DID resolution, PDS discovery,

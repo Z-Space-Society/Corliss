@@ -236,3 +236,8 @@ Required in production: `SECRET_KEY`, `DATABASE_URL`, `ALLOWED_HOSTS`,
 > **History:** Corliss began as the `zai-auth` app inside
 > [zai-ops](https://github.com/Z-Space-Society/zai-ops) and was extracted here;
 > pre-extraction history lives in that repo.
+
+## License
+
+[Apache License 2.0](LICENSE) — permissive, with an explicit patent grant, and
+compatible with the ATProto ecosystem's own MIT/Apache-2.0 licensing.
