@@ -44,7 +44,13 @@
     </main>
 
     <footer class="footer">
-      <span class="footer__copy">&copy; 2026 sharedcomputer.network &middot; by <a href="https://z-space.ca" target="_blank" rel="noopener" class="footer__link">Z-Space</a></span>
+      {% if APP_VERSION %}
+        <span class="footer__version">
+          <a href="{{ REPO_URL }}" target="_blank" rel="noopener" class="footer__link">Corliss</a>
+          {% if APP_VERSION_URL %}<a href="{{ APP_VERSION_URL }}" target="_blank" rel="noopener" class="footer__link">{{ APP_VERSION }}</a>{% else %}{{ APP_VERSION }}{% endif %}
+        </span>
+      {% endif %}
+      <span class="footer__copy">&copy; 2026 <a href="{{ PUBLIC_BASE_URL }}" class="footer__link">sharedcomputer.network</a> by <a href="https://z-space.ca" target="_blank" rel="noopener" class="footer__link">Z-Space</a></span>
     </footer>
   </div>
 </body>

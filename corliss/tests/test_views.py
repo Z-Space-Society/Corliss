@@ -1,7 +1,8 @@
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from corliss import atproto
@@ -34,6 +35,50 @@ class LoginViewTests(TestCase):
         resp = self.client.get(reverse("login"))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "name=\"handle\"")
+
+
+class FooterTests(TestCase):
+    """base.html's footer, rendered on every page (login is the public one)."""
+
+    def setUp(self):
+        self.html = self.client.get(reverse("login")).content.decode()
+
+    def test_build_stamp_links_the_repo_and_the_running_version(self):
+        # Shape, never a literal version: asserting v0.2.0 here would break on
+        # every release and on every developer's dirty tree.
+        self.assertIn(settings.REPO_URL, self.html)
+        self.assertIn(settings.VERSION, self.html)
+        if settings.VERSION_URL:
+            self.assertIn(settings.VERSION_URL, self.html)
+
+    def test_site_name_links_its_own_origin(self):
+        self.assertIn(f'href="{settings.PUBLIC_BASE_URL}"', self.html)
+
+    def test_no_separator_glyph_between_the_site_name_and_z_space(self):
+        self.assertIn("sharedcomputer.network</a> by ", self.html)
+
+    @override_settings(
+        VERSION="v0.9.9",
+        VERSION_URL="https://github.com/Z-Space-Society/Corliss/releases/tag/v0.9.9",
+    )
+    def test_linkable_version_renders_as_an_anchor(self):
+        # The state the cluster is always in (clean checkout, exactly on a tag),
+        # forced here so it's covered whatever the developer's tree looks like.
+        resp = self.client.get(reverse("login"))
+        self.assertContains(resp, ">v0.9.9</a>")
+
+    @override_settings(VERSION="v0.9.9-dirty", VERSION_URL=None)
+    def test_unlinkable_version_renders_as_bare_text(self):
+        resp = self.client.get(reverse("login"))
+        self.assertContains(resp, "v0.9.9-dirty")
+        self.assertNotContains(resp, ">v0.9.9-dirty</a>")
+
+    @override_settings(VERSION="", VERSION_URL=None)
+    def test_unresolved_version_omits_the_stamp_entirely(self):
+        resp = self.client.get(reverse("login"))
+        self.assertNotContains(resp, "footer__version")
+        # The copyright line is untouched by the version's absence.
+        self.assertContains(resp, "sharedcomputer.network")
 
 
 class CallbackViewTests(TestCase):

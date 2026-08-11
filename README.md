@@ -27,6 +27,7 @@ own app only by being genuinely standalone.
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
 | `corliss/signing.py` | Loads the signing keys, builds the JWKS. |
+| `corliss/version.py` | Resolves which build is running, for the footer's stamp (see [Releases](#releases)). |
 
 Two signing keys, one JWKS: **ES256 (P-256)** for atproto DPoP + client
 assertion (atproto mandates it) and **RS256 (RSA)** for the OIDC `id_token`
@@ -169,6 +170,36 @@ Note that `uv lock --upgrade` will not move a direct dependency here — an exac
 pin leaves the resolver no room. It does still refresh transitives, which is
 worth doing periodically on its own.
 
+### Releases
+
+Every page footer carries a build stamp — `Corliss v0.2.0`, linking the repo and
+that tag — so the running version is readable off the site itself. It comes from
+`git describe --tags --always --dirty` against the checkout
+([`corliss/version.py`](corliss/version.py)), falling back to
+`pyproject.toml`'s `version` where there is no `.git`. A checkout past its tag
+reads `v0.2.0-3-gabc1234` and links the commit; a dirty tree says so and links
+nothing, because what's running isn't any commit GitHub could show.
+
+Cut a release with:
+
+```bash
+bin/release 0.3.0     # bump, re-lock, test, commit, annotated tag — no push
+bin/release --show    # reprint the deploy steps for the current tag
+```
+
+**`version` in `pyproject.toml` and the `vX.Y.Z` tag are one fact, and
+`bin/release` is what keeps them that way.** The bump is not cosmetic even though
+nothing imports the package: `uv.lock` records the project version, and the
+deploy runs `uv sync --locked`, so bumping `pyproject.toml` without re-running
+`uv lock` fails the deploy outright. The script always does both, runs the suite
+before it will tag, and reverts the bump if the suite fails.
+
+It stops at the tag rather than pushing, then prints the remaining steps —
+push, pin `corliss_version` in [zai-ops](https://github.com/Z-Space-Society/zai-ops),
+replay the role, confirm the live footer — as runnable commands. Tagging is only
+half of shipping; the checklist is the other half, and lives in the script rather
+than being duplicated here so there is one place for it to be correct.
+
 ### Admin
 
 ```bash
@@ -228,6 +259,10 @@ deploy fail loudly if `uv.lock` is stale against `pyproject.toml` rather than
 quietly resolving something else, so the cluster runs the exact tree committed
 here. The interpreter is a uv-managed CPython 3.14 — Debian 13's system Python
 is 3.13, so the role fetches its own rather than using the distro's.
+
+Because the role clones a pinned **tag** into a full checkout, the footer's build
+stamp on the deployed site reports exactly the released version — the quickest
+way to confirm a deploy actually landed (see [Releases](#releases)).
 
 Required in production: `SECRET_KEY`, `DATABASE_URL`, `ALLOWED_HOSTS`,
 `PUBLIC_BASE_URL`, `CSRF_TRUSTED_ORIGINS`, the two key paths, and the

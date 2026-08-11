@@ -11,6 +11,8 @@ from pathlib import Path
 
 import environ
 
+from corliss import version
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 env = environ.Env(
@@ -48,6 +50,15 @@ CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 # `client_id`, the OIDC issuer, and the redirect/JWKS URLs. In local dev it can
 # be a tunnel or the localhost development convention (see README).
 PUBLIC_BASE_URL = env("PUBLIC_BASE_URL", default="http://localhost:8000")
+
+# --- Build identity -------------------------------------------------------
+# Which build is this? Resolved from the checkout itself (see corliss.version),
+# and pointedly NOT read from the environment like everything else in this file:
+# this is not a deployment choice but a fact about the code that is running, and
+# an env var could only ever make the footer lie about it.
+VERSION = version.resolve(BASE_DIR)
+VERSION_URL = version.url_for(VERSION)
+REPO_URL = version.REPO_URL
 
 # --- Signing keys ---------------------------------------------------------
 # Paths to PEM private keys, loaded lazily by corliss.signing. atproto mandates

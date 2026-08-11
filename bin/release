@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# release — cut a Corliss release, then print what's left to get it deployed.
+#
+#   bin/release 0.3.0 ["what this release brings"]   bump, lock, test, commit, tag
+#   bin/release --show                               reprint the deploy steps
+#
+# The one job here is keeping two things that must never disagree in lockstep:
+# `version` in pyproject.toml and the `vX.Y.Z` git tag. They had already drifted
+# once (0.1.0 declared against a v0.2.0 tag), and the drift is not cosmetic —
+# uv.lock records the project version, and the cluster deploy runs
+# `uv sync --locked`, so a bump without a re-lock fails the deploy outright.
+# This script therefore always does both, or nothing.
+#
+# It deliberately stops short of pushing. Everything up to the tag is local and
+# undoable; the push is neither, and it is the operator's call. What the script
+# does instead is print every remaining step as a runnable command — because
+# tagging is only half of shipping: the release isn't live until zai-ops is
+# pinned to the new tag and the corliss role is replayed.
+set -euo pipefail
+
+# The deploy checklist below is specific to the Z-Space AI cluster (the only
+# place Corliss is deployed today). Nothing else in this script — or in the app —
+# assumes it.
+CONTROL_NODE_CT=100         # zai-ops' Ansible control node, entered with `pct enter`
+ZAI_OPS_DIR=/opt/zai-ops    # where the blueprint lives on that node
+SITE_URL=https://sharedcomputer.network
+DEFAULTS_FILE=ansible/roles/corliss/defaults/main.yml
+
+# Run from the repo root no matter the caller's CWD, self-located off this
+# script's own path so any checkout works (same idiom as zai-ops' bin/).
+cd "$(dirname "$(readlink -f "$0")")/.."
+
+die() { echo "release: $*" >&2; exit 1; }
+
+declared_version() { sed -n '/^\[project\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' pyproject.toml | head -1; }
+
+# Everything still standing between a local tag and a live deploy. Printed as
+# commands to run in order — step 2 lands in a zai-ops checkout, the rest here.
+print_steps() {
+  local tag="$1" annotation="$2"
+  cat <<STEPS
+
+Remaining steps to deploy $tag:
+
+  1. Push the release
+       git push origin main $tag
+
+  2. Pin it in zai-ops — $DEFAULTS_FILE
+       corliss_version: $tag
+     Update the comment above that line to say what the release brings; the tag
+     annotation is the starting point:
+       "$annotation"
+     Then:
+       git commit -am 'chore(corliss): pin corliss_version to the $tag tag'
+       git push
+
+  3. Replay the role from the control node
+       pct enter $CONTROL_NODE_CT
+       cd $ZAI_OPS_DIR && git pull
+       cd ansible && ansible-playbook provision.yml --limit corliss
+
+  4. Confirm it landed — the live footer should now read $tag
+       curl -s $SITE_URL/auth/login | grep -o 'v[0-9][^<]*'
+STEPS
+}
+
+# --- bin/release --show -------------------------------------------------------
+# Recover the checklist after the terminal is gone, without cutting anything.
+if [[ ${1:-} == "--show" ]]; then
+  running=$(git describe --tags --always --dirty)
+  tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v$(declared_version)")
+  echo "declared in pyproject.toml: v$(declared_version)"
+  echo "checked out here:           $running"
+  print_steps "$tag" "$(git for-each-ref --format='%(contents:subject)' "refs/tags/$tag" 2>/dev/null)"
+  exit 0
+fi
+
+# --- Guards -------------------------------------------------------------------
+# All of them run before anything is written, so a rejected release leaves the
+# tree exactly as it was.
+[[ $# -ge 1 ]] || die "usage: bin/release <version> [annotation] | --show"
+new="$1"
+annotation="${2:-}"
+
+[[ $new =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+  die "'$new' is not a bare semver version (want 0.3.0 — the 'v' belongs to the tag only)"
+
+branch=$(git rev-parse --abbrev-ref HEAD)
+[[ $branch == main ]] || die "on branch '$branch'; releases are cut from main"
+
+git diff --quiet && git diff --cached --quiet ||
+  die "working tree has uncommitted changes; commit or stash them first"
+
+[[ -z $(git tag -l "v$new") ]] || die "tag v$new already exists"
+
+current=$(declared_version)
+[[ -n $current ]] || die "could not read version from pyproject.toml"
+# sort -V puts the lower version first; if that's the new one, it's a typo.
+[[ $current != "$new" && $(printf '%s\n%s\n' "$current" "$new" | sort -V | head -1) == "$current" ]] ||
+  die "$new does not follow the declared $current"
+
+if [[ -z $annotation ]]; then
+  [[ -t 0 ]] || die "no annotation given and stdin is not a terminal; pass it as the second argument"
+  read -r -p "One line on what v$new brings: " annotation
+  [[ -n $annotation ]] || die "annotation is required (both existing tags are annotated)"
+fi
+
+# --- Bump, lock, test ---------------------------------------------------------
+echo "release: bumping $current -> $new"
+# Rewrite only the [project] table's own `version` — dependency pins live in
+# this file too, so a blind global replace would be a disaster.
+awk -v new="$new" '
+  /^\[/ { in_project = ($0 == "[project]") }
+  in_project && !done && /^version = / { print "version = \"" new "\""; done = 1; next }
+  { print }
+' pyproject.toml > pyproject.toml.tmp && mv pyproject.toml.tmp pyproject.toml
+[[ $(declared_version) == "$new" ]] || die "failed to rewrite the version in pyproject.toml"
+
+# Not optional: uv.lock records the project version, and the deploy's
+# `uv sync --locked` fails against a stale lock. --check then proves it took.
+echo "release: re-locking"
+uv lock
+uv lock --check
+
+# Static first — the page tests render {% static %} against manifest storage and
+# fail on a missing manifest (see the README's Tests section).
+echo "release: running the test suite"
+if ! (./manage.py collectstatic --noinput >/dev/null && ./manage.py test); then
+  git checkout -- pyproject.toml uv.lock
+  die "tests failed; reverted the version bump — nothing was committed or tagged"
+fi
+
+# --- Commit + tag -------------------------------------------------------------
+git commit --quiet pyproject.toml uv.lock -m "Release v$new"
+git tag -a "v$new" -m "$annotation"
+echo "release: committed and tagged v$new (not pushed)"
+
+print_steps "v$new" "$annotation"
