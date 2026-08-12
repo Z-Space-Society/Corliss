@@ -114,7 +114,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    # Corliss is a single app: three models, one URL table, the atproto client
+    # Corliss is a single app: four models, one URL table, the atproto client
     # and OIDC provider as plain modules beside them. A future subsystem earns
     # its own app only by being genuinely standalone.
     "corliss",

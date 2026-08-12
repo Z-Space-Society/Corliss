@@ -13,17 +13,23 @@ It is a bridge between two protocols:
 
 Anything that speaks OIDC (Open WebUI, Grafana, …) can sit behind it.
 
+Signing in is not the same as being allowed in, so there is a third, much
+smaller surface: Corliss caches **who is a member** from an external registry
+that pushes grants and revocations to it. See
+[Membership](#membership-who-is-allowed-in).
+
 ## Layout
 
-Corliss is a **single Django app**. Three models, one URL table; the two
-protocol halves are plain modules, not sub-apps. A future subsystem earns its
-own app only by being genuinely standalone.
+Corliss is a **single Django app**. Four models, one URL table; the protocol
+halves are plain modules, not sub-apps. A future subsystem earns its own app
+only by being genuinely standalone.
 
 | Module | Responsibility |
 | ------ | -------------- |
-| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`. |
+| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `MembershipCache`. |
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
 | `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting. |
+| `corliss/membership.py` | Consuming the registry's membership push; resolving whether a DID is currently a member. |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
 | `corliss/signing.py` | Loads the signing keys, builds the JWKS. |
@@ -219,11 +225,61 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | OIDC discovery | `/.well-known/openid-configuration` |
 | JWKS | `/.well-known/jwks.json` |
 | OIDC authorize / token | `/oidc/authorize`, `/oidc/token` |
+| Membership push (from the registry) | `/membership/events` |
 | Django admin | `/admin/` |
 
 Discovery and JWKS sit at the root deliberately: an OIDC issuer of
 `https://example.com` must serve its discovery document at
 `https://example.com/.well-known/openid-configuration`.
+
+## Membership — who is allowed in
+
+Corliss authenticates people; it does not decide who may use the cluster. That
+lives in an external registry (append-only grant and revocation records, held
+in a HappyView space). Corliss keeps a **cache** of the registry's answer in
+`MembershipCache`, and the registry is authoritative in every disagreement.
+
+**The registry pushes; Corliss never pulls.** A pull would require Corliss to
+authenticate to the registry as itself, which is unsolved. Pushing removes the
+question. On each grant or revocation the registry POSTs to
+`/membership/events`, authenticated by a shared bearer token
+(`MEMBERSHIP_PUSH_TOKEN`):
+
+```json
+{ "event": "grant",
+  "did": "did:plc:…",
+  "rkey": "did:plc:…:3lqx7qzabc2de",
+  "authorDid": "did:plc:…",
+  "record": { "status": "active", "grantedAt": "…", "tier": "level-2" } }
+```
+
+`event` is `grant` or `revoke`; a revocation's record carries `revokedAt` and
+an optional `reason` instead of a tier. The envelope fields are exactly the
+metadata the registry returns alongside a record, so a future reconciliation
+pass reading the registry directly fills the same shape.
+
+Four properties that are easy to get wrong:
+
+- **Unset `MEMBERSHIP_PUSH_TOKEN` closes the endpoint** with a 503. It is never
+  open when unconfigured — comparing against `""` would accept a request that
+  also sent nothing.
+- **Events are ordered by the rkey's TID, never by the timestamps.** The
+  registry writes second-resolution timestamps, so they cannot separate two
+  events in the same second, and a grant retried after a revocation would
+  otherwise sort last and silently re-admit a revoked member.
+- **A replayed or stale event returns 200 with `applied: false`.** Push is
+  best-effort, so duplicates are normal and must not read as failures.
+- **`MembershipCache` is keyed by DID, not by a FK to `User`.** A grant can be
+  written for someone who has never logged in — that is how an invitation
+  works. `membership.membership_for(user)` bridges the two.
+
+Drive it locally without the registry:
+
+```bash
+bin/push-grant did:plc:abc… level-2         # grant, or change tier
+bin/push-grant --revoke did:plc:abc…        # revoke
+bin/push-grant --replay did:plc:abc… <rkey> # prove a stale event is a no-op
+```
 
 ## Wiring up a relying party (Open WebUI shown)
 
