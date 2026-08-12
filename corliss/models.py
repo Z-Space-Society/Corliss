@@ -1,10 +1,10 @@
 """Corliss's data model — deliberately small, all in one module.
 
-Three models: the DID-keyed `User` everything references, the server-side
-atproto token store, and the OIDC provider's short-lived auth codes. The
-import contract is `from corliss.models import ...`; if this file ever grows
-unwieldy it can become a `models/` package re-exporting the same names
-without touching callers or the database.
+Four models: the DID-keyed `User` everything references, the server-side
+atproto token store, the OIDC provider's short-lived auth codes, and the
+membership cache. The import contract is `from corliss.models import ...`; if
+this file ever grows unwieldy it can become a `models/` package re-exporting
+the same names without touching callers or the database.
 """
 
 from django.conf import settings
@@ -112,3 +112,76 @@ class OidcAuthCode(models.Model):
 
     def __str__(self):
         return f"OidcAuthCode({self.user}, used={self.used})"
+
+
+class MembershipCache(models.Model):
+    """Who the registry says is a member, and at what tier. **A cache.**
+
+    Named for what it is so no future reader mistakes it for a source of
+    truth. The Shared Computer Network registry — grant and revocation records
+    in a HappyView space — is authoritative. Membership there is *derived*:
+    append-only events resolved latest-event-wins, never a stored boolean. So
+    this table holds a cached computation, not a second copy of a fact, and it
+    must stay rebuildable from the registry alone.
+
+    Two rules follow, and they are the whole contract:
+
+    - **Never write here except from a registry event.** No admin action, no
+      login side effect, no "just mark them active" repair. If this table and
+      the registry disagree, this table is wrong by definition.
+    - **Never read `tier` without checking `active`.** A revoked member keeps
+      their last tier here for audit ("what were they on when it ended?"), so
+      `tier` alone reads as an entitlement that no longer exists.
+
+    Rows arrive by push: the registry POSTs each grant/revoke to Corliss (see
+    `corliss.membership`). Push is best-effort and can be missed or reordered,
+    which is why `last_rkey` exists — its TID orders events and makes a
+    replayed or stale push a no-op rather than a resurrection.
+
+    Keyed by DID rather than a FK to `User` on purpose. A grant can be written
+    for someone who has never logged in — that is how INVITE works, an admin
+    grants preemptively and the person is already a member when they arrive.
+    A FK would force a `User` row at push time, which would mean a bearer
+    token could mint users (today every `User` implies a completed atproto
+    token exchange) and would make rebuilding this cache mutate the user
+    table. `membership_for` bridges the two when a caller has a `User`.
+    """
+
+    did = models.CharField(max_length=255, unique=True, db_index=True)
+
+    active = models.BooleanField(
+        help_text="Resolved membership: true after a grant, false after a revocation.",
+    )
+
+    tier = models.CharField(
+        max_length=64,
+        blank=True,
+        help_text=(
+            "SCN-owned tier slug (level-0 … level-9) from the most recent grant. "
+            "Retained after revocation for audit — always check `active` too."
+        ),
+    )
+
+    # The registry rkey of the event this row reflects: `{memberDid}:{tid}`.
+    # The TID orders events across BOTH collections, since one runtime issues
+    # them — which is what lets a single field order grants against
+    # revocations.
+    last_rkey = models.CharField(max_length=600)
+
+    # `grantedAt` or `revokedAt` from the record. Second-resolution, and
+    # therefore NOT the ordering key — see `corliss.membership.tid_of`.
+    last_event_at = models.DateTimeField()
+
+    # The admin who authored the event, for audit: "who let this person in?"
+    # answerable without a registry round-trip. Asserted by the push and not
+    # yet verified against the roster — see `corliss.membership`.
+    author_did = models.CharField(max_length=255)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = "membership cache entries"
+
+    def __str__(self):
+        state = f"active {self.tier}" if self.active else "revoked"
+        return f"MembershipCache({self.did}, {state})"

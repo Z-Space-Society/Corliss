@@ -79,6 +79,13 @@ OIDC_REDIRECT_URIS = env.list("OIDC_REDIRECT_URIS", default=[])
 # "Chat" link entirely — e.g. local dev with no Open WebUI configured.
 CHAT_URL = env("CHAT_URL", default="")
 
+# --- Registry membership push ----------------------------------------------
+# Shared bearer token the SCN registry presents when POSTing a grant or
+# revocation to /membership/events. Blank disables the endpoint outright (503)
+# rather than leaving it comparing against an empty string, which would accept
+# a request that also sent nothing.
+MEMBERSHIP_PUSH_TOKEN = env("MEMBERSHIP_PUSH_TOKEN", default="")
+
 # --- Local development escape hatch ------------------------------------------
 # A real atproto login can't complete over loopback: the authorization server
 # fetches our client-metadata.json server-side over public HTTPS, so `client_id`
