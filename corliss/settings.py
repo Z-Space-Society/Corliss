@@ -86,6 +86,13 @@ CHAT_URL = env("CHAT_URL", default="")
 # a request that also sent nothing.
 MEMBERSHIP_PUSH_TOKEN = env("MEMBERSHIP_PUSH_TOKEN", default="")
 
+# --- Registry admin roster --------------------------------------------------
+# The SCN service DID, whose repo holds the public admin roster record. Corliss
+# reads it directly from that repo — no credential, no HappyView, no cache in
+# our database — which is what lets ELEVATE work on a Corliss with an empty
+# database. Blank makes every admin check answer "no" rather than guess.
+SCN_SERVICE_DID = env("SCN_SERVICE_DID", default="")
+
 # --- Local development escape hatch ------------------------------------------
 # A real atproto login can't complete over loopback: the authorization server
 # fetches our client-metadata.json server-side over public HTTPS, so `client_id`

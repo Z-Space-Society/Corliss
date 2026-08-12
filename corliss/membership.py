@@ -27,13 +27,24 @@ Two invariants that are easy to break and expensive to debug:
   space*, written by an admin holding space write access. Membership must only
   ever arrive here through this module.
 - **Order by the rkey's TID, never by the timestamps.** See `tid_of`.
+
+The module also holds the **admin roster** — who is allowed to author a grant
+in the first place. That belongs here rather than beside the atproto plumbing
+because the rule it serves spans both halves: a grant is only real if its
+author was a current admin when they wrote it. The roster arrives by a
+different route from everything above — a public record read straight from the
+service DID's repo, no push, no credential — which is precisely what makes it
+usable when the cache is empty. See "The admin roster" below.
 """
 
 import re
 from datetime import datetime, timezone as dt_timezone
 
+from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 
+from corliss import atproto
 from corliss.models import MembershipCache
 
 GRANT = "grant"
@@ -214,3 +225,203 @@ def is_active_member(did):
     default-allow, and never a reason to go asking the registry inline.
     """
     return MembershipCache.objects.filter(did=did, active=True).exists()
+
+
+# --- The admin roster ------------------------------------------------------
+#
+# The roster is what makes a grant legitimate: a grant is only real if its
+# author was a current admin when they wrote it. That rule has the roster on
+# one side and a grant on the other, which is why it lives here rather than in
+# a module of its own — split across two files it would live in neither.
+#
+# Unlike grants, the roster needs no push and no credential. It is a public
+# record in the service DID's repo, readable by anyone with
+# `com.atproto.repo.getRecord`. Two consequences worth holding onto:
+#
+# - **ELEVATE never depends on the cache.** A Corliss rebuilt with an empty
+#   database can still answer "is this DID an admin?" from a cold start. That
+#   is the recovery path that makes closing GATE safe.
+# - **Admin-ness is read, never stored.** Nothing here writes a Django flag.
+#   Mapping cluster admin onto `is_superuser` would hand a roster edit the
+#   power to bypass every permission check in Django and open the admin, where
+#   this app's OIDC client config and session tables live.
+
+ROSTER_COLLECTION = "network.sharedcomputer.admin.list"
+ROSTER_RKEY = "self"  # the lexicon pins it: "key": "literal:self"
+
+_ROSTER_CACHE_KEY = "corliss:roster"
+ROSTER_CACHE_TTL = 300
+
+# A failed fetch is cached too, briefly. Without this an unreachable PDS adds
+# the full request timeout to *every* login, since ELEVATE is asked on each one
+# and a failure would never be remembered.
+_ROSTER_FAILURE_KEY = "corliss:roster:failed"
+ROSTER_FAILURE_TTL = 30
+
+
+class RosterError(Exception):
+    """The roster could not be fetched or is not shaped like a roster."""
+
+
+class AdminEntry:
+    """One admin's term on the roster: a DID, when it began, when it ended."""
+
+    __slots__ = ("did", "added_at", "removed_at")
+
+    def __init__(self, did, added_at, removed_at=None):
+        self.did = did
+        self.added_at = added_at
+        self.removed_at = removed_at
+
+    @property
+    def is_current(self):
+        return self.removed_at is None
+
+    def covers(self, when):
+        """Was this term in force at `when`? On or after added, before removed."""
+        if when < self.added_at:
+            return False
+        return self.removed_at is None or when < self.removed_at
+
+    def __repr__(self):
+        state = "current" if self.is_current else f"removed {self.removed_at}"
+        return f"AdminEntry({self.did}, {state})"
+
+
+class Roster:
+    """The parsed admin roster, answering the two questions anyone asks of it.
+
+    A value object, not a model — the roster is not ours to store. It is
+    fetched, asked, and discarded. Keeping it out of the database is what stops
+    it becoming a second source of truth that can disagree with the record.
+
+    A DID may hold more than one term (removed, later re-added), so every
+    question is asked of *all* its entries, not the first one found.
+    """
+
+    def __init__(self, entries, malformed=()):
+        self.entries = list(entries)
+        # DIDs whose entry could not be parsed. Not silently dropped: an
+        # unreadable entry is an admin whose authority we cannot evaluate, and
+        # reconciliation refuses to run against a roster it only half
+        # understands rather than quietly ignoring their grants.
+        self.malformed = list(malformed)
+
+    @classmethod
+    def from_record(cls, record):
+        if not isinstance(record, dict):
+            raise RosterError("roster record is not an object")
+        admins = record.get("admins")
+        if not isinstance(admins, list):
+            raise RosterError("roster record has no 'admins' array")
+
+        entries, malformed = [], []
+        for raw in admins:
+            if not isinstance(raw, dict):
+                malformed.append(repr(raw)[:80])
+                continue
+            did = raw.get("did")
+            if not isinstance(did, str) or not _DID_RE.match(did or ""):
+                malformed.append(repr(did)[:80])
+                continue
+            try:
+                added_at = _parse_timestamp(raw.get("addedAt"), "addedAt")
+                removed = raw.get("removedAt")
+                removed_at = (
+                    _parse_timestamp(removed, "removedAt")
+                    if removed is not None
+                    else None
+                )
+            except PushError:
+                # Both timestamps are what `covers` decides on, so an entry
+                # with a bad one cannot be evaluated at all. It is malformed,
+                # not "current".
+                malformed.append(did)
+                continue
+            entries.append(AdminEntry(did, added_at, removed_at))
+
+        return cls(entries, malformed)
+
+    def is_current_admin(self, did):
+        """ELEVATE: is this DID an admin *now*?"""
+        return any(e.did == did and e.is_current for e in self.entries)
+
+    def was_admin_at(self, did, when):
+        """Was this DID a current admin at `when`?
+
+        The question a consumer must ask of a grant's author, and deliberately
+        not "are they an admin now". Removing an admin ends their authority
+        going forward; it does not retroactively un-write what they approved.
+        The other reading makes membership a function of the roster's current
+        state, so removing one admin silently de-members everyone they ever
+        approved with nothing in the event log to show for it.
+        """
+        return any(e.did == did and e.covers(when) for e in self.entries)
+
+    @property
+    def current_admins(self):
+        return frozenset(e.did for e in self.entries if e.is_current)
+
+    @property
+    def ever_admins(self):
+        """Every DID that has ever held authority, current or departed.
+
+        The coarse filter for grant authors. `was_admin_at` is the exact one;
+        this is what you want when discarding events from DIDs that were never
+        admins at all, which is the only case that indicates forgery rather
+        than history.
+        """
+        return frozenset(e.did for e in self.entries)
+
+    def __len__(self):
+        return len(self.entries)
+
+
+def fetch_roster(*, refresh=False):
+    """The current roster, cached briefly. Raises `RosterError` on failure.
+
+    Cached because ELEVATE is asked on every login and the roster changes
+    perhaps monthly. Never cached in the database — see `Roster`.
+    """
+    if not refresh:
+        cached = cache.get(_ROSTER_CACHE_KEY)
+        if cached is not None:
+            return Roster.from_record(cached)
+        failure = cache.get(_ROSTER_FAILURE_KEY)
+        if failure is not None:
+            raise RosterError(failure)
+
+    service_did = settings.SCN_SERVICE_DID
+    if not service_did:
+        # Not an outage — an unconfigured deployment. Distinguish it, because
+        # the operator fix is completely different from "the PDS is down".
+        raise RosterError("SCN_SERVICE_DID is not configured")
+
+    try:
+        record = atproto.get_record(service_did, ROSTER_COLLECTION, ROSTER_RKEY)
+    except atproto.OAuthError as exc:
+        cache.set(_ROSTER_FAILURE_KEY, str(exc), ROSTER_FAILURE_TTL)
+        raise RosterError(str(exc)) from exc
+
+    roster = Roster.from_record(record)
+    # Cache the record, not the Roster: a plain dict survives any cache backend
+    # and keeps a parser change from being invisible behind a stale object.
+    cache.set(_ROSTER_CACHE_KEY, record, ROSTER_CACHE_TTL)
+    cache.delete(_ROSTER_FAILURE_KEY)
+    return roster
+
+
+def is_cluster_admin(did):
+    """ELEVATE, as a single question, safe to call from a request path.
+
+    Swallows a roster failure into `False`: an unreachable PDS must not hand
+    out admin, and must not 500 a login either. Callers that cannot tolerate a
+    silent "no" — reconciliation, which would apply events unfiltered — call
+    `fetch_roster` directly and let it raise.
+    """
+    if not did:
+        return False
+    try:
+        return fetch_roster().is_current_admin(did)
+    except RosterError:
+        return False

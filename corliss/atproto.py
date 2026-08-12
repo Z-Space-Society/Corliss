@@ -245,6 +245,46 @@ def handle_from_doc(doc: dict) -> str | None:
     return None
 
 
+def get_record(did: str, collection: str, rkey: str) -> dict:
+    """Fetch a public record from a repo. No auth, no DPoP, no session.
+
+    `com.atproto.repo.getRecord` is unauthenticated, so this reaches any public
+    record in anyone's repo knowing only the DID — which is what makes reading
+    the SCN admin roster free of the service-auth question that shapes the rest
+    of this integration. Contrast `fetch_session_email`, the authenticated
+    sibling that needs a live access token and a DPoP proof.
+
+    Resolves the DID to its PDS on every call rather than caching: callers that
+    read repeatedly should cache the *parsed result* (see
+    `corliss.membership.fetch_roster`), not the endpoint, since a DID document
+    can legitimately move a repo to a different PDS.
+
+    Returns the record `value`. Raises `OAuthError` if the repo, the record, or
+    the PDS is unreachable — never returns a partial or default record, because
+    every caller here is asking an authorization question.
+    """
+    doc = fetch_did_document(did)
+    pds_url = pds_endpoint_from_doc(doc)
+    try:
+        r = requests.get(
+            f"{pds_url}/xrpc/com.atproto.repo.getRecord",
+            params={"repo": did, "collection": collection, "rkey": rkey},
+            timeout=TIMEOUT,
+        )
+        r.raise_for_status()
+        value = r.json().get("value")
+    except requests.RequestException as exc:
+        raise OAuthError(
+            f"could not fetch {collection}/{rkey} from {did}"
+        ) from exc
+    except ValueError as exc:
+        raise OAuthError(f"{pds_url} returned non-JSON for {collection}/{rkey}") from exc
+
+    if not isinstance(value, dict):
+        raise OAuthError(f"{collection}/{rkey} in {did} has no record value")
+    return value
+
+
 # --- Authorization-server discovery ---------------------------------------
 
 def discover_auth_server(pds_url: str) -> dict:
