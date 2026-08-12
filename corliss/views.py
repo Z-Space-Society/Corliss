@@ -22,10 +22,15 @@ OIDC provider (machines):
 - `authorize`: the RP sends the member here; if signed in we issue an auth code
   and redirect back, otherwise we bounce through atproto login and resume.
 - `token`: the RP redeems the code (with its client secret) for an `id_token`.
+
+Registry (machines):
+- `membership_push`: the SCN registry POSTs each grant/revocation here so
+  Corliss can cache who is a member. See `corliss.membership`.
 """
 
 import base64
 import hmac
+import json
 import secrets
 from urllib.parse import urlencode
 
@@ -39,8 +44,8 @@ from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from . import atproto, oidc, signing
-from .models import AtprotoToken, OidcAuthCode
+from corliss import atproto, membership, oidc, signing
+from corliss.models import AtprotoToken, OidcAuthCode
 
 User = get_user_model()
 
@@ -328,6 +333,58 @@ def authorize(request):
     if state:
         params["state"] = state
     return redirect(f"{redirect_uri}?{urlencode(params)}")
+
+
+# --- Registry (membership push) --------------------------------------------
+
+
+@csrf_exempt  # machine-to-machine from the registry, authenticated by bearer token
+@require_http_methods(["POST"])
+def membership_push(request):
+    """Receive a grant or revocation from the SCN registry.
+
+    Authenticated by a shared bearer token. That is proportionate here and
+    nowhere else in this app: the token authorises exactly one verb — "assert
+    a membership event" — against a cache. It reads nothing and acts on no
+    one's behalf, so a leak costs a wrong cache until reconciliation, not a
+    standing capability.
+
+    Responses are shaped for the caller, which is Lua that logs any non-2xx and
+    otherwise moves on. So a replayed or out-of-order event returns 200 with
+    `applied: false` — it is a normal consequence of a best-effort push, not a
+    failure worth waking anyone over.
+    """
+    # An unset token must refuse everything. Comparing against "" would accept
+    # a request that also sends "", so the endpoint would be wide open on any
+    # deployment that simply had not configured it yet.
+    expected = settings.MEMBERSHIP_PUSH_TOKEN
+    if not expected:
+        return JsonResponse(
+            {"error": "membership push is not configured"}, status=503
+        )
+
+    auth = request.META.get("HTTP_AUTHORIZATION", "")
+    presented = auth[7:] if auth.startswith("Bearer ") else ""
+    if not hmac.compare_digest(presented, expected):
+        return JsonResponse({"error": "invalid token"}, status=401)
+
+    try:
+        payload = json.loads(request.body)
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"error": "body is not valid JSON"}, status=400)
+
+    try:
+        parsed = membership.parse(payload)
+    except membership.PushError as exc:
+        # The message is the useful half — it lands in HappyView's script log,
+        # which is where a rejected push is actually visible to an operator.
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    applied = membership.apply_event(parsed)
+    return JsonResponse({"ok": True, "applied": applied})
+
+
+# --- OIDC provider: token endpoint ------------------------------------------
 
 
 def _client_credentials(request):

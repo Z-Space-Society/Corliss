@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# push-grant — send a membership event at Corliss the way the registry does.
+#
+#   bin/push-grant <did> <level-N>        grant, or change tier
+#   bin/push-grant --revoke <did>         revoke
+#   bin/push-grant --replay <did> <rkey>  resend a specific rkey (ordering test)
+#
+# The point is to exercise the push contract without HappyView in the loop.
+# HappyView is Rust + Next.js built from source; keeping it off the laptop is
+# the whole reason the registry pushes to Corliss instead of Corliss pulling
+# from the registry. This script is the other half of that bet — if the
+# contract can be driven from here, Phase D is workable with no cluster.
+#
+# It builds the same envelope `lua/approve_member.lua` and
+# `lua/revoke_member.lua` build: the registry record verbatim, wrapped in the
+# space metadata a reader gets alongside it (did, rkey, authorDid). Keep the
+# two in step — that shared shape is what lets reconciliation reuse the parser.
+#
+# Config, from the environment or a local .env:
+#   CORLISS_URL             default http://127.0.0.1:8000
+#   MEMBERSHIP_PUSH_TOKEN   must match the running server's
+#   PUSH_AUTHOR_DID         the "admin" the event is attributed to
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+[ -f .env ] && set -a && . ./.env && set +a || true
+
+CORLISS_URL="${CORLISS_URL:-http://127.0.0.1:8000}"
+AUTHOR_DID="${PUSH_AUTHOR_DID:-did:plc:hhyrsndukexwr6qucdngcf4r}"
+
+if [ -z "${MEMBERSHIP_PUSH_TOKEN:-}" ]; then
+  echo "MEMBERSHIP_PUSH_TOKEN is unset. Set it here and in the server's .env," >&2
+  echo "or the endpoint answers 503 and refuses everything." >&2
+  exit 1
+fi
+
+# A TID is 13 characters of base32-sortable, ordered so lexicographic
+# comparison is chronological. Corliss orders events by this and nothing else,
+# so a generator that is not monotonic makes replays look like new events.
+# Seconds since epoch in that alphabet, left-padded, gets us monotonic-enough
+# for a laptop; the registry's real TIDs carry a clock id and a counter.
+# Microseconds, not seconds: two events in the same second must still order,
+# which is the exact property being tested. `date +%s%N` is GNU-only, so this
+# goes through python3 (present on macOS) rather than silently truncating.
+# Left-padded with '2', the alphabet's lowest character, so equal-length
+# strings compare correctly.
+make_tid() {
+  python3 -c '
+import time
+n = int(time.time() * 1_000_000)
+alphabet = "234567abcdefghijklmnopqrstuvwxyz"
+out = ""
+while n:
+    out = alphabet[n % 32] + out
+    n //= 32
+print(out.rjust(13, "2"))
+'
+}
+
+EVENT="grant"
+case "${1:-}" in
+  --revoke)
+    EVENT="revoke"
+    DID="${2:?usage: bin/push-grant --revoke <did>}"
+    RKEY="${DID}:$(make_tid)"
+    RECORD=$(printf '{"revokedAt":"%s","reason":"pushed by bin/push-grant"}' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+    ;;
+  --replay)
+    # Resend an rkey that was already applied, to prove a stale or duplicate
+    # event is a no-op (`applied: false`) rather than a resurrection.
+    DID="${2:?usage: bin/push-grant --replay <did> <rkey>}"
+    RKEY="${3:?usage: bin/push-grant --replay <did> <rkey>}"
+    RECORD=$(printf '{"status":"active","grantedAt":"%s","tier":"level-0"}' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)")
+    ;;
+  "" | -h | --help)
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  *)
+    DID="$1"
+    TIER="${2:?usage: bin/push-grant <did> <level-N>}"
+    RKEY="${DID}:$(make_tid)"
+    RECORD=$(printf '{"status":"active","grantedAt":"%s","tier":"%s"}' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TIER")
+    ;;
+esac
+
+BODY=$(printf '{"event":"%s","did":"%s","rkey":"%s","authorDid":"%s","record":%s}' \
+  "$EVENT" "$DID" "$RKEY" "$AUTHOR_DID" "$RECORD")
+
+echo "POST ${CORLISS_URL}/membership/events"
+echo "  ${BODY}"
+echo
+
+curl -sS -i -X POST "${CORLISS_URL}/membership/events" \
+  -H "Authorization: Bearer ${MEMBERSHIP_PUSH_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d "${BODY}" | sed 's/^/  /'
+echo
+
+echo "rkey: ${RKEY}"
+echo "  replay it with: bin/push-grant --replay ${DID} ${RKEY}"

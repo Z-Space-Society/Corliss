@@ -11,13 +11,15 @@ Two path families, deliberately shaped:
 - the OIDC provider surface at the root, because the discovery document must
   sit at `issuer + /.well-known/openid-configuration` and the issuer is the
   bare origin.
+- the registry's membership push under `/membership/`, which is neither: it is
+  called by the SCN registry, not by a person or a relying party.
 """
 
 from django.conf import settings
 from django.contrib import admin
 from django.urls import path
 
-from . import views
+from corliss import views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -39,6 +41,12 @@ urlpatterns = [
     ),
     path("oidc/authorize", views.authorize, name="authorize"),
     path("oidc/token", views.token, name="token"),
+    # Registry (the SCN membership push)
+    path(
+        "membership/events",
+        views.membership_push,
+        name="membership_push",
+    ),
     path("", views.landing, name="landing"),
 ]
 
