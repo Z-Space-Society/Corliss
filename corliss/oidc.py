@@ -15,8 +15,8 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 
-from . import signing
-from .models import OidcAuthCode
+from corliss import signing
+from corliss.models import OidcAuthCode
 
 CODE_TTL_SECONDS = 600
 ID_TOKEN_TTL_SECONDS = 3600

@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from django.conf import settings
 from django.urls import reverse
 
-from . import signing
+from corliss import signing
 
 CLIENT_ASSERTION_TYPE = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 TIMEOUT = 10
