@@ -6,6 +6,11 @@ from django.conf import settings
 def ui(request):
     return {
         "CHAT_URL": settings.CHAT_URL,
+        # The endpoint /api/ tells people to point their client at.
+        "API_URL": settings.API_URL,
+        # The nav's Manage menu links here, for cluster admins only and only
+        # when configured — see base.html.
+        "MANAGE_URL": settings.MANAGE_URL,
         # The footer's build stamp: which version is running, and where to read
         # it. APP_VERSION is "" when it can't be resolved and APP_VERSION_URL is
         # None on a dirty tree, so the template branches on both — see

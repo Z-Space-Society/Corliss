@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% comment %}
+Two states, one template: signed out gets the intro, signed in gets their
+standing. Neither carries identity or admin links — those live in the nav, on
+every page, so this page cannot drift from them.
+
+`is_member` comes from corliss.views.home.
+{% endcomment %}
+
+{% block title %}Home — ZAI{% endblock %}
+
+{% block content %}
+{% if not user.is_authenticated %}
+
+  {% comment %}
+  Text only. The sign-in route is already one click away in the nav on every
+  page, so putting a second entry point here would mean two sign-in affordances
+  to keep in step — and the login form itself lives in login.html, once.
+  {% endcomment %}
+  <div class="intro">
+    <h1>The Shared Computer Network</h1>
+    <p>Shared compute for the co-op, reached with your Atmosphere handle —
+       there is no separate account to make.</p>
+    <p>Signing in is not the same as being let in: membership is granted by a
+       cluster admin through the network's registry. Sign in first, and you can
+       ask from there.</p>
+  </div>
+
+{% else %}
+
+  {% comment %}
+  No account card here — the handle and DID live in the nav's account menu, so
+  restating them would be the same duplication the sign-out button was.
+  {% endcomment %}
+  <div class="account-view">
+    {% if is_member %}
+      <p class="status-line status-line--member">Member of the cluster.</p>
+    {% else %}
+      <h2 class="section-title">Application</h2>
+      <div class="card">
+        <p class="alert alert--notice" role="status">
+          <strong>You're signed in, but not a member yet.</strong> Signing in
+          proves who you are; a cluster admin still has to let you in.
+        </p>
+
+        {% comment %}
+        Placeholder. This will eventually write a membership-request record to
+        the member's own PDS, which the registry picks up — that is not built
+        yet, so the button is deliberately inert rather than pointing at a route
+        that does not exist. Must stay a comment *block* — Django's hash-comment
+        syntax is single-line, so a multi-line one renders into the page.
+        {% endcomment %}
+        <button type="button" class="btn-primary">Apply for membership</button>
+        <p class="hint-text">Requests aren't wired up yet — ask an admin in the meantime.</p>
+      </div>
+    {% endif %}
+  </div>
+
+{% endif %}
+{% endblock %}

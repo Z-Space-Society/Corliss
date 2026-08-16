@@ -421,6 +421,12 @@ def is_cluster_admin(did):
     """
     if not did:
         return False
+    # Local-development override, the ELEVATE counterpart to DEV_LOGIN_ENABLED.
+    # Checked before the fetch because the case it exists for is precisely that
+    # there is no roster record to fetch yet. DEBUG-gated here as well as
+    # system-checked in corliss.apps — see settings.DEV_ADMIN_DIDS.
+    if settings.DEBUG_FROM_ENV and did in settings.DEV_ADMIN_DIDS:
+        return True
     try:
         return fetch_roster().is_current_admin(did)
     except RosterError:

@@ -79,6 +79,16 @@ OIDC_REDIRECT_URIS = env.list("OIDC_REDIRECT_URIS", default=[])
 # "Chat" link entirely — e.g. local dev with no Open WebUI configured.
 CHAT_URL = env("CHAT_URL", default="")
 
+# Public origin of the cluster's API service (api.<domain>, served from heron).
+# Shown on /api/ as the endpoint to point a client at. Blank leaves that page's
+# endpoint block out — the page itself still explains what is coming.
+API_URL = env("API_URL", default="")
+
+# Public origin of the Manage Console, linked from the home page's admin block.
+# Blank hides that one link (the Django admin link beside it always renders) —
+# the console is deployed separately, so a Corliss without one is a real state.
+MANAGE_URL = env("MANAGE_URL", default="")
+
 # --- Registry membership push ----------------------------------------------
 # Shared bearer token the SCN registry presents when POSTing a grant or
 # revocation to /membership/events. Blank disables the endpoint outright (503)
@@ -111,6 +121,17 @@ SCN_SERVICE_DID = env("SCN_SERVICE_DID", default="")
 #      the deploy's migrate/collectstatic — instead of quietly serving an open
 #      door.
 DEV_LOGIN_ENABLED = env.bool("DEV_LOGIN_ENABLED", default=False)
+
+# The same escape hatch for ELEVATE. The admin roster is a record in the SCN
+# service DID's repo, so until that record exists there is no way to be an admin
+# locally and the admin surface cannot be looked at at all.
+#
+# DIDs listed here answer "yes" to `membership.is_cluster_admin` — and to nothing
+# else. It grants no membership and writes no Django flag, exactly as the real
+# roster doesn't. Guarded like DEV_LOGIN_ENABLED: read only under DEBUG (see
+# `is_cluster_admin`) and flagged by a system check when set without it, so it
+# cannot ride into production in a .env.
+DEV_ADMIN_DIDS = env.list("DEV_ADMIN_DIDS", default=[])
 
 # --- Applications ---------------------------------------------------------
 

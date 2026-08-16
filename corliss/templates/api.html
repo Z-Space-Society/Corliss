@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% comment %}
+Placeholder. Nothing on this page works yet: the endpoint is read from a
+setting and the "Create key" button posts nowhere. It is here so the nav entry
+and the shape of the key flow exist before either is built.
+{% endcomment %}
+
+{% block title %}API — ZAI{% endblock %}
+
+{% block content %}
+<div class="account-view">
+  <h1>API</h1>
+
+  <p class="page-text">Models on the cluster can be reached directly, without
+  going through the chat app — the same inference, spoken to over HTTP from
+  your own scripts, editor, or agent.</p>
+
+  {% if API_URL %}
+    <h2 class="section-title">Endpoint</h2>
+    <div class="card">
+      <div class="endpoint">{{ API_URL }}</div>
+      <p class="hint-text">Point any OpenAI-compatible client at this base URL.</p>
+    </div>
+  {% endif %}
+
+  <h2 class="section-title">Keys</h2>
+  <div class="card">
+    <p class="alert alert--notice" role="status">
+      <strong>Not available yet.</strong> Key issuing is still to be built —
+      this button does nothing today.
+    </p>
+
+    <button type="button" class="btn-primary">Create key</button>
+    <p class="hint-text">You'll be shown the key once, at creation. It won't be
+    recoverable afterwards.</p>
+  </div>
+</div>
+{% endblock %}

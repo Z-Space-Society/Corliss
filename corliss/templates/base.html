@@ -9,7 +9,7 @@
 <body>
   <div class="page">
     <nav class="nav">
-      <a class="nav__brand" href="{% if user.is_authenticated %}{% url 'landing' %}{% else %}{% url 'login' %}{% endif %}">
+      <a class="nav__brand" href="{% url 'home' %}">
         <svg width="22" height="22" viewBox="0 0 22 22" style="flex-shrink: 0;">
           <rect x="1" y="2" width="20" height="13" rx="2" fill="oklch(0.62 0.17 255)"></rect>
           <rect x="8" y="17" width="6" height="2" rx="1" fill="oklch(0.62 0.17 255)"></rect>
@@ -23,13 +23,61 @@
           <a class="nav__item" href="{{ CHAT_URL }}">Chat</a>
         {% endif %}
 
+        {% if user.is_authenticated %}
+          <a class="nav__item" href="{% url 'api' %}">API</a>
+        {% endif %}
+
+        {% comment %}
+        Two different authorities, deliberately not merged: the console answers
+        to the atproto admin roster (user.is_cluster_admin), the Django admin to
+        Django's own permissions (is_superuser). A roster edit must not hand out
+        the Django admin, where the session and OIDC client tables live.
+
+        So the outer condition is each link's own condition OR'd together, not a
+        looser "is some kind of admin" — otherwise a cluster admin on a
+        deployment with no MANAGE_URL, who is not a superuser, gets a Manage
+        menu that opens onto nothing.
+        {% endcomment %}
+        {% if user.is_cluster_admin and MANAGE_URL or user.is_superuser %}
+          <div class="nav__menu">
+            <span class="nav__item nav__item--menu">Manage</span>
+
+            <div class="nav__dropdown nav__dropdown--left">
+              {% if user.is_cluster_admin and MANAGE_URL %}
+                <a class="nav__dropdown-item" href="{{ MANAGE_URL }}">Manage Console</a>
+              {% endif %}
+              {% if user.is_superuser %}
+                <a class="nav__dropdown-item" href="{% url 'admin:index' %}">Django admin</a>
+              {% endif %}
+            </div>
+          </div>
+        {% endif %}
+
         <div class="nav__divider"></div>
 
         {% if user.is_authenticated %}
-          <a class="nav__account" href="{% url 'landing' %}">
-            <span class="nav__status-dot is-online"></span>
-            {{ user.username }}
-          </a>
+          {% comment %}
+          Opens on hover, and on keyboard focus via :focus-within so it is not
+          mouse-only. Plain divs rather than <details>, which cannot be opened
+          by hover at all — its state lives in an attribute, not in CSS.
+          {% endcomment %}
+          <div class="nav__menu">
+            <span class="nav__account">
+              <span class="nav__status-dot is-online"></span>
+              {{ user.username }}
+            </span>
+
+            <div class="nav__dropdown nav__dropdown--account">
+              <div class="nav__dropdown-meta">
+                DID: <span class="nav__dropdown-value nav__dropdown-value--did">{{ user.did }}</span>
+              </div>
+              <div class="nav__dropdown-meta">
+                Membership: <span class="nav__dropdown-value">{{ user.membership_label }}</span>
+              </div>
+              <div class="nav__dropdown-rule"></div>
+              <a class="nav__dropdown-item" href="{% url 'logout' %}">Sign out</a>
+            </div>
+          </div>
         {% else %}
           <a class="nav__account" href="{% url 'login' %}">
             <span class="nav__status-dot"></span>

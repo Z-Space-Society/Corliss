@@ -1,13 +1,13 @@
 """Every route Corliss serves.
 
 One flat table, no app namespaces: the project *is* the app, so a bare
-`reverse("login")` / `{% url 'landing' %}` is unambiguous.
+`reverse("login")` / `{% url 'home' %}` is unambiguous.
 
 Two path families, deliberately shaped:
 - the human/atproto-client surface under `/auth/` — login, logout, the OAuth
   callback, and the client-metadata document whose URL *is* the atproto
-  `client_id`. Namespacing it keeps the root free for the account landing page
-  and whatever else this app grows.
+  `client_id`. Namespacing it keeps the root free for the home page and
+  whatever else this app grows.
 - the OIDC provider surface at the root, because the discovery document must
   sit at `issuer + /.well-known/openid-configuration` and the issuer is the
   bare origin.
@@ -47,7 +47,8 @@ urlpatterns = [
         views.membership_push,
         name="membership_push",
     ),
-    path("", views.landing, name="landing"),
+    path("api/", views.api, name="api"),
+    path("", views.home, name="home"),
 ]
 
 # Local-development auth bypass, registered only when explicitly enabled AND in

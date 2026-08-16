@@ -35,10 +35,14 @@
     </div>
 
     {% if DEV_LOGIN_ENABLED %}
-    {# Local development only. This block cannot render unless DEBUG and
-       DEV_LOGIN_ENABLED are both on, and the route it posts to is registered
-       under the same condition — see settings.DEV_LOGIN_ENABLED. #}
+    {% comment %}
+    Local development only. This block cannot render unless DEBUG and
+    DEV_LOGIN_ENABLED are both on, and the route it posts to is registered
+    under the same condition — see settings.DEV_LOGIN_ENABLED.
+    {% endcomment %}
     <div class="card">
+      <h2 class="card__title">Developer login</h2>
+
       <p class="alert" role="alert">
         <strong>Development sign-in.</strong> Signs you in as any handle without
         authenticating anything. A real Atmosphere login needs a public HTTPS

@@ -61,7 +61,16 @@ to activate. `uv run python manage.py …` is the explicit equivalent.
 
 Configuration is entirely env-driven — see [`.env.example`](.env.example) for
 the full list. `.env` is git-ignored; **never commit secrets or private keys**.
-`CHAT_URL` drives the nav's "Chat" link and can be left blank.
+`CHAT_URL` drives the nav's "Chat" link, `MANAGE_URL` the "Manage Console" entry
+in its Manage menu, and `API_URL` the endpoint shown on `/api/`. Each can be
+left blank, which simply hides what it feeds.
+
+The nav's two admin links answer to **two different authorities**, deliberately:
+"Manage Console" to the atproto admin roster (`user.is_cluster_admin`), and
+"Django admin" to Django's own `is_superuser`. A roster edit must not hand
+anyone the Django admin, where the session and OIDC client tables live — see
+[Membership](#membership-who-is-allowed-in). Use `manage.py make_admin` for the
+latter.
 
 ### Why atproto login can't work over localhost
 
@@ -104,6 +113,20 @@ production env file carrying it fails the deploy's `migrate`/`collectstatic`
 rather than quietly serving an open door.
 
 It proves nothing about the atproto client. Use a tunnel for that.
+
+The admin surface needs a second hatch, for a different reason: admin-ness is
+read from a record in the SCN service DID's repo, so until that record exists
+there is no way to be an admin at all — locally or anywhere.
+
+```bash
+DEV_ADMIN_DIDS=did:dev:you.bsky.social   # alongside DEBUG=true
+```
+
+Those DIDs answer yes to `is_cluster_admin` and to nothing else: no membership,
+no Django flag, exactly as the real roster grants nothing but itself. Same
+`DEBUG` requirement and the same `manage.py check` failure if it is set without
+one. It does **not** grant the Django admin — that is `is_superuser`, via
+`manage.py make_admin`.
 
 #### Real atproto login locally (a named tunnel)
 
@@ -218,7 +241,8 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 
 | Endpoint | Path |
 | -------- | ---- |
-| Landing (authenticated) | `/` |
+| Home | `/` |
+| API access (placeholder) | `/api/` |
 | Login / logout | `/auth/login`, `/auth/logout` |
 | ATProto callback | `/auth/oauth/callback` |
 | ATProto client metadata (**is** the `client_id`) | `/auth/client-metadata.json` |

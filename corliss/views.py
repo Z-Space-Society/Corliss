@@ -6,7 +6,8 @@ ATProto client (people):
 - `login`: handle form → resolve → discover → PAR → redirect to the PDS.
 - `callback`: validate `state` → DPoP-bound token exchange → upsert the member,
   store tokens server-side, establish the Django session.
-- `landing`: the authenticated page a member lands on.
+- `home`: the root page — an intro when signed out, your standing when in.
+- `api`: placeholder for direct API access; nothing on it is wired up yet.
 - `logout`: ends this device's Corliss session. Local-session-only for now (no
   upstream ATProto/OIDC RP-initiated logout) — a relying party like Open WebUI
   ending its own session doesn't end this one, so a member who wants a real
@@ -38,7 +39,6 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
-from django.contrib.auth.decorators import login_required
 from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
@@ -180,7 +180,7 @@ def callback(request):
     next_url = request.session.pop(POST_LOGIN_REDIRECT, None)
     if next_url and next_url.startswith("/") and not next_url.startswith("//"):
         return redirect(next_url)
-    return redirect("landing")
+    return redirect("home")
 
 
 @require_http_methods(["POST"])
@@ -227,12 +227,35 @@ def dev_login(request):
     next_url = request.session.pop(POST_LOGIN_REDIRECT, None)
     if next_url and next_url.startswith("/") and not next_url.startswith("//"):
         return redirect(next_url)
-    return redirect("landing")
+    return redirect("home")
 
 
-@login_required
-def landing(request):
-    return render(request, "landing.html")
+def home(request):
+    """The home page: signed out, or signed in with or without membership.
+
+    Deliberately not `@login_required` — a signed-out visitor gets the intro
+    here rather than being bounced to the login form.
+
+    Membership is resolved here rather than in the template because it is a
+    real lookup against the cache table. Admin is not: it hangs off the user as
+    `user.is_cluster_admin` because the nav asks it on every page, not just this
+    one.
+    """
+    did = request.user.did if request.user.is_authenticated else None
+    return render(
+        request,
+        "home.html",
+        {"is_member": bool(did) and membership.is_active_member(did)},
+    )
+
+
+def api(request):
+    """Placeholder for direct API access — copy and a dead "create key" button.
+
+    Nothing here is wired up yet. It exists so the nav entry, the endpoint, and
+    the shape of the key flow are settled before any of it is built.
+    """
+    return render(request, "api.html")
 
 
 def logout(request):

@@ -11,6 +11,7 @@ from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
+from django.utils.functional import cached_property
 
 
 class User(AbstractUser):
@@ -45,6 +46,55 @@ class User(AbstractUser):
     email_confirmed = models.BooleanField(default=False)
 
     last_seen = models.DateTimeField(null=True, blank=True)
+
+    @cached_property
+    def is_cluster_admin(self):
+        """ELEVATE, as an attribute — usable as `user.is_cluster_admin` in any
+        template, the way `is_superuser` is.
+
+        Read, never stored: this is a property over the roster in the service
+        DID's repo, not a database flag. That distinction is the whole point of
+        `corliss.membership`'s roster section — a stored flag would drift from
+        the record and could not be revoked by editing it.
+
+        `cached_property` so the nav asking on every render costs one lookup per
+        request rather than one per mention. `membership` itself imports this
+        module, so the import is local to the call.
+        """
+        from corliss import membership
+
+        return membership.is_cluster_admin(self.did)
+
+    @cached_property
+    def has_pending_application(self):
+        """Has this member asked for membership and not yet been answered?
+
+        PLACEHOLDER — always False. An application will be a record in the
+        member's own PDS that the registry picks up; none of that exists yet, so
+        there is nothing to read. Isolated here so that when it does exist this
+        is the only place that changes, rather than the nav template.
+        """
+        return False
+
+    @cached_property
+    def membership_label(self):
+        """This member's standing, for display: "none", "pending" or a tier.
+
+        Reads `active` before `tier`, which `MembershipCache` requires: a
+        revoked row keeps its last tier for audit, so tier alone would show an
+        entitlement that has already ended.
+        """
+        from corliss import membership
+
+        row = membership.membership_for(self)
+        if row is not None and row.active:
+            # Tier slugs are SCN-owned and shaped level-0 … level-9. Rendered
+            # rather than mapped, so a tier added upstream shows up here without
+            # a code change — the same reason the push does not validate them.
+            return row.tier.replace("-", " ") if row.tier else "member"
+        if self.has_pending_application:
+            return "pending"
+        return "none"
 
     def touch_last_seen(self, *, save=True):
         """Stamp the current time as this member's last activity."""

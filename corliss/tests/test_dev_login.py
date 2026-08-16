@@ -29,7 +29,7 @@ class DevLoginTests(TestCase):
         resp = self.client.post(
             reverse("dev_login"), {"handle": "alice.bsky.social"}
         )
-        self.assertRedirects(resp, reverse("landing"))
+        self.assertRedirects(resp, reverse("home"))
 
         user = User.objects.get(did="did:dev:alice.bsky.social")
         self.assertEqual(user.username, "alice.bsky.social")
@@ -92,7 +92,7 @@ class DevLoginTests(TestCase):
         resp = self.client.post(
             reverse("dev_login"), {"handle": "alice.bsky.social"}
         )
-        self.assertRedirects(resp, reverse("landing"))
+        self.assertRedirects(resp, reverse("home"))
 
     def test_login_page_offers_the_dev_form(self):
         resp = self.client.get(reverse("login"))

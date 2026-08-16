@@ -159,6 +159,118 @@ a {
   color: var(--text);
 }
 
+/* --- Account menu (nav) -------------------------------------------------- */
+
+.nav__menu {
+  position: relative;
+}
+
+/* Menu triggers open on hover, so they are labels, not things to click. */
+.nav__menu .nav__account,
+.nav__item--menu {
+  cursor: default;
+}
+
+.nav__item--menu {
+  display: block;
+}
+
+.nav__menu:hover .nav__account,
+.nav__menu:focus-within .nav__account,
+.nav__menu:hover .nav__item--menu,
+.nav__menu:focus-within .nav__item--menu {
+  background: var(--nav-active-bg);
+  color: var(--text);
+}
+
+.nav__dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10;
+  min-width: 220px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 10px 30px oklch(0 0 0 / 0.45);
+}
+
+/* Mid-nav menus hang from their left edge; the account menu, last in the row,
+   from its right so it cannot run off the viewport. */
+.nav__dropdown--left {
+  left: 0;
+  right: auto;
+}
+
+/* Wide enough for a DID on one line. */
+.nav__dropdown--account {
+  min-width: 320px;
+}
+
+/* Bridges the 6px gap under the chip, so the pointer can travel from one to the
+   other without passing over dead space and closing the menu. */
+.nav__dropdown::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: 0;
+  right: 0;
+  height: 7px;
+}
+
+.nav__menu:hover .nav__dropdown,
+.nav__menu:focus-within .nav__dropdown {
+  display: block;
+}
+
+/* Labelled facts, not actions — identity, not controls. One shared row style so
+   DID and Membership read as a pair. */
+.nav__dropdown-meta {
+  padding: 4px 10px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow-x: auto;
+}
+
+.nav__dropdown-meta:first-child {
+  padding-top: 8px;
+}
+
+.nav__dropdown-value {
+  color: var(--text-secondary);
+}
+
+/* The DID stays monospaced — it is a string to read character by character —
+   and on one line, since a DID broken mid-string is a DID copied wrong. */
+.nav__dropdown-value--did {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.nav__dropdown-rule {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
+}
+
+.nav__dropdown-item {
+  display: block;
+  padding: 9px 10px;
+  border-radius: 7px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.nav__dropdown-item:hover {
+  background: var(--nav-active-bg);
+  color: var(--text);
+}
+
 .nav__status-dot {
   width: 6px;
   height: 6px;
@@ -189,9 +301,12 @@ a {
   padding: 40px 20px;
 }
 
+/* 480px, not the 380px this was ported at: the copy outgrew the box. Both the
+   home page's title and the "Create one on Bluesky" hint — which the login page
+   carries too — wrapped mid-phrase at 380. */
 .login-box {
   width: 100%;
-  max-width: 380px;
+  max-width: 480px;
 }
 
 .login-header {
@@ -218,6 +333,18 @@ a {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 28px;
+}
+
+/* Stacked cards (the login page's real form + the dev sign-in box) need to read
+   as two separate offers, not one panel with a seam. */
+.card + .card {
+  margin-top: 28px;
+}
+
+.card__title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 16px;
 }
 
 .field-label-row {
@@ -301,6 +428,15 @@ a {
   cursor: default;
 }
 
+/* The signed-out home page uses .btn-primary on an <a>, which is neither
+   block-level nor un-underlined by default. Everything else about the button
+   is identical, so restate only what an anchor gets wrong. */
+a.btn-primary {
+  display: block;
+  text-align: center;
+  text-decoration: none;
+}
+
 .hint-text {
   font-size: 12px;
   color: oklch(0.52 0.008 255);
@@ -324,6 +460,42 @@ a {
   margin-bottom: 14px;
 }
 
+/* .alert is red because its usual job is a failed login. "You're not a member
+   yet" is a state, not an error, so it borrows the shape and drops the alarm. */
+.alert--notice {
+  color: var(--text-secondary);
+  background: var(--inset);
+}
+
+.alert--notice strong {
+  color: var(--text);
+}
+
+/* --- Home, signed out ---------------------------------------------------- */
+
+/* Prose only — no card, no button. The nav carries the sign-in link. */
+.intro {
+  flex: 1;
+  max-width: 560px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 64px 24px;
+}
+
+.intro h1 {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 16px;
+}
+
+.intro p {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 0 0 14px;
+}
+
 /* --- Account view -------------------------------------------------------- */
 
 .account-view {
@@ -340,53 +512,51 @@ a {
   margin: 0 0 24px;
 }
 
-.account-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  margin-bottom: 16px;
+/* Body copy inside the 560px column (e.g. /api/'s explanation). */
+.page-text {
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  margin: 0 0 4px;
 }
 
-.avatar {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex-shrink: 0;
-}
-
-.account-meta__handle {
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.account-meta__did {
-  font-size: 12.5px;
-  color: var(--text-muted);
+/* A URL shown to be copied, not typed into. Scrolls rather than wrapping —
+   a base URL broken across lines is a base URL someone pastes wrong. */
+.endpoint {
   font-family: var(--font-mono);
-}
-
-.btn-outline-danger {
-  display: block;
-  width: 100%;
-  padding: 12px;
+  font-size: 13.5px;
+  background: var(--inset);
+  border: 1px solid var(--border-input);
   border-radius: 9px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--danger);
-  font-size: 14px;
-  font-weight: 500;
-  text-align: center;
-  text-decoration: none;
-  cursor: pointer;
+  padding: 12px 14px;
+  overflow-x: auto;
+  white-space: nowrap;
 }
 
-.btn-outline-danger:hover {
-  background: var(--danger-hover-bg);
+/* Sits over a card the way "Account" sits over the account card — same weight
+   and size, with the leading space a second section needs. */
+.section-title {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 32px 0 16px;
+}
+
+/* Membership state line, standing alone on a member's otherwise empty home. */
+.status-line {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 0 0 16px;
+}
+
+.status-line--member::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  margin-right: 8px;
+  vertical-align: middle;
 }
 
 /* --- Footer -------------------------------------------------------------- */

@@ -6,7 +6,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from corliss import atproto
-from corliss.models import AtprotoToken
+from corliss.models import AtprotoToken, MembershipCache
 from corliss.views import SESSION_PREFIX
 
 User = get_user_model()
@@ -81,6 +81,196 @@ class FooterTests(TestCase):
         self.assertContains(resp, "sharedcomputer.network")
 
 
+MANAGE_URL = "https://manage.example.com"
+
+
+def _grant(did=DID, *, tier="level-2"):
+    """A membership grant as the registry's push would have left it."""
+    MembershipCache.objects.create(
+        did=did,
+        active=True,
+        tier=tier,
+        last_rkey=f"{did}:3lqxaaaaaaaaa",
+        last_event_at="2026-01-01T00:00:00Z",
+        author_did="did:plc:anadmin",
+    )
+
+
+class NoRosterMixin:
+    """Pin ELEVATE to False unless a test says otherwise.
+
+    `user.is_cluster_admin` reads the roster out of the service DID's repo, so
+    without this every test's answer would depend on the developer's
+    SCN_SERVICE_DID — and reach the network to discover it is blank.
+    """
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch("corliss.membership.is_cluster_admin", return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class HomeViewTests(NoRosterMixin, TestCase):
+    """`/` — signed out, signed in without membership, signed in with it."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+
+    def test_anonymous_gets_the_page_not_a_redirect(self):
+        # Was @login_required until the home page grew a signed-out state.
+        resp = self.client.get(reverse("home"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "The Shared Computer Network")
+
+    def test_signed_out_home_does_not_restate_the_login_form(self):
+        # The nav already links sign-in and login.html owns the form. A second
+        # copy here is a second thing to keep in step.
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, 'name="handle"')
+
+    def test_non_member_is_told_so_and_offered_the_apply_button(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, "not a member yet")
+        self.assertContains(resp, "Apply for membership")
+
+    def test_member_sees_no_apply_button(self):
+        _grant()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, "Apply for membership")
+
+    def test_identity_is_not_restated_on_the_page(self):
+        # Handle and DID live in the nav's account menu. The page carrying its
+        # own copy is what the account card was.
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, "account-card")
+
+
+class NavMenuTests(NoRosterMixin, TestCase):
+    """The nav's Manage menu, rendered by base.html on every page.
+
+    Its two links answer to two different authorities on purpose: the console to
+    the atproto roster, the Django admin to Django's own permissions.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+
+    def _as_cluster_admin(self):
+        patcher = patch("corliss.membership.is_cluster_admin", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_anonymous_sees_no_manage_menu(self):
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, ">Manage<")
+
+    def test_plain_member_sees_no_manage_menu(self):
+        _grant()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, ">Manage<")
+
+    @override_settings(MANAGE_URL=MANAGE_URL)
+    def test_cluster_admin_sees_the_console_but_not_the_django_admin(self):
+        # The roster grants the console alone. Handing it the Django admin as
+        # well would let a roster edit reach the session and OIDC client tables.
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, MANAGE_URL)
+        self.assertNotContains(resp, "Django admin")
+
+    @override_settings(MANAGE_URL=MANAGE_URL)
+    def test_console_link_survives_an_empty_membership_cache(self):
+        # The recovery path. The roster is read from the service DID's repo and
+        # never depends on this table, so an admin locked out here would be
+        # locked out of the console that repopulates it.
+        self.assertFalse(MembershipCache.objects.exists())
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, MANAGE_URL)
+
+    @override_settings(MANAGE_URL=MANAGE_URL)
+    def test_superuser_sees_the_django_admin_without_being_on_the_roster(self):
+        self.user.is_superuser = True
+        self.user.save(update_fields=["is_superuser"])
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, reverse("admin:index"))
+        self.assertNotContains(resp, "Manage Console")
+
+    @override_settings(MANAGE_URL="")
+    def test_cluster_admin_with_no_manage_url_gets_no_empty_menu(self):
+        # An admin whose only link is unconfigured must not get a menu that
+        # opens onto nothing.
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, ">Manage<")
+
+
+class AccountMenuTests(NoRosterMixin, TestCase):
+    """The nav's account menu — identity and standing, on every page."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+        self.client.force_login(self.user)
+
+    def test_shows_the_did_and_a_sign_out_link(self):
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, DID)
+        self.assertContains(resp, reverse("logout"))
+
+    def test_membership_reads_none_without_a_grant(self):
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, "Membership: <span")
+        self.assertContains(resp, ">none<")
+
+    def test_membership_reads_the_granted_tier(self):
+        _grant(tier="level-1")
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, ">level 1<")
+
+    def test_revoked_member_reads_none_not_their_last_tier(self):
+        # MembershipCache keeps `tier` after a revocation for audit. Showing it
+        # would advertise an entitlement that has already ended.
+        _grant(tier="level-1")
+        MembershipCache.objects.filter(did=DID).update(active=False)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, ">none<")
+        self.assertNotContains(resp, ">level 1<")
+
+
+class ApiViewTests(NoRosterMixin, TestCase):
+    """`/api/` — placeholder copy today, so only its wiring is worth asserting."""
+
+    @override_settings(API_URL="https://api.example.com")
+    def test_endpoint_is_shown_when_configured(self):
+        resp = self.client.get(reverse("api"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "https://api.example.com")
+
+    @override_settings(API_URL="")
+    def test_unconfigured_endpoint_block_is_omitted(self):
+        resp = self.client.get(reverse("api"))
+        self.assertNotContains(resp, "endpoint")
+
+    @override_settings(API_URL="https://api.example.com")
+    def test_key_creation_is_advertised_as_not_built(self):
+        # The button is deliberately inert. If it ever posts somewhere, this
+        # notice has to go with it.
+        resp = self.client.get(reverse("api"))
+        self.assertContains(resp, "Not available yet")
+
+
 class CallbackViewTests(TestCase):
     def test_unknown_state_is_rejected(self):
         resp = self.client.get(
@@ -107,7 +297,7 @@ class CallbackViewTests(TestCase):
             reverse("callback"), {"state": "state1", "code": "code", "iss": "https://auth.example"}
         )
         self.assertRedirects(
-            resp, reverse("landing"), fetch_redirect_response=False
+            resp, reverse("home"), fetch_redirect_response=False
         )
         user = User.objects.get(did=DID)
         self.assertEqual(user.username, "alice.bsky.social")
