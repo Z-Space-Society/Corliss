@@ -103,6 +103,27 @@ MEMBERSHIP_PUSH_TOKEN = env("MEMBERSHIP_PUSH_TOKEN", default="")
 # database. Blank makes every admin check answer "no" rather than guess.
 SCN_SERVICE_DID = env("SCN_SERVICE_DID", default="")
 
+# --- Registry reconciliation -------------------------------------------------
+# Reading membership back OUT of the registry, which the push cannot do: a
+# Corliss rebuilt from nothing has witnessed no pushes, and the events it missed
+# already happened. These three point at the `syncMembers` service door — a
+# read-only endpoint authenticated by a shared token rather than by a signed-in
+# admin, because the run that matters most happens at boot with nobody present.
+#
+# URL or TOKEN blank disables reconciliation with a visible "not configured"
+# state rather than a traceback. The token is read-only by construction on the
+# registry side; if it ever gains a write path it becomes equivalent to admin
+# authority over membership.
+#
+# CLIENT_KEY is **optional** — sent when set. Verified against production
+# 2026-08-18: HappyView dispatches to a Lua script with no session and no client
+# key, so it adds nothing the token does not carry. Requiring it would tie the
+# recovery path to the *console's* origin-bound key having been configured,
+# which is the one dependency reconciliation must not have.
+MEMBERSHIP_REGISTRY_URL = env("MEMBERSHIP_REGISTRY_URL", default="")
+MEMBERSHIP_REGISTRY_TOKEN = env("MEMBERSHIP_REGISTRY_TOKEN", default="")
+MEMBERSHIP_REGISTRY_CLIENT_KEY = env("MEMBERSHIP_REGISTRY_CLIENT_KEY", default="")
+
 # --- Local development escape hatch ------------------------------------------
 # A real atproto login can't complete over loopback: the authorization server
 # fetches our client-metadata.json server-side over public HTTPS, so `client_id`

@@ -28,6 +28,14 @@ Two invariants that are easy to break and expensive to debug:
   ever arrive here through this module.
 - **Order by the rkey's TID, never by the timestamps.** See `tid_of`.
 
+Push is how the cache stays *fresh*; it is not how the cache is *built*. A
+Corliss rebuilt from scratch has witnessed nothing, and no amount of pushing
+repairs that, because the events it missed already happened. `reconcile` at the
+bottom of this module is the other direction — reading the registry space and
+re-deriving the whole cache from it — and `MembershipRegistry` is the thing that
+does the reading. Together they are what makes an empty database recoverable.
+See "Reconciliation" and "The registry, as something Corliss talks to".
+
 The module also holds the **admin roster** — who is allowed to author a grant
 in the first place. That belongs here rather than beside the atproto plumbing
 because the rule it serves spans both halves: a grant is only real if its
@@ -40,6 +48,7 @@ usable when the cache is empty. See "The admin roster" below.
 import re
 from datetime import datetime, timezone as dt_timezone
 
+import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
@@ -88,6 +97,24 @@ def tid_of(rkey):
             "applied in an order that cannot be trusted."
         )
     return tid
+
+
+def did_of(rkey):
+    """Extract the subject DID from a registry rkey (`{memberDid}:{tid}`).
+
+    The sibling of `tid_of`, and split the same way — on the *last* colon,
+    because DIDs contain colons and TIDs never do.
+
+    This exists because the registry's envelope carries no `did` field: the
+    subject is the leading half of the rkey, and a copy alongside it could
+    disagree with it. The push happens to send one (the Lua has it to hand),
+    and `parse` cross-checks the two; a read straight from the space has only
+    the rkey, so this is where that half comes from.
+    """
+    did, sep, _ = rkey.rpartition(":")
+    if not sep or not did:
+        raise PushError(f"rkey has no subject DID before its final colon: {rkey!r}")
+    return did
 
 
 def _require_str(payload, key, *, max_len):
@@ -431,3 +458,405 @@ def is_cluster_admin(did):
         return fetch_roster().is_current_admin(did)
     except RosterError:
         return False
+
+
+# --- Reconciliation --------------------------------------------------------
+#
+# Re-deriving the whole cache from the registry, rather than waiting to be told
+# about the next change. This exists for one failure the push cannot reach:
+# **a rebuilt Corliss has witnessed nothing.** Flash the cluster, run the
+# provisioning script, and `MembershipCache` is empty — every grant ever made
+# is still in the registry, and none of it is here. Nothing will push those
+# events again, because they already happened. So reconciliation is not a
+# freshness mechanism that the push happens not to cover; it is the only route
+# by which membership can *re-enter* a Corliss that has lost it, and therefore
+# a prerequisite for gating anything on the cache at all.
+#
+# Three rules this code exists to enforce, each of which has a plausible-looking
+# implementation that gets it wrong:
+#
+# - **The events must come from the registry SPACE.** The grant lexicon is
+#   published, so HappyView's indexer recognises `membership.grant` records
+#   wherever it finds them and anyone can write one into their own PDS. A
+#   caller must hand this function the result of an `atproto.spaces.query`
+#   against the registry space — never a firehose index query, never a repo
+#   read. Nothing downstream can tell the difference, which is exactly why it
+#   is stated here.
+# - **Authority is asked at the moment of the event, not now.** See
+#   `Roster.was_admin_at`.
+# - **`unresolved` is a blocker, not a warning.** A DID whose winning event
+#   cannot be parsed is a member missing from the cache. Reporting it as a
+#   footnote and carrying on is how a real member ends up locked out by a gate
+#   that was told everything was fine.
+
+
+class ReconcileError(Exception):
+    """Reconciliation refused to run — the inputs cannot be trusted at all.
+
+    Distinct from any per-event problem, which is reported rather than raised.
+    This is "do not believe the report I would have produced".
+    """
+
+
+class ReconcileReport:
+    """What a reconciliation run did, and whether it can claim to be complete.
+
+    The two failure lists matter more than the two success lists. `applied` and
+    `unchanged` are bookkeeping; `unresolved` and `orphans` are the reasons an
+    operator must not yet close the gate.
+    """
+
+    __slots__ = ("applied", "unchanged", "unresolved", "orphans")
+
+    def __init__(self):
+        # DIDs whose winning event changed the cache.
+        self.applied = []
+        # DIDs whose winning event the cache already reflected. The expected
+        # steady state — a healthy re-run is all of these.
+        self.unchanged = []
+        # {"did", "rkey", "error"} — the winning event could not be parsed, so
+        # this DID's membership is unknown and its cache row (if any) is stale.
+        self.unresolved = []
+        # {"did", "active", "tier", "author_did"} — a cache row with no
+        # admin-authored registry event behind it.
+        self.orphans = []
+
+    @property
+    def is_complete(self):
+        """Did this run account for every member and every cache row?
+
+        The single question the gate's proof obligation asks. Deliberately not
+        "did it apply cleanly": a run can apply every event it understood and
+        still be incomplete, which is the case worth refusing on.
+        """
+        return not self.unresolved and not self.orphans
+
+    def __repr__(self):
+        return (
+            f"ReconcileReport(applied={len(self.applied)}, "
+            f"unchanged={len(self.unchanged)}, "
+            f"unresolved={len(self.unresolved)}, "
+            f"orphans={len(self.orphans)})"
+        )
+
+
+def _preview(event):
+    """Read only what resolution needs, without committing to `parse`.
+
+    Ordering and the authority check both have to happen *before* full parsing,
+    because `parse` rejects the tierless pre-E0 grants that are permanently in
+    the registry log — and one of those may still be a member's latest event.
+    Dropping it at the door would silently de-member someone; letting it take
+    part in ordering and failing on it later reports them as unresolved, which
+    is the truth.
+
+    Returns `(did, author_did, tid, when)`. Raises `PushError` if the envelope
+    cannot even be read that far.
+    """
+    if not isinstance(event, dict):
+        raise PushError("event must be a JSON object")
+
+    kind = event.get("event")
+    if kind not in EVENTS:
+        raise PushError(f"event must be one of {EVENTS!r}, got {kind!r}")
+
+    did = _require_str(event, "did", max_len=MAX_DID_LEN)
+    author_did = _require_str(event, "authorDid", max_len=MAX_DID_LEN)
+    tid = tid_of(_require_str(event, "rkey", max_len=600))
+
+    record = event.get("record")
+    if not isinstance(record, dict):
+        raise PushError("missing or non-object 'record'")
+
+    field = "grantedAt" if kind == GRANT else "revokedAt"
+    return did, author_did, tid, _parse_timestamp(record.get(field), f"record.{field}")
+
+
+def _would_change(parsed):
+    """`apply_event`'s decision, asked without taking the write.
+
+    Mirrors the guard in `apply_event` rather than sharing it: that one runs
+    inside `select_for_update`, and a dry run has no business locking rows it
+    has already promised not to touch. Keep the two comparisons identical.
+    """
+    row = MembershipCache.objects.filter(did=parsed["did"]).first()
+    return row is None or tid_of(row.last_rkey) < parsed["tid"]
+
+
+def reconcile(events, roster, *, dry_run=False):
+    """Re-derive the cache from registry events. Returns a `ReconcileReport`.
+
+    `events` must be push-shaped envelopes read from the **registry space** —
+    see the section comment above; this function cannot verify that for itself.
+    `roster` is a `Roster`, not a set of DIDs: the authority question is asked
+    per event at that event's own timestamp, which needs the terms, not the
+    names. Callers build it with `fetch_roster()`, which raises rather than
+    failing closed the way `is_cluster_admin` does — reconciling against a
+    roster that could not be fetched would discard every event as unauthorised.
+
+    With `dry_run`, nothing is written and the report reads identically, so an
+    operator can see what a run would do before it does it.
+    """
+    if roster.malformed:
+        # Promised in `Roster`: an entry we cannot parse is an admin whose
+        # authority cannot be evaluated, so every grant they ever wrote would
+        # be silently discarded as unauthorised. That is a de-membering, and it
+        # would be invisible in the report. Refuse the whole run instead.
+        raise ReconcileError(
+            f"roster has {len(roster.malformed)} unparseable "
+            f"entr{'y' if len(roster.malformed) == 1 else 'ies'} "
+            f"({', '.join(roster.malformed)}) — refusing to evaluate authority "
+            "against a roster that is only half understood."
+        )
+
+    report = ReconcileReport()
+    winners = {}  # did -> (tid, event)
+    # DIDs the registry accounts for: those with an admin-authored event, plus
+    # those with an event we could not read. Anything else with a cache row is
+    # an orphan — so a DID only ever earns a place here by surviving the
+    # authority check below.
+    seen = set()
+
+    # Pass 1: filter by authority, then order. The order of those two steps is
+    # load-bearing — resolving first would let an event forged with a later TID
+    # suppress the real grant underneath it, and the forgery would then be
+    # discarded, leaving the member with no winning event at all.
+    for event in events:
+        try:
+            did, author_did, tid, when = _preview(event)
+        except PushError as exc:
+            # Cannot be ordered and cannot be judged. Not dropped: an event we
+            # cannot read might have been the winner, so the DID it names can
+            # no longer be claimed as complete. A malformed record in the space
+            # will pin this open until an admin fixes it, which is the correct
+            # amount of noise for an admin-write-only collection.
+            raw = event if isinstance(event, dict) else {}
+            raw_did = raw.get("did") if isinstance(raw.get("did"), str) else None
+            report.unresolved.append(
+                {"did": raw_did, "rkey": raw.get("rkey"), "error": str(exc)}
+            )
+            if raw_did:
+                seen.add(raw_did)
+            continue
+
+        if not roster.was_admin_at(author_did, when):
+            # Either a forgery, or an admin acting outside their term. Both are
+            # non-events, and the DID stays *unaccounted for* — deliberately
+            # not added to `seen`, or a row planted by a stolen token would be
+            # excused by the very event that proves it was planted.
+            continue
+
+        seen.add(did)
+        current = winners.get(did)
+        if current is None or tid > current[0]:
+            winners[did] = (tid, event)
+
+    # Pass 2: parse only the winner, never the whole log.
+    for did in sorted(winners):
+        event = winners[did][1]
+        try:
+            parsed = parse(event)
+        except PushError as exc:
+            # The tierless pre-E0 grants land here when they are somebody's
+            # latest event. Never repaired with a default tier: inventing one
+            # hands out an entitlement the registry never granted.
+            report.unresolved.append(
+                {"did": did, "rkey": event.get("rkey"), "error": str(exc)}
+            )
+            continue
+
+        changed = _would_change(parsed) if dry_run else apply_event(parsed)
+        (report.applied if changed else report.unchanged).append(did)
+
+    # Pass 3: cache rows the registry does not account for. A leaked push token
+    # produces exactly this — a row that no admin ever authored in the space —
+    # and so does a row whose only events came from a DID that was never an
+    # admin, since those never reached `winners`. Reported, never pruned here:
+    # deleting membership is an operator's decision, not a library's.
+    for row in MembershipCache.objects.exclude(did__in=sorted(seen)):
+        report.orphans.append(
+            {
+                "did": row.did,
+                "active": row.active,
+                "tier": row.tier,
+                "author_did": row.author_did,
+            }
+        )
+
+    return report
+
+
+# --- The registry, as something Corliss talks to ---------------------------
+#
+# `MembershipRegistry` is HappyView from this side: the service that holds the
+# grant and revocation records, and the only place membership may be read from.
+# It lives in this module rather than one of its own because everything the
+# relationship needs is already here — the envelope parser, the roster read,
+# `reconcile` itself — and splitting the transport out would put half of one
+# relationship in each of two files.
+#
+# It reads through a service door (`syncMembers`) rather than the admin-session
+# one the console uses, because the caller that matters most runs at boot with
+# nobody signed in. That is the whole reason the door exists: a Corliss rebuilt
+# from nothing must be able to re-derive membership without a human present.
+
+
+class RegistryError(Exception):
+    """The registry could not be reached, or answered with something unusable.
+
+    Deliberately distinct from `ReconcileError` (the inputs cannot be trusted)
+    and `PushError` (one record is malformed). Three different operator fixes:
+    check the network and the token, check the roster, fix the record.
+    """
+
+
+SYNC_MEMBERS_NSID = "network.sharedcomputer.membership.syncMembers"
+
+REGISTRY_TIMEOUT = 30
+
+
+class MembershipRegistry:
+    """The SCN registry, as a thing Corliss reads membership out of.
+
+        registry = MembershipRegistry.from_settings()
+        report = registry.reconcile(dry_run=True)
+
+    Constructed with its configuration rather than reaching for `settings`
+    inside every method, so a test can point it anywhere and never touch the
+    network.
+    """
+
+    __slots__ = ("url", "client_key", "token")
+
+    def __init__(self, url, client_key, token):
+        self.url = (url or "").rstrip("/")
+        self.client_key = client_key or ""
+        self.token = token or ""
+
+    @classmethod
+    def from_settings(cls):
+        return cls(
+            settings.MEMBERSHIP_REGISTRY_URL,
+            settings.MEMBERSHIP_REGISTRY_CLIENT_KEY,
+            settings.MEMBERSHIP_REGISTRY_TOKEN,
+        )
+
+    @property
+    def is_configured(self):
+        """The url and the token. Asked before offering to run, so an
+        unconfigured deployment shows a reason rather than a traceback.
+
+        The client key is deliberately **not** required. Verified against
+        production 2026-08-18: HappyView dispatches to a Lua script with no
+        session and no client key at all — a bare XRPC call reaches `handle()`
+        and gets the script's own error back. So the key adds nothing the token
+        does not already carry here.
+
+        That is not a micro-optimisation. The key is the *console's*
+        origin-bound key, and requiring it would mean a cluster rebuilt before
+        `zai-set-console client_key` had been run could not reconcile — tying
+        the recovery path to the console being configured, when the whole point
+        of this path is that it works when nothing else does.
+        """
+        return bool(self.url and self.token)
+
+    def fetch_events(self):
+        """Every grant and revocation in the registry space, push-shaped.
+
+        The registry returns `{rkey, authorDid, record}` — the space metadata
+        wrapped around the record, with no `did` and no `event`. Both are
+        recoverable without guessing: `event` is which array the entry arrived
+        in, and `did` is the leading half of the rkey. Filling them in here is
+        what lets the push and the read share one parser, which is the only
+        reason there is no second schema to drift from the lexicon.
+        """
+        if not self.is_configured:
+            raise RegistryError(
+                "registry is not configured: MEMBERSHIP_REGISTRY_URL and "
+                "MEMBERSHIP_REGISTRY_TOKEN must both be set"
+            )
+
+        # Sent when we have one, omitted when we don't — see `is_configured`.
+        # Harmless either way, and not something the call depends on.
+        headers = {"x-client-key": self.client_key} if self.client_key else {}
+
+        try:
+            response = requests.post(
+                f"{self.url}/xrpc/{SYNC_MEMBERS_NSID}",
+                json={"token": self.token},
+                headers=headers,
+                timeout=REGISTRY_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            raise RegistryError(f"could not reach the registry: {exc}") from exc
+
+        if response.status_code != 200:
+            # The body carries the Lua's own error message ("forbidden: invalid
+            # service token" and friends), which is the half an operator needs.
+            raise RegistryError(
+                f"registry returned HTTP {response.status_code}: "
+                f"{response.text[:300]}"
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RegistryError("registry response was not JSON") from exc
+        if not isinstance(payload, dict):
+            raise RegistryError("registry response was not a JSON object")
+
+        events = []
+        for key, event in (("grants", GRANT), ("revocations", REVOKE)):
+            entries = payload.get(key)
+            if not isinstance(entries, list):
+                raise RegistryError(f"registry response has no {key!r} array")
+            for entry in entries:
+                events.append(self._to_envelope(entry, event))
+        return events
+
+    @staticmethod
+    def _to_envelope(entry, event):
+        """One space record, in the shape `parse` already understands.
+
+        A malformed entry is not repaired and not dropped: it is passed through
+        with whatever it had, so `reconcile` reports it as unresolved. Silently
+        discarding it here would hide a member behind a clean-looking report,
+        which is the one failure the whole exercise exists to prevent.
+        """
+        if not isinstance(entry, dict):
+            return {"event": event, "record": {}}
+
+        rkey = entry.get("rkey")
+        envelope = {
+            "event": event,
+            "rkey": rkey,
+            "authorDid": entry.get("authorDid"),
+            "record": entry.get("record") or {},
+        }
+        if isinstance(rkey, str):
+            try:
+                envelope["did"] = did_of(rkey)
+            except PushError:
+                # Leave `did` absent; `_preview` refuses it and reports the
+                # rkey. Better than inventing a subject for a record we cannot
+                # read.
+                pass
+        return envelope
+
+    def reconcile(self, *, dry_run=False):
+        """Fetch, resolve, and apply. Returns a `ReconcileReport`.
+
+        The single entry point for every trigger — the console button, the
+        management command, and whatever schedules it later — so none of them
+        can drift into reconciling differently from the others.
+
+        `fetch_roster` is called directly, not through `is_cluster_admin`,
+        precisely because it raises: a roster that could not be fetched would
+        otherwise fail closed to "nobody is an admin", and every event would be
+        discarded as unauthorised while the report claimed success.
+        """
+        events = self.fetch_events()
+        roster = fetch_roster(refresh=True)
+        # Resolves to the module-level function below/above, not this method —
+        # the name is shadowed only inside the class body's namespace.
+        return reconcile(events, roster, dry_run=dry_run)
