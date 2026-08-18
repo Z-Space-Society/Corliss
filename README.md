@@ -440,6 +440,26 @@ reading a generic failure with nowhere to go.
 roster and nothing else; reconciliation is an operator action and a scheduled
 job, never a step in somebody's login.
 
+**Where the gate stops: the relying party's own session.** "Reached on every
+exchange" means every *OIDC* exchange — and a relying party performs one only
+when it has no valid session of its own. Open WebUI mints its own JWT after the
+handoff and authenticates from that, so Corliss is not asked again until it
+expires. Two things follow, and neither is fixable from this side alone:
+
+- **Revoking a member does not end their chat session.** They keep it for the
+  remainder of the relying party's token lifetime. On this cluster that is
+  bounded by `JWT_EXPIRES_IN` (4h), not by anything Corliss does.
+- **Signing out of Corliss does not sign you out of the relying party.** There
+  is no `end_session_endpoint` here and no back-channel logout, so nothing tells
+  it the session ended. The converse was already true and is noted on
+  `views.logout`.
+
+The fix is OIDC back-channel logout — Corliss POSTing a signed `logout_token` to
+each relying party on logout and on revocation — which needs a record of issued
+sessions here and a revocation store there. Not built. Until it is, the relying
+party's token lifetime *is* the revocation window, and it should be set short
+enough to say so out loud.
+
 ## The console — `/manage/`
 
 Members, admins, and reconciliation, for cluster admins. Gated on
