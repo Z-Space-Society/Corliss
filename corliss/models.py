@@ -168,13 +168,23 @@ class OidcAuthCode(models.Model):
 class OidcSession(models.Model):
     """A relying party is holding a session for this member.
 
-    Corliss needs this for exactly one reason: **back-channel logout has to
-    know who to tell.** Until now the provider stored a short-lived
-    `OidcAuthCode` and nothing else, so once an `id_token` was handed over
-    Corliss had no record that anyone was signed in anywhere. Ending a session
-    it cannot name is impossible, so ending one required waiting for the
-    relying party's own token to expire — which is the whole gap this model
-    exists to close (see `corliss.oidc.notify_logout`).
+    A record of what Corliss believes, and the source of the `sid` claim. Until
+    this existed the provider stored a short-lived `OidcAuthCode` and nothing
+    else, so once an `id_token` was handed over there was no trace that anyone
+    was signed in anywhere.
+
+    **It is deliberately NOT what decides who gets a logout token.**
+    `corliss.oidc.notify_logout` iterates the *registered relying parties*, not
+    these rows, and the reason is a failure this model would otherwise cause:
+    rows only start existing when this ships, so gating delivery on one makes
+    sign-out and revocation silently no-ops for every session that already
+    existed — precisely the people already signed in when it deployed. Read
+    `notify_logout` before making this a precondition; it is the same trap GATE
+    had to avoid by enforcing at `/oidc/authorize` rather than at login.
+
+    What the row is good for: it supplies `sid`, it survives a failed delivery
+    so an operator can see a session Corliss believes it could not end, and it
+    is the thing a future multi-RP setup will enumerate.
 
     **One row per (member, relying party) — not per login, and not per
     device.** The tempting shape is a row per exchange, mirroring how the RP

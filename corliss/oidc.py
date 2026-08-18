@@ -235,23 +235,45 @@ def _deliver_logout_token(uri, token) -> bool:
     return True
 
 
-def logout_uri_for(client_id):
-    """The back-channel logout endpoint for a relying party, or None.
+def registered_logout_endpoints():
+    """Every relying party we would tell about a logout: `(client_id, uri)`.
 
     One registered client today, mirroring `settings.OIDC_CLIENT_ID` — the same
     single-RP shape `views.authorize` validates against. A second RP turns this
     into a mapping and nothing else in this module has to change.
+
+    Empty when unconfigured, which is inert by design: the gate still holds and
+    the RP's own token lifetime still bounds the session, exactly as before any
+    of this existed.
     """
-    if client_id != settings.OIDC_CLIENT_ID:
-        return None
-    return settings.OIDC_BACKCHANNEL_LOGOUT_URI or None
+    if not settings.OIDC_BACKCHANNEL_LOGOUT_URI:
+        return []
+    return [(settings.OIDC_CLIENT_ID, settings.OIDC_BACKCHANNEL_LOGOUT_URI)]
 
 
 def notify_logout(user) -> int:
-    """Tell every relying party holding a session for `user` that it is over.
+    """Tell every registered relying party that this member's session is over.
 
-    Returns how many were successfully notified. **Never raises** — see the
-    section comment above.
+    Returns how many accepted the token. **Never raises** — see the section
+    comment above.
+
+    **Notification is driven by the registered relying parties, not by our
+    `OidcSession` rows**, and that distinction is the whole reason this works
+    on a session we have no record of. Corliss only starts recording sessions
+    the moment this feature ships, so gating delivery on a row means every
+    session that already existed is unreachable — sign-out and revocation
+    silently do nothing for exactly the people who were already signed in. That
+    is the same shape as the hole GATE had to close at `/oidc/authorize`, where
+    enforcing only at login would have let every pre-existing session walk
+    through forever, and it deserved the same answer: act on the thing that is
+    always true (the RP is registered, and we know the member's `sub`) rather
+    than on a record that only exists going forward.
+
+    So the row is an optimisation and an audit trail, never a precondition. It
+    supplies `sid` when we have one, and the RP's own lookup by `sub` does the
+    work when we don't. Telling an RP about a member who never signed in there
+    costs one internal round trip and gets a 200 with an empty body, which is
+    much cheaper than the failure the alternative produces.
 
     A row is deleted once its RP accepts the token, and kept when delivery
     fails. Keeping it is the useful direction: the session really may still be
@@ -259,18 +281,17 @@ def notify_logout(user) -> int:
     the table sees a session Corliss believes it failed to end.
     """
     notified = 0
-    # Materialised up front because the loop deletes rows out from under itself.
-    for session in list(user.oidc_sessions.all()):
-        uri = logout_uri_for(session.client_id)
-        if not uri:
-            # Unconfigured, or a client that never registered an endpoint.
-            # Inert by design: the gate still holds and the RP's own token
-            # lifetime still bounds the session, exactly as before this existed.
-            continue
+    sessions = {s.client_id: s for s in user.oidc_sessions.all()}
 
+    for client_id, uri in registered_logout_endpoints():
+        session = sessions.get(client_id)
         try:
             token = mint_logout_token(
-                user, client_id=session.client_id, sid=session.sid
+                user,
+                client_id=client_id,
+                # Absent when we never witnessed the exchange. Legal — the spec
+                # requires sub OR sid, and the RP resolves the member by sub.
+                sid=session.sid if session else "",
             )
         except Exception:
             # Signing failing means a missing or unreadable OIDC key, which is
@@ -279,18 +300,20 @@ def notify_logout(user) -> int:
             log.exception(
                 "back-channel logout: could not mint a token for %s at %s",
                 user.did,
-                session.client_id,
+                client_id,
             )
             continue
 
         if _deliver_logout_token(uri, token):
-            session.delete()
+            if session is not None:
+                session.delete()
             notified += 1
 
     if notified:
         log.info(
-            "back-channel logout: ended %s relying-party session(s) for %s",
+            "back-channel logout: notified %s relying part%s for %s",
             notified,
+            "y" if notified == 1 else "ies",
             user.did,
         )
     return notified

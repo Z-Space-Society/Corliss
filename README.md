@@ -468,14 +468,27 @@ things trigger it:
 | a revoke reaching `membership.apply_event` | **the point of the whole thing** — revocation goes from "within the RP's token lifetime" to seconds |
 | `reconcile` deactivating someone | free, because reconcile's pass 2 applies events through `apply_event` — one trigger, both routes into the cache |
 
-**Corliss had to learn that anyone was signed in at all.** It stored a
-short-lived `OidcAuthCode` and nothing else, so there was no record of who to
-notify. `OidcSession` is that record: one row per (member, relying party),
-written at token *redemption* — not at `authorize`, because a code can expire
-unredeemed and the RP has no session until it trades one in.
+**Who gets told is decided by the registered relying parties, not by
+`OidcSession`.** Corliss does keep a session record — one row per (member,
+relying party), written at token *redemption*, not at `authorize`, because a
+code can expire unredeemed and the RP has no session until it trades one in.
+But that row is an optimisation and an audit trail, never a precondition for
+sending.
 
-Four properties worth stating, because each has a plausible wrong answer:
+That distinction is not decoration; it was a bug in the first cut of v0.6.0.
+Rows only start existing the moment the feature ships, so gating delivery on
+one made sign-out and revocation silent no-ops for every session that *already*
+existed — which, on deploy day, is all of them. It is the same trap GATE had to
+avoid by enforcing at `/oidc/authorize` rather than at login, and it takes the
+same answer: act on what is always true (the RP is registered, and we know the
+member's `sub`) rather than on a record that only exists going forward. The row
+supplies `sid` when we have one; the RP's own lookup by `sub` does the work when
+we don't.
 
+Five properties worth stating, because each has a plausible wrong answer:
+
+- **A member with no session record is still notified.** See above — this is
+  what makes the feature work on the sessions that predate it.
 - **A notification never fails its caller.** Every trigger is something that
   already happened and cannot be undone — a member signed out, the registry
   recorded a revocation. Failing the sign-out because a chat server was

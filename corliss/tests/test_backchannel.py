@@ -244,11 +244,28 @@ class NotifyLogoutTests(KeysMixin, TestCase):
         # The row survives: nothing was told, so nothing was ended.
         self.assertTrue(OidcSession.objects.filter(user=self.user).exists())
 
-    def test_member_with_no_relying_party_session_notifies_nobody(self):
+    def test_member_with_no_session_row_is_still_notified(self):
+        """The regression test for the bug that shipped in v0.6.0.
+
+        Rows only start existing when this feature deploys, so gating delivery
+        on one made sign-out a silent no-op for everybody who was *already*
+        signed in — which is everybody, on the day it shipped. Delivery is
+        driven by the registered relying parties instead; the row only supplies
+        `sid`.
+        """
         OidcSession.objects.all().delete()
-        with patch("corliss.oidc.requests.post") as post:
-            self.assertEqual(oidc.notify_logout(self.user), 0)
-        post.assert_not_called()
+        with patch("corliss.oidc.requests.post", return_value=_ok()) as post:
+            self.assertEqual(oidc.notify_logout(self.user), 1)
+
+        post.assert_called_once()
+        claims = jwt.decode(
+            post.call_args.kwargs["data"]["logout_token"],
+            options={"verify_signature": False},
+        )
+        self.assertEqual(claims["sub"], DID)
+        # No sid, because we never witnessed the exchange. Legal: the spec
+        # requires sub OR sid, and the RP resolves the member by sub.
+        self.assertNotIn("sid", claims)
 
     def test_did_with_no_user_row_is_a_silent_no_op(self):
         # MembershipCache is DID-keyed with no FK to User precisely so a grant
@@ -415,6 +432,18 @@ class RevocationTriggerTests(KeysMixin, TestCase):
         post = self._apply(_event(DID, "revoke"))
         self.assertTrue(self.applied)
         post.assert_not_called()
+
+    def test_revoking_a_member_with_no_session_row_still_notifies(self):
+        """The same cold-start hole, on the trigger that actually matters.
+
+        A member signed in to chat before v0.6.0 shipped has no session row, so
+        gating on one meant revoking them did nothing until their JWT expired —
+        the exact window this feature exists to close.
+        """
+        OidcSession.objects.all().delete()
+        self._apply(_event(DID, "grant"))
+        post = self._apply(_event(DID, "revoke", tid="3lqxbbbbbbbbb"))
+        post.assert_called_once()
 
     def test_revoking_an_already_revoked_member_notifies_nobody(self):
         self._apply(_event(DID, "grant"))
