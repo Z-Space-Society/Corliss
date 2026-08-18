@@ -33,10 +33,13 @@ ADMIN = "did:plc:hhyrsndukexwr6qucdngcf4r"
 TID_1 = "3lqx7qzabc2de"
 TID_2 = "3lqx7qzabc2df"
 
+HOST = "view.registry.example"
+
 REGISTRY_SETTINGS = {
     "MEMBERSHIP_REGISTRY_URL": URL,
     "MEMBERSHIP_REGISTRY_CLIENT_KEY": CLIENT_KEY,
     "MEMBERSHIP_REGISTRY_TOKEN": TOKEN,
+    "MEMBERSHIP_REGISTRY_HOST": "",
 }
 
 
@@ -217,6 +220,28 @@ class FetchEventsTests(TestCase):
 
         self.assertIn("500", str(caught.exception))
         self.assertIn("invalid service token", str(caught.exception))
+
+    def test_the_host_header_is_sent_only_when_overridden(self):
+        """The one job the edge does that a direct call has to do itself.
+
+        HappyView routes by virtual host and refuses a request whose Host is a
+        bare `10.1.1.x:3000` with HTTP 421 "Unknown host" — confirmed against
+        production. A proxy preserves the original Host, so only the bypass
+        needs this. Blank means "use the URL's own authority".
+        """
+        with patch.object(
+            requests, "get", return_value=FakeResponse(payload())
+        ) as get:
+            membership.MembershipRegistry(URL, CLIENT_KEY, TOKEN).fetch_events()
+        self.assertNotIn("Host", get.call_args.kwargs["headers"])
+
+        with patch.object(
+            requests, "get", return_value=FakeResponse(payload())
+        ) as get:
+            membership.MembershipRegistry(
+                "http://10.1.1.111:3000", CLIENT_KEY, TOKEN, HOST
+            ).fetch_events()
+        self.assertEqual(get.call_args.kwargs["headers"]["Host"], HOST)
 
     def test_the_client_key_is_sent_when_set_and_omitted_when_not(self):
         """Not required, because HappyView dispatches without it.
@@ -407,7 +432,11 @@ class ConfigurationTests(TestCase):
         )
 
     @override_settings(**REGISTRY_SETTINGS)
-    def test_from_settings_reads_all_three(self):
+    def test_from_settings_reads_every_setting(self):
         built = membership.MembershipRegistry.from_settings()
-        self.assertEqual((built.url, built.client_key, built.token),
-                         (URL, CLIENT_KEY, TOKEN))
+        self.assertEqual((built.url, built.client_key, built.token, built.host),
+                         (URL, CLIENT_KEY, TOKEN, ""))
+
+    @override_settings(**{**REGISTRY_SETTINGS, "MEMBERSHIP_REGISTRY_HOST": HOST})
+    def test_from_settings_reads_the_host_override(self):
+        self.assertEqual(membership.MembershipRegistry.from_settings().host, HOST)

@@ -120,9 +120,17 @@ SCN_SERVICE_DID = env("SCN_SERVICE_DID", default="")
 # key, so it adds nothing the token does not carry. Requiring it would tie the
 # recovery path to the *console's* origin-bound key having been configured,
 # which is the one dependency reconciliation must not have.
+#
+# HOST is the `Host` header to present, needed only when URL is an internal
+# address. The registry routes by virtual host and refuses a request whose Host
+# is a bare IP with HTTP 421 "Unknown host". The edge normally supplies this —
+# a reverse proxy preserves the original Host — so bypassing the edge means
+# carrying the edge's one job. Blank uses the URL's own authority, which is what
+# a deployment pointed at the public origin wants.
 MEMBERSHIP_REGISTRY_URL = env("MEMBERSHIP_REGISTRY_URL", default="")
 MEMBERSHIP_REGISTRY_TOKEN = env("MEMBERSHIP_REGISTRY_TOKEN", default="")
 MEMBERSHIP_REGISTRY_CLIENT_KEY = env("MEMBERSHIP_REGISTRY_CLIENT_KEY", default="")
+MEMBERSHIP_REGISTRY_HOST = env("MEMBERSHIP_REGISTRY_HOST", default="")
 
 # --- Local development escape hatch ------------------------------------------
 # A real atproto login can't complete over loopback: the authorization server

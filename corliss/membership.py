@@ -726,12 +726,15 @@ class MembershipRegistry:
     network.
     """
 
-    __slots__ = ("url", "client_key", "token")
+    __slots__ = ("url", "client_key", "token", "host")
 
-    def __init__(self, url, client_key, token):
+    def __init__(self, url, client_key, token, host=""):
         self.url = (url or "").rstrip("/")
         self.client_key = client_key or ""
         self.token = token or ""
+        # The Host header to present, when it differs from the URL's authority.
+        # See `fetch_events` — this is what makes the internal address usable.
+        self.host = host or ""
 
     @classmethod
     def from_settings(cls):
@@ -739,6 +742,7 @@ class MembershipRegistry:
             settings.MEMBERSHIP_REGISTRY_URL,
             settings.MEMBERSHIP_REGISTRY_CLIENT_KEY,
             settings.MEMBERSHIP_REGISTRY_TOKEN,
+            settings.MEMBERSHIP_REGISTRY_HOST,
         )
 
     @property
@@ -779,6 +783,16 @@ class MembershipRegistry:
         # Sent when we have one, omitted when we don't — see `is_configured`.
         # Harmless either way, and not something the call depends on.
         headers = {"x-client-key": self.client_key} if self.client_key else {}
+
+        # The registry routes by virtual host, so reaching it at its internal
+        # address needs the public name presented explicitly: a request whose
+        # Host is a bare `10.1.1.x:3000` is refused with HTTP 421 "Unknown host"
+        # before any routing happens. The edge normally supplies this — Caddy
+        # preserves the original Host when it proxies — which is exactly why the
+        # bypass has to do it by hand. Blank means "use the URL's own authority",
+        # which is what a deployment pointed at the public origin wants.
+        if self.host:
+            headers["Host"] = self.host
 
         try:
             # GET with the token as a query parameter, not a POST body, because

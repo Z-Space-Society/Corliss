@@ -356,7 +356,14 @@ that matters most happens at boot with nobody present. It is an XRPC **query**,
 so the token travels as a URL parameter: the registry gates *procedures* behind
 DPoP authentication, which a service holding only a shared token cannot provide.
 Point `MEMBERSHIP_REGISTRY_URL` at the registry's **internal** address for that
-reason — it keeps the token out of any edge or CDN log. It is deliberately a
+reason — it keeps the token out of any edge or CDN log, and keeps the run from
+depending on public DNS.
+
+Doing so needs `MEMBERSHIP_REGISTRY_HOST` as well: the registry routes by virtual
+host and answers HTTP 421 "Unknown host" to a request whose `Host` is a bare IP.
+A reverse proxy normally preserves the public name on the way through, so
+bypassing the proxy means presenting it yourself. Leave it blank when the URL is
+already the public origin. It is deliberately a
 *different door* from the admin-authenticated `listMembers` the console uses, so
 the two credentials rotate independently and widening one cannot widen the
 other. `MEMBERSHIP_REGISTRY_URL` or `MEMBERSHIP_REGISTRY_TOKEN` blank disables
