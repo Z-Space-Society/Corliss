@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
@@ -238,6 +239,17 @@ class ManageViewTests(NoRosterMixin, TestCase):
     def setUp(self):
         super().setUp()
         self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+        # The console resolves the DIDs it shows to handles, which for anyone
+        # who has never signed in here is a DID-document read. Pinned to a
+        # failure so the tables fall back to DIDs rather than the suite
+        # depending on plc.directory being up.
+        cache.clear()
+        self.addCleanup(cache.clear)
+        patcher = patch.object(
+            atproto, "fetch_did_document", side_effect=atproto.OAuthError("no net")
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _as_cluster_admin(self):
         patcher = patch("corliss.membership.is_cluster_admin", return_value=True)
@@ -288,7 +300,13 @@ class ManageViewTests(NoRosterMixin, TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "cache is empty")
 
-    def test_the_roster_is_listed_with_departed_admins_marked(self):
+    def test_only_admins_holding_the_role_now_are_listed(self):
+        """The table answers "who can decide membership today".
+
+        A departed admin's grants stay valid — `Roster.was_admin_at` is what
+        reads that history — but they are not who an operator is looking for
+        here, and a column of ended terms buries the people who are.
+        """
         from corliss import membership
 
         current = membership.AdminEntry(
@@ -306,8 +324,67 @@ class ManageViewTests(NoRosterMixin, TestCase):
             resp = self.client.get(reverse("manage"))
 
         self.assertContains(resp, "did:plc:currentadmin")
-        self.assertContains(resp, "did:plc:formeradmin")
-        self.assertContains(resp, "departed")
+        self.assertNotContains(resp, "did:plc:formeradmin")
+
+    def test_a_readmitted_admin_appears_once_at_their_current_term(self):
+        from corliss import membership
+
+        first = membership.AdminEntry(
+            "did:plc:returner",
+            _at("2026-01-01T00:00:00Z"),
+            _at("2026-03-01T00:00:00Z"),
+        )
+        again = membership.AdminEntry("did:plc:returner", _at("2026-07-01T00:00:00Z"))
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster(first, again):
+            resp = self.client.get(reverse("manage"))
+
+        # One row, not one per term — the cell's title carries the DID once.
+        html = resp.content.decode()
+        self.assertEqual(html.count('title="did:plc:returner"'), 1)
+        self.assertContains(resp, "2026-07-01")
+        self.assertNotContains(resp, "2026-01-01 00:00")
+
+    def test_members_and_admins_are_shown_by_handle_where_one_is_known(self):
+        """Handles are what a person reads; the DID stays on the cell's title.
+
+        Resolved from the `User` row for anyone who has signed in, so the
+        common case costs no network at all.
+        """
+        from corliss import membership
+
+        _grant()
+        User.objects.create_user(
+            username="admin.bsky.social", did="did:plc:currentadmin"
+        )
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster(
+            membership.AdminEntry("did:plc:currentadmin", _at("2026-01-01T00:00:00Z"))
+        ):
+            resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, ">alice.bsky.social</td>")
+        self.assertContains(resp, ">admin.bsky.social</td>")
+        # The DID is not dropped — it is the title on the cell that replaced it.
+        self.assertContains(resp, f'title="{DID}"')
+
+    def test_a_did_that_resolves_to_no_handle_renders_as_the_did(self):
+        """A failed lookup is not an error: the DID is still the true answer."""
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster(
+            membership.AdminEntry("did:plc:currentadmin", _at("2026-01-01T00:00:00Z"))
+        ):
+            resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, ">did:plc:currentadmin</td>")
 
     def test_the_button_is_disabled_with_a_reason_when_unconfigured(self):
         self._as_cluster_admin()

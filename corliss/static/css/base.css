@@ -590,6 +590,23 @@ a.btn-primary {
 
 /* --- Manage console ------------------------------------------------------ */
 
+/* The console's own width. 560px is right for a form and a paragraph, but the
+   member roll is five columns of identifiers and timestamps, and at 560 it
+   scrolled sideways inside its card to show columns that fit a wider page
+   easily. Widened here rather than on .account-view so /api/ and the account
+   pages keep the reading measure they were set at. */
+.console-view {
+  max-width: 900px;
+}
+
+/* Section copy on a 900px page. .hint-text is centred because it was written
+   for the login card, where it sits under a single button; across this width
+   centred lines read as captions floating free of the table they describe. */
+.console-view .hint-text,
+.console-view .page-text {
+  text-align: left;
+}
+
 /* DIDs are long and never wrap usefully, so the table scrolls inside its card
    rather than pushing the page sideways. */
 .table-scroll {
@@ -624,9 +641,19 @@ a.btn-primary {
   border-bottom: none;
 }
 
-.data-table__did {
+/* Identifiers, monospace so a column of them lines up to be compared. A handle
+   is what the console shows; the DID it stands for is on the element's title,
+   which the dotted underline is there to advertise. */
+.data-table__did,
+.data-table__handle {
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+.data-table__handle[title] {
+  cursor: help;
+  text-decoration: underline dotted var(--border);
+  text-underline-offset: 3px;
 }
 
 .data-table__muted {

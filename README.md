@@ -399,6 +399,15 @@ are read live from the registry's public roster record (nothing to go stale). A
 roster that cannot be read renders as a failure, not an empty table — "could not
 find out" and "there are no admins" are different facts.
 
+The admin table lists only the terms in force **now**, one row per DID. Departed
+terms are not shown and not lost: they stay in the record, where
+`Roster.was_admin_at` reads them when a past grant's authority is being judged.
+The tables show handles, resolved from the `User` row where the member has
+signed in and from the DID document otherwise (`membership.handles_for`), with
+the DID on each cell's `title`. That resolution is **display only** — handles are
+mutable, so nothing may key, compare, or store what comes out of it, and a
+lookup that fails renders the DID rather than an error.
+
 This page supersedes the separate SPA admin console. The write surface (approve,
 revoke, set tier, roster edits) still lives there and moves here next; those are
 *writes* to the registry space and must keep requiring a current-admin caller, so

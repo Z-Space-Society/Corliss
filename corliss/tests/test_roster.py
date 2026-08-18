@@ -1,4 +1,5 @@
-"""The admin roster: parsing, the point-in-time authorship rule, and caching.
+"""The admin roster: parsing, the point-in-time authorship rule, caching, and
+the handle resolution the console displays instead of DIDs.
 
 The load-bearing test here is `was_admin_at`. Reading it as "is an admin now"
 is the plausible-looking implementation that silently de-members everyone a
@@ -321,3 +322,73 @@ class GetRecordTests(TestCase):
             ):
                 with self.assertRaises(atproto.OAuthError):
                     atproto.get_record(SERVICE_DID, "some.collection", "self")
+
+
+class HandlesForTests(TestCase):
+    """`handles_for` — display labels, and the ways a label can go missing.
+
+    The rule these tests pin is that no failure here is fatal: an unknown or
+    unreachable DID drops out of the map and the caller shows the DID, which is
+    still true. What must not happen is a console that 500s because a directory
+    was slow.
+    """
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_a_signed_in_member_resolves_from_their_user_row_without_network(self):
+        from django.contrib.auth import get_user_model
+
+        get_user_model().objects.create_user(username="alice.bsky.social", did=JACOB)
+
+        with patch.object(atproto, "fetch_did_document") as fetch:
+            got = membership.handles_for([JACOB])
+
+        self.assertEqual(got, {JACOB: "alice.bsky.social"})
+        fetch.assert_not_called()
+
+    def test_an_unknown_did_resolves_from_its_did_document(self):
+        doc = {"alsoKnownAs": ["at://scott.bsky.social"]}
+
+        with patch.object(atproto, "fetch_did_document", return_value=doc):
+            got = membership.handles_for([SCOTT])
+
+        self.assertEqual(got, {SCOTT: "scott.bsky.social"})
+
+    def test_a_resolved_handle_is_cached_rather_than_fetched_per_render(self):
+        doc = {"alsoKnownAs": ["at://scott.bsky.social"]}
+
+        with patch.object(atproto, "fetch_did_document", return_value=doc) as fetch:
+            membership.handles_for([SCOTT])
+            membership.handles_for([SCOTT])
+
+        self.assertEqual(fetch.call_count, 1)
+
+    def test_an_unreachable_directory_leaves_the_did_unresolved(self):
+        with patch.object(
+            atproto, "fetch_did_document", side_effect=atproto.OAuthError("down")
+        ):
+            got = membership.handles_for([SCOTT])
+
+        self.assertEqual(got, {})
+
+    def test_a_failure_is_remembered_too_so_the_timeout_is_not_paid_twice(self):
+        # Without this every render of the console pays the full request
+        # timeout again for a DID that is not going to resolve.
+        with patch.object(
+            atproto, "fetch_did_document", side_effect=atproto.OAuthError("down")
+        ) as fetch:
+            membership.handles_for([SCOTT])
+            membership.handles_for([SCOTT])
+
+        self.assertEqual(fetch.call_count, 1)
+
+    def test_blank_and_duplicate_dids_are_asked_about_once(self):
+        doc = {"alsoKnownAs": ["at://scott.bsky.social"]}
+
+        with patch.object(atproto, "fetch_did_document", return_value=doc) as fetch:
+            got = membership.handles_for([SCOTT, SCOTT, "", None])
+
+        self.assertEqual(got, {SCOTT: "scott.bsky.social"})
+        self.assertEqual(fetch.call_count, 1)

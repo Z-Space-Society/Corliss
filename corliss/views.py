@@ -295,19 +295,57 @@ def manage(request):
             reconcile_error = str(exc)
 
     try:
-        admins, roster_error = membership.fetch_roster().entries, None
+        # Who holds admin *now*, one row each. A DID that was removed and later
+        # re-added has several terms on the roster; the console answers "who can
+        # decide membership today", so it shows the term in force and drops the
+        # rest. The history is not lost — it is in the record, and
+        # `Roster.was_admin_at` is what reads it when authority is being
+        # judged at some past moment.
+        entries, roster_error = membership.fetch_roster().entries, None
+        current = {}
+        for entry in entries:
+            if entry.is_current and (
+                entry.did not in current
+                or entry.added_at > current[entry.did].added_at
+            ):
+                current[entry.did] = entry
+        admins = sorted(current.values(), key=lambda e: e.added_at)
     except membership.RosterError as exc:
         # An unreadable roster is not "no admins". Rendering an empty table
         # would read as a fact; this reads as the failure it is.
         admins, roster_error = [], str(exc)
 
+    # Active first, so the roll a reader is checking against the registry is at
+    # the top and revoked history sinks below it.
+    members = list(MembershipCache.objects.order_by("-active", "did"))
+
+    # One resolution pass over every DID on the page — members, whoever granted
+    # them, and the admins — so the lookups are shared rather than repeated per
+    # table. Display only: see `membership.handles_for`.
+    handles = membership.handles_for(
+        [m.did for m in members]
+        + [m.author_did for m in members]
+        + [a.did for a in admins]
+    )
+    for member in members:
+        member.handle = handles.get(member.did, member.did)
+        member.author_handle = handles.get(member.author_did, member.author_did)
+    # Dicts rather than the `AdminEntry` objects: the entry is a value read
+    # from the record and has no room (or business) holding a display label.
+    admins = [
+        {
+            "did": a.did,
+            "handle": handles.get(a.did, a.did),
+            "added_at": a.added_at,
+        }
+        for a in admins
+    ]
+
     return render(
         request,
         "manage.html",
         {
-            # Active first, so the roll a reader is checking against the
-            # registry is at the top and revoked history sinks below it.
-            "members": MembershipCache.objects.order_by("-active", "did"),
+            "members": members,
             "admins": admins,
             "roster_error": roster_error,
             "registry_configured": registry.is_configured,

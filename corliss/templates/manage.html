@@ -9,14 +9,22 @@ and the difference is the point:
 - Admins are read live from the registry's public roster record. No cache, no
   credential, nothing to go stale.
 
-Reconciliation is what makes the first agree with the record. Until the button
-below is wired, this page is the honest picture of the gap.
+Reconciliation is what makes the first agree with the record.
+
+Both tables show handles with the DID on the cell's title. The handle is a
+label — `membership.handles_for` resolves it for reading, and the DID stays the
+thing being displayed *about*, which is why it is one hover away and never
+absent from the page.
+
+The admins table lists only who holds the role now. Departed terms are in the
+record and are what `Roster.was_admin_at` reads; this table answers the other
+question, "who can decide membership today".
 {% endcomment %}
 
 {% block title %}Membership — ZAI{% endblock %}
 
 {% block content %}
-<div class="account-view">
+<div class="account-view console-view">
   <h1>Membership</h1>
 
   <p class="page-text">Who this cluster believes is a member, and who is allowed
@@ -108,7 +116,7 @@ below is wired, this page is the honest picture of the gap.
         <table class="data-table">
           <thead>
             <tr>
-              <th>DID</th>
+              <th>Member</th>
               <th>State</th>
               <th>Tier</th>
               <th>Last event</th>
@@ -118,7 +126,7 @@ below is wired, this page is the honest picture of the gap.
           <tbody>
             {% for m in members %}
               <tr>
-                <td class="data-table__did">{{ m.did }}</td>
+                <td class="data-table__handle" title="{{ m.did }}">{{ m.handle }}</td>
                 <td>
                   {% if m.active %}
                     <span class="pill pill--active">active</span>
@@ -128,7 +136,7 @@ below is wired, this page is the honest picture of the gap.
                 </td>
                 <td>{{ m.tier|default:"—" }}</td>
                 <td class="data-table__muted">{{ m.last_event_at|date:"Y-m-d H:i" }}</td>
-                <td class="data-table__did data-table__muted">{{ m.author_did }}</td>
+                <td class="data-table__handle data-table__muted" title="{{ m.author_did }}">{{ m.author_handle }}</td>
               </tr>
             {% endfor %}
           </tbody>
@@ -144,9 +152,11 @@ below is wired, this page is the honest picture of the gap.
   </div>
 
   <h2 class="section-title">Admins</h2>
-  <p class="hint-text">Read live from the registry's public roster. Not stored
-  here, and not a Django permission — removing an admin ends their authority
-  going forward without invalidating the grants they already wrote.</p>
+  <p class="hint-text">Who holds cluster admin right now, read live from the
+  registry's public roster. Not stored here, and not a Django permission —
+  removing an admin ends their authority going forward without invalidating the
+  grants they already wrote, which is why departed terms are left in the record
+  rather than shown here.</p>
 
   <div class="card">
     {% if roster_error %}
@@ -160,27 +170,15 @@ below is wired, this page is the honest picture of the gap.
         <table class="data-table">
           <thead>
             <tr>
-              <th>DID</th>
-              <th>State</th>
-              <th>Added</th>
-              <th>Removed</th>
+              <th>Admin</th>
+              <th>Admin since</th>
             </tr>
           </thead>
           <tbody>
             {% for a in admins %}
               <tr>
-                <td class="data-table__did">{{ a.did }}</td>
-                <td>
-                  {% if a.is_current %}
-                    <span class="pill pill--active">current</span>
-                  {% else %}
-                    <span class="pill">departed</span>
-                  {% endif %}
-                </td>
+                <td class="data-table__handle" title="{{ a.did }}">{{ a.handle }}</td>
                 <td class="data-table__muted">{{ a.added_at|date:"Y-m-d H:i" }}</td>
-                <td class="data-table__muted">
-                  {% if a.removed_at %}{{ a.removed_at|date:"Y-m-d H:i" }}{% else %}—{% endif %}
-                </td>
               </tr>
             {% endfor %}
           </tbody>
@@ -188,7 +186,8 @@ below is wired, this page is the honest picture of the gap.
       </div>
     {% else %}
       <p class="alert alert--notice" role="status">
-        <strong>The roster is empty.</strong> Nobody holds cluster admin.
+        <strong>Nobody holds cluster admin.</strong> Either the roster is
+        empty, or every term on it has ended.
       </p>
     {% endif %}
   </div>

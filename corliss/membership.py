@@ -54,7 +54,7 @@ from django.core.cache import cache
 from django.db import transaction
 
 from corliss import atproto
-from corliss.models import MembershipCache
+from corliss.models import MembershipCache, User
 
 GRANT = "grant"
 REVOKE = "revoke"
@@ -459,6 +459,71 @@ def is_cluster_admin(did):
     except RosterError:
         return False
 
+
+# --- Handles, for display only ---------------------------------------------
+#
+# A DID is what this app trusts and keys on; a handle is what a person reads.
+# The console shows handles, so this resolves them — and nothing else may.
+# Never key on, compare, or store what comes out of here: handles are mutable
+# and reassignable, so a resolved handle is a label with a timestamp on it, not
+# an identity. That is also why a failure is not an error: an unresolvable DID
+# renders as the DID, which is still the true answer to "who is this".
+
+_HANDLE_CACHE_PREFIX = "corliss:handle:"
+HANDLE_CACHE_TTL = 3600
+# A DID that does not resolve is remembered too, briefly — otherwise every
+# render of the console pays the full request timeout for it again.
+HANDLE_FAILURE_TTL = 120
+
+
+def handles_for(dids):
+    """Map DIDs to handles for display. Missing entries mean "show the DID".
+
+    Two sources, cheapest first: members who have signed in already carry their
+    handle on the `User` row, refreshed at each login, so the common case costs
+    one query. Anyone else — an admin who has never logged into this Corliss —
+    is looked up in their DID document, which is public and needs no
+    credential. Both are cached; the DID document lookup is a network call per
+    unknown DID and the console would otherwise repeat it on every render.
+    """
+    wanted = {did for did in dids if did}
+    resolved, unresolved = {}, set()
+
+    for did in wanted:
+        cached = cache.get(f"{_HANDLE_CACHE_PREFIX}{did}")
+        if cached is None:
+            unresolved.add(did)
+        elif cached:
+            resolved[did] = cached
+
+    if not unresolved:
+        return resolved
+
+    for did, username in User.objects.filter(did__in=unresolved).values_list(
+        "did", "username"
+    ):
+        if username:
+            resolved[did] = username
+            unresolved.discard(did)
+            cache.set(f"{_HANDLE_CACHE_PREFIX}{did}", username, HANDLE_CACHE_TTL)
+
+    for did in unresolved:
+        handle = None
+        try:
+            handle = atproto.handle_from_doc(atproto.fetch_did_document(did))
+        except atproto.OAuthError:
+            # Unreachable directory, or a DID method we cannot read. Display
+            # only — the page shows the DID and carries on.
+            pass
+        if handle:
+            resolved[did] = handle
+        cache.set(
+            f"{_HANDLE_CACHE_PREFIX}{did}",
+            handle or "",
+            HANDLE_CACHE_TTL if handle else HANDLE_FAILURE_TTL,
+        )
+
+    return resolved
 
 # --- Reconciliation --------------------------------------------------------
 #
