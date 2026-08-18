@@ -781,9 +781,20 @@ class MembershipRegistry:
         headers = {"x-client-key": self.client_key} if self.client_key else {}
 
         try:
-            response = requests.post(
+            # GET with the token as a query parameter, not a POST body, because
+            # `syncMembers` has to be an XRPC *query*: HappyView refuses every
+            # procedure call with "XRPC procedures require DPoP authentication"
+            # before the script ever runs, and a service holding only a shared
+            # token cannot produce a DPoP proof. Queries have no such gate.
+            #
+            # So the token is in the URL, and therefore in access logs. That is
+            # why `MEMBERSHIP_REGISTRY_URL` should be the registry's *internal*
+            # address: the request never reaches an edge or CDN, and the only
+            # log it lands in belongs to a host whose root is already the trust
+            # boundary.
+            response = requests.get(
                 f"{self.url}/xrpc/{SYNC_MEMBERS_NSID}",
-                json={"token": self.token},
+                params={"token": self.token},
                 headers=headers,
                 timeout=REGISTRY_TIMEOUT,
             )

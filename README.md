@@ -352,7 +352,11 @@ over a half-empty cache would be worse than not running at all.
 **How it reads the space.** `MembershipRegistry` calls `syncMembers`, a
 read-only registry endpoint authenticated by a shared token
 (`MEMBERSHIP_REGISTRY_TOKEN`) rather than by a signed-in admin — because the run
-that matters most happens at boot with nobody present. It is deliberately a
+that matters most happens at boot with nobody present. It is an XRPC **query**,
+so the token travels as a URL parameter: the registry gates *procedures* behind
+DPoP authentication, which a service holding only a shared token cannot provide.
+Point `MEMBERSHIP_REGISTRY_URL` at the registry's **internal** address for that
+reason — it keeps the token out of any edge or CDN log. It is deliberately a
 *different door* from the admin-authenticated `listMembers` the console uses, so
 the two credentials rotate independently and widening one cannot widen the
 other. `MEMBERSHIP_REGISTRY_URL` or `MEMBERSHIP_REGISTRY_TOKEN` blank disables

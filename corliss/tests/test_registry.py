@@ -6,7 +6,7 @@ If this adapter fills them in differently from the way the push does, the two
 transports become two shapes for one lexicon and the shared parser stops being
 shared — which is the whole thing the envelope was designed to avoid.
 
-Nothing here touches the network: `requests.post` is mocked at the boundary.
+Nothing here touches the network: `requests.get` is mocked at the boundary.
 """
 
 import json
@@ -161,32 +161,39 @@ class EnvelopeTests(TestCase):
 
 @override_settings(**REGISTRY_SETTINGS)
 class FetchEventsTests(TestCase):
-    def test_posts_the_token_in_the_body_with_the_client_key_header(self):
-        """Body, not query string: a token in a URL lands in access logs."""
+    def test_gets_the_endpoint_with_the_token_as_a_parameter(self):
+        """A query, not a procedure — HappyView gates procedures behind DPoP.
+
+        Verified against production: a procedure call is refused with "XRPC
+        procedures require DPoP authentication" before the script runs, which a
+        service holding only a shared token can never satisfy. So the token
+        rides in the URL, and the mitigation is the internal address rather than
+        a request body.
+        """
         with patch.object(
-            requests, "post", return_value=FakeResponse(payload())
-        ) as post:
+            requests, "get", return_value=FakeResponse(payload())
+        ) as get:
             registry().fetch_events()
 
-        args, kwargs = post.call_args
+        args, kwargs = get.call_args
         self.assertTrue(args[0].endswith(f"/xrpc/{membership.SYNC_MEMBERS_NSID}"))
-        self.assertEqual(kwargs["json"], {"token": TOKEN})
+        self.assertEqual(kwargs["params"], {"token": TOKEN})
         self.assertEqual(kwargs["headers"]["x-client-key"], CLIENT_KEY)
 
     def test_both_collections_are_returned_as_one_ordered_stream(self):
         body = payload([space_grant()], [space_revocation()])
 
-        with patch.object(requests, "post", return_value=FakeResponse(body)):
+        with patch.object(requests, "get", return_value=FakeResponse(body)):
             events = registry().fetch_events()
 
         self.assertEqual([e["event"] for e in events], ["grant", "revoke"])
         self.assertEqual({e["did"] for e in events}, {MEMBER})
 
     def test_an_unconfigured_registry_refuses_before_any_request(self):
-        with patch.object(requests, "post") as post:
+        with patch.object(requests, "get") as get:
             with self.assertRaises(membership.RegistryError):
                 membership.MembershipRegistry("", "", "").fetch_events()
-        post.assert_not_called()
+        get.assert_not_called()
 
     def test_a_rejected_token_surfaces_the_registrys_own_message(self):
         """The Lua's error text is the half an operator needs.
@@ -204,7 +211,7 @@ class FetchEventsTests(TestCase):
             ),
             "method": membership.SYNC_MEMBERS_NSID,
         }
-        with patch.object(requests, "post", return_value=FakeResponse(body, 500)):
+        with patch.object(requests, "get", return_value=FakeResponse(body, 500)):
             with self.assertRaises(membership.RegistryError) as caught:
                 registry().fetch_events()
 
@@ -220,20 +227,20 @@ class FetchEventsTests(TestCase):
         configured, which is the coupling this must not have.
         """
         with patch.object(
-            requests, "post", return_value=FakeResponse(payload())
-        ) as post:
+            requests, "get", return_value=FakeResponse(payload())
+        ) as get:
             registry().fetch_events()
-        self.assertEqual(post.call_args.kwargs["headers"]["x-client-key"], CLIENT_KEY)
+        self.assertEqual(get.call_args.kwargs["headers"]["x-client-key"], CLIENT_KEY)
 
         with patch.object(
-            requests, "post", return_value=FakeResponse(payload())
-        ) as post:
+            requests, "get", return_value=FakeResponse(payload())
+        ) as get:
             membership.MembershipRegistry(URL, "", TOKEN).fetch_events()
-        self.assertEqual(post.call_args.kwargs["headers"], {})
+        self.assertEqual(get.call_args.kwargs["headers"], {})
 
     def test_transport_failure_raises_registry_error_not_the_raw_exception(self):
         with patch.object(
-            requests, "post", side_effect=requests.ConnectionError("refused")
+            requests, "get", side_effect=requests.ConnectionError("refused")
         ):
             with self.assertRaises(membership.RegistryError):
                 registry().fetch_events()
@@ -241,14 +248,14 @@ class FetchEventsTests(TestCase):
     def test_a_response_missing_a_collection_is_refused(self):
         """Half an answer must not read as "no revocations"."""
         with patch.object(
-            requests, "post", return_value=FakeResponse({"grants": []})
+            requests, "get", return_value=FakeResponse({"grants": []})
         ):
             with self.assertRaises(membership.RegistryError):
                 registry().fetch_events()
 
     def test_a_non_json_response_is_refused(self):
         with patch.object(
-            requests, "post", return_value=FakeResponse("<html>gateway</html>")
+            requests, "get", return_value=FakeResponse("<html>gateway</html>")
         ):
             with self.assertRaises(membership.RegistryError):
                 registry().fetch_events()
@@ -263,7 +270,7 @@ class ReconcileTests(TestCase):
             [space_grant(did=MEMBER), space_grant(did=OTHER, tier="level-0")]
         )
 
-        with patch.object(requests, "post", return_value=FakeResponse(body)):
+        with patch.object(requests, "get", return_value=FakeResponse(body)):
             with patch.object(membership, "fetch_roster", return_value=roster(ADMIN)):
                 report = membership.MembershipRegistry.from_settings().reconcile()
 
@@ -275,7 +282,7 @@ class ReconcileTests(TestCase):
         """Ordering is by TID across both collections, not per-collection."""
         body = payload([space_grant(tid=TID_1)], [space_revocation(tid=TID_2)])
 
-        with patch.object(requests, "post", return_value=FakeResponse(body)):
+        with patch.object(requests, "get", return_value=FakeResponse(body)):
             with patch.object(membership, "fetch_roster", return_value=roster(ADMIN)):
                 membership.MembershipRegistry.from_settings().reconcile()
 
@@ -284,7 +291,7 @@ class ReconcileTests(TestCase):
     def test_dry_run_reports_without_writing(self):
         body = payload([space_grant()])
 
-        with patch.object(requests, "post", return_value=FakeResponse(body)):
+        with patch.object(requests, "get", return_value=FakeResponse(body)):
             with patch.object(membership, "fetch_roster", return_value=roster(ADMIN)):
                 report = membership.MembershipRegistry.from_settings().reconcile(
                     dry_run=True
@@ -302,7 +309,7 @@ class ReconcileTests(TestCase):
         """
         body = payload([space_grant()])
 
-        with patch.object(requests, "post", return_value=FakeResponse(body)):
+        with patch.object(requests, "get", return_value=FakeResponse(body)):
             with patch.object(
                 membership,
                 "fetch_roster",
