@@ -587,3 +587,99 @@ a.btn-primary {
 .footer__link:hover {
   color: oklch(0.85 0.006 255);
 }
+
+/* --- Manage console ------------------------------------------------------ */
+
+/* DIDs are long and never wrap usefully, so the table scrolls inside its card
+   rather than pushing the page sideways. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.data-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0 16px 10px 0;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 11px 16px 11px 0;
+  border-bottom: 1px solid var(--inset);
+  white-space: nowrap;
+}
+
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table__did {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.data-table__muted {
+  color: var(--text-muted);
+}
+
+/* State, not decoration: `active`/`current` is the only thing on these rows
+   that a reader is really checking, so it carries the only colour. */
+.pill {
+  display: inline-block;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--inset);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.pill--active {
+  color: var(--success);
+  border-color: color-mix(in oklch, var(--success) 35%, var(--border));
+}
+
+.button-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 4px 0 0;
+}
+
+/* The preview beside the real action: same shape, no weight. Reconciling is
+   safe and re-runnable, so neither button is styled as a warning. */
+.btn-secondary {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 11px 18px;
+  border-radius: 9px;
+  border: 1px solid var(--border-input);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.btn-secondary:hover {
+  border-color: var(--border-hover);
+  color: var(--text);
+}
+
+.finding-list {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.7;
+}

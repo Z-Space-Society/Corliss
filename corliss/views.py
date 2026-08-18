@@ -8,6 +8,8 @@ ATProto client (people):
   store tokens server-side, establish the Django session.
 - `home`: the root page — an intro when signed out, your standing when in.
 - `api`: placeholder for direct API access; nothing on it is wired up yet.
+- `manage`: the cluster console — members, admins, and reconciliation. Gated on
+  the atproto roster, not on any Django flag, so it survives a rebuild.
 - `logout`: ends this device's Corliss session. Local-session-only for now (no
   upstream ATProto/OIDC RP-initiated logout) — a relying party like Open WebUI
   ending its own session doesn't end this one, so a member who wants a real
@@ -45,7 +47,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from corliss import atproto, membership, oidc, signing
-from corliss.models import AtprotoToken, OidcAuthCode
+from corliss.models import AtprotoToken, MembershipCache, OidcAuthCode
 
 User = get_user_model()
 
@@ -256,6 +258,63 @@ def api(request):
     the shape of the key flow are settled before any of it is built.
     """
     return render(request, "api.html")
+
+
+@require_http_methods(["GET", "POST"])
+def manage(request):
+    """The cluster console: who is a member, who is an admin, and reconcile.
+
+    Gated on `is_cluster_admin` — a live read of the public roster — and
+    deliberately **not** on `is_superuser`. That distinction is what keeps this
+    page reachable on a cluster rebuilt from nothing: the roster needs no
+    database and no cache, so an admin can arrive here with `MembershipCache`
+    empty and every member locked out. The recovery action therefore lives
+    behind the one door that does not depend on the thing being recovered.
+
+    POST runs reconciliation, through the same `MembershipRegistry.reconcile`
+    the management command calls. One code path, so a click and a scheduled run
+    can never mean different things.
+    """
+    if not request.user.is_authenticated:
+        request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
+        return redirect("login")
+    if not request.user.is_cluster_admin:
+        # 404 rather than 403: a non-admin has no business learning that this
+        # page exists, and the nav never offers it to them.
+        raise Http404
+
+    registry = membership.MembershipRegistry.from_settings()
+    report, reconcile_error = None, None
+
+    if request.method == "POST":
+        try:
+            report = registry.reconcile(dry_run="dry_run" in request.POST)
+        except (membership.RegistryError, membership.ReconcileError) as exc:
+            # "The answer would not be trustworthy" — distinct from a report
+            # that ran and came back bad, which renders as the report.
+            reconcile_error = str(exc)
+
+    try:
+        admins, roster_error = membership.fetch_roster().entries, None
+    except membership.RosterError as exc:
+        # An unreadable roster is not "no admins". Rendering an empty table
+        # would read as a fact; this reads as the failure it is.
+        admins, roster_error = [], str(exc)
+
+    return render(
+        request,
+        "manage.html",
+        {
+            # Active first, so the roll a reader is checking against the
+            # registry is at the top and revoked history sinks below it.
+            "members": MembershipCache.objects.order_by("-active", "did"),
+            "admins": admins,
+            "roster_error": roster_error,
+            "registry_configured": registry.is_configured,
+            "report": report,
+            "reconcile_error": reconcile_error,
+        },
+    )
 
 
 def logout(request):

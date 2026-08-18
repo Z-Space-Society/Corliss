@@ -1,3 +1,4 @@
+from datetime import datetime
 from unittest.mock import patch
 
 from django.conf import settings
@@ -82,6 +83,11 @@ class FooterTests(TestCase):
 
 
 MANAGE_URL = "https://manage.example.com"
+
+
+def _at(text):
+    """An aware UTC datetime from the registry's ISO-8601-with-Z format."""
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
 def _grant(did=DID, *, tier="level-2"):
@@ -207,13 +213,218 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.assertNotContains(resp, "Manage Console")
 
     @override_settings(MANAGE_URL="")
-    def test_cluster_admin_with_no_manage_url_gets_no_empty_menu(self):
-        # An admin whose only link is unconfigured must not get a menu that
-        # opens onto nothing.
+    def test_cluster_admin_with_no_manage_url_still_gets_the_corliss_console(self):
+        # The menu-onto-nothing case this used to guard is now unreachable: the
+        # Corliss console is served by this app, so a cluster admin always has
+        # at least one entry and no setting can leave it pointing nowhere. The
+        # protection that still matters is that the *unconfigured* link stays
+        # absent rather than rendering an empty href.
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertNotContains(resp, ">Manage<")
+        self.assertContains(resp, reverse("manage"))
+        self.assertNotContains(resp, "Manage Console")
+
+
+class ManageViewTests(NoRosterMixin, TestCase):
+    """`/manage/` — the cluster console.
+
+    The load-bearing test is the rebuild one: this page must open for an admin
+    when the membership cache is empty, because the button that repopulates the
+    cache lives on it. Gating it on anything stored in the database would make
+    the recovery path depend on the thing being recovered.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+
+    def _as_cluster_admin(self):
+        patcher = patch("corliss.membership.is_cluster_admin", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _roster(self, *entries):
+        from corliss import membership
+
+        return patch.object(
+            membership, "fetch_roster", return_value=membership.Roster(list(entries))
+        )
+
+    def test_anonymous_is_bounced_through_login_and_resumes_here(self):
+        resp = self.client.get(reverse("manage"))
+        self.assertRedirects(resp, reverse("login"))
+        self.assertEqual(
+            self.client.session["post_login_redirect"], reverse("manage")
+        )
+
+    def test_a_signed_in_non_admin_gets_a_404_not_a_403(self):
+        # A non-admin has no business learning the page exists.
+        _grant()
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(reverse("manage")).status_code, 404)
+
+    def test_an_admin_sees_the_member_roll(self):
+        _grant(tier="level-5")
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, DID)
+        self.assertContains(resp, "level-5")
+
+    def test_an_admin_reaches_it_with_an_empty_cache(self):
+        """The rebuild case, and the reason this page is gated on the roster."""
+        self.assertFalse(MembershipCache.objects.exists())
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "cache is empty")
+
+    def test_the_roster_is_listed_with_departed_admins_marked(self):
+        from corliss import membership
+
+        current = membership.AdminEntry(
+            "did:plc:currentadmin", _at("2026-01-01T00:00:00Z")
+        )
+        departed = membership.AdminEntry(
+            "did:plc:formeradmin",
+            _at("2026-01-01T00:00:00Z"),
+            _at("2026-06-01T00:00:00Z"),
+        )
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster(current, departed):
+            resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, "did:plc:currentadmin")
+        self.assertContains(resp, "did:plc:formeradmin")
+        self.assertContains(resp, "departed")
+
+    def test_the_button_is_disabled_with_a_reason_when_unconfigured(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, "Not configured")
+        self.assertNotContains(resp, "Reconcile memberships")
+
+    @override_settings(
+        MEMBERSHIP_REGISTRY_URL="https://registry.example",
+        MEMBERSHIP_REGISTRY_CLIENT_KEY="hvc_key",
+        MEMBERSHIP_REGISTRY_TOKEN="token",
+    )
+    def test_posting_runs_the_same_reconcile_the_command_runs(self):
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        report = membership.ReconcileReport()
+        report.applied.append(DID)
+
+        with self._roster():
+            with patch.object(
+                membership.MembershipRegistry, "reconcile", return_value=report
+            ) as run:
+                resp = self.client.post(reverse("manage"))
+
+        run.assert_called_once_with(dry_run=False)
+        self.assertContains(resp, "Complete")
+
+    @override_settings(
+        MEMBERSHIP_REGISTRY_URL="https://registry.example",
+        MEMBERSHIP_REGISTRY_CLIENT_KEY="hvc_key",
+        MEMBERSHIP_REGISTRY_TOKEN="token",
+    )
+    def test_preview_asks_for_a_dry_run(self):
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            with patch.object(
+                membership.MembershipRegistry,
+                "reconcile",
+                return_value=membership.ReconcileReport(),
+            ) as run:
+                self.client.post(reverse("manage"), {"dry_run": "1"})
+
+        run.assert_called_once_with(dry_run=True)
+
+    @override_settings(
+        MEMBERSHIP_REGISTRY_URL="https://registry.example",
+        MEMBERSHIP_REGISTRY_CLIENT_KEY="hvc_key",
+        MEMBERSHIP_REGISTRY_TOKEN="token",
+    )
+    def test_an_incomplete_report_says_so_rather_than_reading_as_success(self):
+        """The proof obligation, on screen: unresolved and orphans are blockers."""
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        report = membership.ReconcileReport()
+        report.unresolved.append(
+            {"did": DID, "rkey": f"{DID}:3lqxaaaaaaaaa", "error": "grant has no 'tier'"}
+        )
+
+        with self._roster():
+            with patch.object(
+                membership.MembershipRegistry, "reconcile", return_value=report
+            ):
+                resp = self.client.post(reverse("manage"))
+
+        self.assertContains(resp, "Incomplete")
+        self.assertContains(resp, "no &#x27;tier&#x27;")
+
+    @override_settings(
+        MEMBERSHIP_REGISTRY_URL="https://registry.example",
+        MEMBERSHIP_REGISTRY_CLIENT_KEY="hvc_key",
+        MEMBERSHIP_REGISTRY_TOKEN="token",
+    )
+    def test_a_registry_failure_renders_as_a_failure_not_an_empty_report(self):
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            with patch.object(
+                membership.MembershipRegistry,
+                "reconcile",
+                side_effect=membership.RegistryError("could not reach the registry"),
+            ):
+                resp = self.client.post(reverse("manage"))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "could not run")
+        self.assertContains(resp, "could not reach the registry")
+
+    def test_an_unreadable_roster_shows_a_failure_not_an_empty_table(self):
+        """"Could not find out" and "there are no admins" are different facts."""
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with patch.object(
+            membership, "fetch_roster", side_effect=membership.RosterError("PDS down")
+        ):
+            resp = self.client.get(reverse("manage"))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "could not be read")
+        self.assertContains(resp, "PDS down")
 
 
 class AccountMenuTests(NoRosterMixin, TestCase):

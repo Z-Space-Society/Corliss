@@ -48,6 +48,9 @@ urlpatterns = [
         name="membership_push",
     ),
     path("api/", views.api, name="api"),
+    # The cluster console. Gated on the atproto admin roster, not on a Django
+    # flag — see `views.manage`.
+    path("manage/", views.manage, name="manage"),
     path("", views.home, name="home"),
 ]
 

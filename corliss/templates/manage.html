@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% comment %}
+The cluster console. Two tables that come from two completely different places,
+and the difference is the point:
+
+- Members are Corliss's own cache — what this deployment believes. It can be
+  stale, incomplete, or (in the orphan case) wrong.
+- Admins are read live from the registry's public roster record. No cache, no
+  credential, nothing to go stale.
+
+Reconciliation is what makes the first agree with the record. Until the button
+below is wired, this page is the honest picture of the gap.
+{% endcomment %}
+
+{% block title %}Membership — ZAI{% endblock %}
+
+{% block content %}
+<div class="account-view">
+  <h1>Membership</h1>
+
+  <p class="page-text">Who this cluster believes is a member, and who is allowed
+  to decide that. Membership is cached here; the registry is authoritative in
+  any disagreement.</p>
+
+  <h2 class="section-title">Reconcile</h2>
+  <p class="hint-text">Re-derives the cache from every grant and revocation in
+  the registry. This is the only way membership returns to a Corliss that was
+  rebuilt — the push cannot replay events it never witnessed.</p>
+
+  <div class="card">
+    {% if not registry_configured %}
+      <p class="alert alert--notice" role="status">
+        <strong>Not configured.</strong> Reconciliation needs
+        <code>MEMBERSHIP_REGISTRY_URL</code> and
+        <code>MEMBERSHIP_REGISTRY_TOKEN</code>. Until both are set this
+        deployment can receive pushes but cannot read the registry back.
+      </p>
+    {% else %}
+      {% if reconcile_error %}
+        <p class="alert" role="alert">
+          <strong>Reconciliation could not run.</strong> {{ reconcile_error }}
+        </p>
+        <p class="hint-text">Nothing was changed. This is a failure to get a
+        trustworthy answer, not a bad answer.</p>
+      {% endif %}
+
+      {% if report %}
+        {% if report.is_complete %}
+          <p class="alert alert--notice" role="status">
+            <strong>Complete.</strong> The cache matches the registry —
+            {{ report.applied|length }} applied,
+            {{ report.unchanged|length }} already current.
+          </p>
+        {% else %}
+          <p class="alert" role="alert">
+            <strong>Incomplete.</strong> {{ report.unresolved|length }} unresolved,
+            {{ report.orphans|length }} orphaned. Nothing may be gated on this
+            cache until both are zero.
+          </p>
+        {% endif %}
+
+        {% if report.unresolved %}
+          <h3 class="card__title">Unresolved</h3>
+          <p class="hint-text">The winning event for these DIDs could not be
+          read, so each one is a member missing from the cache. Never repaired
+          by inventing a tier.</p>
+          <ul class="finding-list">
+            {% for item in report.unresolved %}
+              <li><span class="data-table__did">{{ item.did|default:"(no did)" }}</span>
+              — {{ item.error }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+
+        {% if report.orphans %}
+          <h3 class="card__title">Orphans</h3>
+          <p class="hint-text">Cache rows with no admin-authored registry event
+          behind them — what a leaked push token leaves. Reported only; removing
+          one is a deliberate act, not a side effect of reconciling.</p>
+          <ul class="finding-list">
+            {% for item in report.orphans %}
+              <li><span class="data-table__did">{{ item.did }}</span>
+              — {% if item.active %}active {{ item.tier }}{% else %}revoked{% endif %},
+              author <span class="data-table__did">{{ item.author_did }}</span></li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endif %}
+
+      <form method="post" class="button-row">
+        {% csrf_token %}
+        <button type="submit" name="dry_run" value="1" class="btn-secondary">Preview</button>
+        <button type="submit" class="btn-primary">Reconcile memberships</button>
+      </form>
+      <p class="hint-text">Preview reports what would change without writing
+      anything.</p>
+    {% endif %}
+  </div>
+
+  <h2 class="section-title">Members</h2>
+  <p class="hint-text">Corliss's cache, filled by the registry's push. A revoked
+  member keeps their last tier for audit — read the state, not the tier.</p>
+
+  <div class="card">
+    {% if members %}
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>DID</th>
+              <th>State</th>
+              <th>Tier</th>
+              <th>Last event</th>
+              <th>Granted by</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in members %}
+              <tr>
+                <td class="data-table__did">{{ m.did }}</td>
+                <td>
+                  {% if m.active %}
+                    <span class="pill pill--active">active</span>
+                  {% else %}
+                    <span class="pill">revoked</span>
+                  {% endif %}
+                </td>
+                <td>{{ m.tier|default:"—" }}</td>
+                <td class="data-table__muted">{{ m.last_event_at|date:"Y-m-d H:i" }}</td>
+                <td class="data-table__did data-table__muted">{{ m.author_did }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="alert alert--notice" role="status">
+        <strong>The cache is empty.</strong> Either nothing has been granted yet,
+        or this deployment has not witnessed the events that were. Reconciling
+        against the registry is what tells the two apart.
+      </p>
+    {% endif %}
+  </div>
+
+  <h2 class="section-title">Admins</h2>
+  <p class="hint-text">Read live from the registry's public roster. Not stored
+  here, and not a Django permission — removing an admin ends their authority
+  going forward without invalidating the grants they already wrote.</p>
+
+  <div class="card">
+    {% if roster_error %}
+      <p class="alert" role="alert">
+        <strong>The roster could not be read.</strong> {{ roster_error }}
+      </p>
+      <p class="hint-text">This is not "there are no admins" — it is a failure to
+      find out. Reconciliation refuses to run against a roster it cannot read.</p>
+    {% elif admins %}
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>DID</th>
+              <th>State</th>
+              <th>Added</th>
+              <th>Removed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for a in admins %}
+              <tr>
+                <td class="data-table__did">{{ a.did }}</td>
+                <td>
+                  {% if a.is_current %}
+                    <span class="pill pill--active">current</span>
+                  {% else %}
+                    <span class="pill">departed</span>
+                  {% endif %}
+                </td>
+                <td class="data-table__muted">{{ a.added_at|date:"Y-m-d H:i" }}</td>
+                <td class="data-table__muted">
+                  {% if a.removed_at %}{{ a.removed_at|date:"Y-m-d H:i" }}{% else %}—{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="alert alert--notice" role="status">
+        <strong>The roster is empty.</strong> Nobody holds cluster admin.
+      </p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
