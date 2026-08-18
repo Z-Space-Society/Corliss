@@ -246,10 +246,16 @@ def membership_for(user):
 
 
 def is_active_member(did):
-    """GATE, as a single question: may this DID reach the cluster?
+    """Is there a live grant for this DID?
 
     Fails closed. No cached row means no known grant, which is a no — never a
     default-allow, and never a reason to go asking the registry inline.
+
+    This is the *entitlement* half: it answers "has the registry granted this
+    DID something", which is what a tier claim has to be derived from. It is
+    deliberately **not** GATE on its own — see `may_enter`, which adds the
+    roster so an admin can enter a Corliss whose cache is empty while still
+    receiving nothing they were never granted.
     """
     return MembershipCache.objects.filter(did=did, active=True).exists()
 
@@ -458,6 +464,39 @@ def is_cluster_admin(did):
         return fetch_roster().is_current_admin(did)
     except RosterError:
         return False
+
+
+def may_enter(did):
+    """GATE, as a single question: may this DID use the cluster at all?
+
+    Two ways in, and keeping them separate is the whole of the design:
+
+    - an **active grant** in the cache, which is what membership means; or
+    - a **current place on the admin roster**, which needs no cache row.
+
+    The second clause is what makes closing this gate survivable. A Corliss
+    rebuilt from nothing has an empty `MembershipCache` and therefore every
+    member locked out — including every admin, if this asked only the cache.
+    The roster is a public record read straight from the service DID's repo, so
+    an admin can still get in and press the button that refills the cache.
+    Gating on the cache alone would make the recovery path depend on the very
+    thing being recovered.
+
+    It buys that admin nothing else. Entitlements — the tier an id_token will
+    carry — still come from `membership_for`, so an admin with no grant enters
+    Corliss and receives nothing they were never given. GATE-for-Corliss and
+    ENTITLE-for-Open-WebUI stay two questions with two answers, which is also
+    how "admin does not imply member" is answered without inventing a grant.
+
+    Reads the cache and the roster, and nothing else. **A cache miss must never
+    trigger an inline registry fetch**: reconciliation is an operator action
+    and a scheduled job, never a step in somebody's login.
+
+    Order matters only for cost. Members are the common case and answer from
+    one indexed row, so the roster — a cached read, and a network call when
+    that cache is cold — is asked only when the cheap answer is no.
+    """
+    return bool(did) and (is_active_member(did) or is_cluster_admin(did))
 
 
 # --- Handles, for display only ---------------------------------------------

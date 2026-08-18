@@ -242,13 +242,13 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | Endpoint | Path |
 | -------- | ---- |
 | Home | `/` |
-| API access (placeholder) | `/api/` |
+| API access (placeholder, members) | `/api/` |
 | Login / logout | `/auth/login`, `/auth/logout` |
 | ATProto callback | `/auth/oauth/callback` |
 | ATProto client metadata (**is** the `client_id`) | `/auth/client-metadata.json` |
 | OIDC discovery | `/.well-known/openid-configuration` |
 | JWKS | `/.well-known/jwks.json` |
-| OIDC authorize / token | `/oidc/authorize`, `/oidc/token` |
+| OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
 | Membership push (from the registry) | `/membership/events` |
 | Console — members, admins, reconcile (cluster admins) | `/manage/` |
 | Django admin | `/admin/` |
@@ -381,8 +381,64 @@ Both are recovered without guessing — `event` is which array the entry arrived
 in, `did` is `did_of(rkey)` — which is what lets the push and the read share one
 parser instead of drifting into two shapes for one lexicon.
 
-Not built yet: the systemd timer and the run at boot. Those land once a real run
-against production has reported clean.
+Not built yet: the systemd timer and the run at boot. A real production run has
+since reported clean, so what remains is wiring rather than a precondition —
+`manage.py reconcile_membership` already exits non-zero on an incomplete report,
+which is what lets a scheduled run fail loudly instead of logging success over a
+half-empty cache.
+
+### GATE — where membership is actually enforced
+
+Signing in is not the same as being let in. Anyone with an atproto handle can
+complete a login here; `membership.may_enter(did)` is the single question that
+decides whether they may use the cluster, and it has two answers that pass:
+
+- an **active grant** in the cache — what membership means; or
+- a **current place on the admin roster** — which needs no cache row at all.
+
+**The second clause is what makes closing the gate survivable.** A Corliss
+rebuilt from nothing has an empty cache and therefore every member locked out —
+including every admin, if the gate asked only the cache. The roster is a public
+record read straight from the service DID's repo, so an admin can still get in
+and press the button that refills the cache. Gating on the cache alone would
+make the recovery path depend on the very thing being recovered.
+
+It buys that admin nothing else. Entitlements — the tier an `id_token` will
+carry — come from `membership_for`, so an admin with no grant enters Corliss and
+receives nothing they were never granted. **GATE-for-Corliss and
+ENTITLE-for-Open-WebUI stay two questions**, which is also how "admin does not
+imply member" is answered without inventing a grant.
+
+Four surfaces ask, and `require_membership` in `corliss/views.py` is the only
+thing that asks:
+
+| Surface | Why it is gated |
+| ------- | --------------- |
+| `/oidc/authorize` | **the one that matters.** The handoff into Open WebUI, reached on *every* exchange — so it is the only place that can refuse a session established before the gate existed, or one whose owner has been revoked since they signed in. Gating login alone is a gate with a hole in it |
+| the login resume | GATE applies to the **resume, not the login**. A non-member still gets a session — they need one to apply — but not a ride onward into the relying party they came from |
+| `/api/` | gated before it grows a real "create key" button |
+
+Two surfaces must **never** be gated, which is why this is a per-view helper and
+not middleware — middleware covers everything by default, and these would have
+to be remembered as exemptions:
+
+- **`/admin/login/`** — `ensure_admin`'s break-glass account (`did:local:admin`)
+  is not on the roster and will never have a cache row. A gate across Django's
+  own login locks out the one door that is supposed to work when nothing else
+  does.
+- **`/manage/`** — gated on the roster, no database, precisely so it opens when
+  the cache is empty. It holds the reconcile button.
+
+`/` is gated by neither: it is where every refusal *lands*. Its
+signed-in-but-not-a-member state is the gate's user-facing form and the only
+place membership can be asked for, so `authorize` refuses to there rather than
+returning an OIDC `error=access_denied` to the relying party — a deliberate
+deviation, because the spec-shaped answer leaves the person inside Open WebUI
+reading a generic failure with nowhere to go.
+
+**A cache miss never reaches the registry.** The gate reads the cache and the
+roster and nothing else; reconciliation is an operator action and a scheduled
+job, never a step in somebody's login.
 
 ## The console — `/manage/`
 

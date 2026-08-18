@@ -538,7 +538,17 @@ class AccountMenuTests(NoRosterMixin, TestCase):
 
 
 class ApiViewTests(NoRosterMixin, TestCase):
-    """`/api/` — placeholder copy today, so only its wiring is worth asserting."""
+    """`/api/` — placeholder copy today, so only its wiring is worth asserting.
+
+    Member-gated, so these sign in as one. The gate's own behaviour on this page
+    — who is refused, and where they land — is `test_gate.ApiGateTests`.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+        _grant()
+        self.client.force_login(self.user)
 
     @override_settings(API_URL="https://api.example.com")
     def test_endpoint_is_shown_when_configured(self):

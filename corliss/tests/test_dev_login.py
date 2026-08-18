@@ -11,6 +11,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from corliss.apps import check_dev_login_requires_debug
+from corliss.models import MembershipCache
 from corliss.views import POST_LOGIN_REDIRECT
 
 User = get_user_model()
@@ -74,6 +75,17 @@ class DevLoginTests(TestCase):
         self.assertEqual(resp.status_code, 405)
 
     def test_resumes_a_pending_oidc_authorize(self):
+        # The resume is gated on membership exactly as `callback`'s is — one
+        # helper serves both — so a dev session has to be a member's to be
+        # handed onward. Refusal is `test_gate.LoginResumeGateTests`.
+        MembershipCache.objects.create(
+            did="did:dev:alice.bsky.social",
+            active=True,
+            tier="level-2",
+            last_rkey="did:dev:alice.bsky.social:3lqxaaaaaaaaa",
+            last_event_at="2026-01-01T00:00:00Z",
+            author_did="did:plc:anadmin",
+        )
         session = self.client.session
         session[POST_LOGIN_REDIRECT] = "/oidc/authorize?client_id=open-webui"
         session.save()

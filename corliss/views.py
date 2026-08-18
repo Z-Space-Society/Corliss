@@ -6,7 +6,8 @@ ATProto client (people):
 - `login`: handle form → resolve → discover → PAR → redirect to the PDS.
 - `callback`: validate `state` → DPoP-bound token exchange → upsert the member,
   store tokens server-side, establish the Django session.
-- `home`: the root page — an intro when signed out, your standing when in.
+- `home`: the root page — an intro when signed out, your standing when in. The
+  one page GATE never covers: it is where refused members land.
 - `api`: placeholder for direct API access; nothing on it is wired up yet.
 - `manage`: the cluster console — members, admins, and reconciliation. Gated on
   the atproto roster, not on any Django flag, so it survives a rebuild.
@@ -22,8 +23,9 @@ ATProto client (people):
 OIDC provider (machines):
 - `jwks`: published public keys.
 - `openid_configuration`: discovery document.
-- `authorize`: the RP sends the member here; if signed in we issue an auth code
-  and redirect back, otherwise we bounce through atproto login and resume.
+- `authorize`: the RP sends the member here; if signed in *and* a member we
+  issue an auth code and redirect back, otherwise we bounce through atproto
+  login and resume, or refuse. GATE's most important surface — see below.
 - `token`: the RP redeems the code (with its client secret) for an `id_token`.
 
 Registry (machines):
@@ -55,6 +57,70 @@ SESSION_PREFIX = "corliss:oauth:"
 
 # Key in the Django session for "where to resume after atproto login".
 POST_LOGIN_REDIRECT = "post_login_redirect"
+
+
+# --- GATE: is this person allowed in? --------------------------------------
+#
+# Signing in is not the same as being let in. Anyone with an atproto handle can
+# complete a login here; membership is granted by an admin through the registry
+# and answered by `membership.may_enter`. This is where that answer is enforced.
+#
+# Deliberately a helper each surface opts into, and **not middleware**.
+# Middleware covers every path by default, and two paths must never be covered:
+#
+# - **`/admin/login/`** is the break-glass door. `ensure_admin` creates a local
+#   admin (`did:local:admin`) that is not on the roster and will never have a
+#   cache row, so a gate across Django's own login locks out the one account
+#   that is supposed to work when atproto or OIDC is broken.
+# - **`/manage/`** is gated on `is_cluster_admin` — a live roster read, no
+#   database — precisely so it opens when the cache is empty. It holds the
+#   reconcile button that refills the cache; gating it on the cache would make
+#   recovery depend on the thing being recovered.
+#
+# Opting in keeps both of those true by construction, rather than by remembering
+# to write an exemption for them.
+
+
+def require_membership(request):
+    """GATE at an HTTP surface: None to proceed, or where to send them instead.
+
+    Refusal is a redirect to the home page rather than a 403, because that page
+    already holds the state this describes — "you're signed in, but not a member
+    yet", with the way to ask — and that state *is* the gate's user-facing form.
+    A bare 403 would say less and duplicate more.
+
+    Fails closed on an anonymous request. Callers bounce those through login
+    first, since they have a `next` worth preserving; answering "no" rather than
+    reaching for `AnonymousUser.did` means a surface that forgets to cannot fail
+    open.
+    """
+    user = request.user
+    if user.is_authenticated and membership.may_enter(user.did):
+        return None
+    return redirect("home")
+
+
+def _resume_after_login(request):
+    """Where to land once a login completes: back into the flow that sent us
+    here, or home.
+
+    **GATE applies to the resume, not to the login.** A non-member still gets
+    their session — they need one to apply, and the home page has a state for
+    them — but not a ride onward into the relying party they arrived from.
+    Resuming would hand them to `authorize`, which refuses them anyway; the only
+    difference is whether they read why on our page or watch Open WebUI render a
+    generic failure.
+
+    Only a safe same-site path is honoured (single leading slash, no scheme or
+    host), so a poisoned session value cannot become an open redirect.
+    """
+    next_url = request.session.pop(POST_LOGIN_REDIRECT, None)
+    if not next_url or not next_url.startswith("/") or next_url.startswith("//"):
+        return redirect("home")
+    denial = require_membership(request)
+    if denial is not None:
+        return denial
+    return redirect(next_url)
 
 
 # --- ATProto OAuth client endpoints ----------------------------------------
@@ -177,12 +243,9 @@ def callback(request):
     )
     user.touch_last_seen()
 
-    # Resume an in-progress OIDC authorize (the RP) if one bounced us here.
-    # Only honour a safe same-site path (single leading slash, no scheme/host).
-    next_url = request.session.pop(POST_LOGIN_REDIRECT, None)
-    if next_url and next_url.startswith("/") and not next_url.startswith("//"):
-        return redirect(next_url)
-    return redirect("home")
+    # Resume an in-progress OIDC authorize (the RP) if one bounced us here —
+    # subject to GATE, which is why this is not a bare redirect.
+    return _resume_after_login(request)
 
 
 @require_http_methods(["POST"])
@@ -224,12 +287,10 @@ def dev_login(request):
     )
     user.touch_last_seen()
 
-    # Resume an in-progress OIDC authorize, exactly as `callback` does, so the
-    # relying-party flow is testable end to end without atproto.
-    next_url = request.session.pop(POST_LOGIN_REDIRECT, None)
-    if next_url and next_url.startswith("/") and not next_url.startswith("//"):
-        return redirect(next_url)
-    return redirect("home")
+    # Resume an in-progress OIDC authorize, exactly as `callback` does — same
+    # helper, so the relying-party flow is testable end to end without atproto
+    # and a dev session meets the same gate a real one does.
+    return _resume_after_login(request)
 
 
 def home(request):
@@ -237,6 +298,17 @@ def home(request):
 
     Deliberately not `@login_required` — a signed-out visitor gets the intro
     here rather than being bounced to the login form.
+
+    **This page is where GATE surfaces, and never where it redirects.** The
+    signed-in-but-not-a-member state below is the gate's user-facing form: it is
+    the only place that explains a refusal and offers the way out, which is why
+    every gated surface refuses *to here*. Gating this page too would leave the
+    explanation with nowhere to live.
+
+    `is_member` is the grant, not GATE — a roster admin with no grant is not a
+    member, and saying otherwise here would advertise an entitlement the
+    registry never issued. See `membership.may_enter` for why those are two
+    questions.
 
     Membership is resolved here rather than in the template because it is a
     real lookup against the cache table. Admin is not: it hangs off the user as
@@ -256,7 +328,18 @@ def api(request):
 
     Nothing here is wired up yet. It exists so the nav entry, the endpoint, and
     the shape of the key flow are settled before any of it is built.
+
+    Gated now rather than when it grows teeth. This page becomes the member's
+    key surface, and a page that has been reachable by anyone for months is the
+    kind of thing a "create key" button gets added to without anyone rechecking
+    who could already see it.
     """
+    if not request.user.is_authenticated:
+        request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
+        return redirect("login")
+    denial = require_membership(request)
+    if denial is not None:
+        return denial
     return render(request, "api.html")
 
 
@@ -441,6 +524,22 @@ def authorize(request):
     if not request.user.is_authenticated:
         request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
         return redirect("login")
+
+    # GATE, and this is the surface that makes it mean anything. This endpoint
+    # is the handoff into Open WebUI and it is reached on *every* exchange, so
+    # it is the only place that can refuse a session established before the gate
+    # existed, or one whose owner has been revoked since they signed in. Gating
+    # login alone is a gate with a hole in it: the session is already minted and
+    # nothing on the way here asks again.
+    #
+    # A refused member is sent to our own home page rather than back to the RP
+    # with `error=access_denied`. The spec-shaped answer would be correct and
+    # useless — Open WebUI renders its own generic failure and the person is
+    # left in the chat app with no idea why and nowhere to go, while the page
+    # that explains it is one redirect away.
+    denial = require_membership(request)
+    if denial is not None:
+        return denial
 
     code = oidc.issue_code(
         request.user,

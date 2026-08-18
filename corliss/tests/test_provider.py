@@ -1,5 +1,6 @@
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 import jwt
@@ -9,16 +10,30 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from corliss import membership
 from corliss import signing
 from corliss import oidc
-from corliss.models import OidcAuthCode
+from corliss.models import MembershipCache, OidcAuthCode
 
 User = get_user_model()
 
 DID = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
+ADMIN_DID = "did:plc:hhyrsndukexwr6qucdngcf4r"
 CLIENT_ID = "open-webui"
 CLIENT_SECRET = "test-secret"
 REDIRECT_URI = "https://chat.example.test/oauth/oidc/callback"
+
+
+def _grant(did, *, tier="level-2"):
+    """A cache row as the registry's push would have left it."""
+    MembershipCache.objects.create(
+        did=did,
+        active=True,
+        tier=tier,
+        last_rkey=f"{did}:3lqxaaaaaaaaa",
+        last_event_at="2026-01-01T00:00:00Z",
+        author_did=ADMIN_DID,
+    )
 
 
 def _write_keys(d: Path):
@@ -68,6 +83,10 @@ class OidcProviderTests(TestCase):
         self.user = User.objects.create_user(
             username="alice.bsky.social", did=DID, pds_url="https://pds.example.com"
         )
+        # `authorize` is gated on membership (GATE). These tests are about the
+        # OIDC mechanics — codes, signatures, claims — so the member is a
+        # member; refusal is `test_gate`'s subject.
+        _grant(DID)
 
     def tearDown(self):
         self._ov.disable()
@@ -135,6 +154,43 @@ class OidcProviderTests(TestCase):
         )
         self.assertEqual(claims["email"], "alice@example.com")
         self.assertTrue(claims["email_verified"])
+
+    def test_id_token_for_an_admin_without_a_grant_carries_no_tier(self):
+        """The other half of GATE's split, and the reason it is safe.
+
+        A roster admin passes GATE with no cache row — that is what lets them
+        into a rebuilt cluster to run reconcile. They must not collect an
+        entitlement on the way through: admin is authority over membership, not
+        a grant of it, and inventing one here would hand out resources the
+        registry never issued.
+
+        No tier claim exists yet (Deploy Plan, What's next §4), so today this
+        asserts the absence of something absent. It is written now because the
+        claim will be derived from the member's cache row, and the tempting
+        shortcut when it lands — reuse the answer GATE already computed — is
+        exactly this bug.
+        """
+        admin = User.objects.create_user(
+            username="admin.bsky.social", did=ADMIN_DID
+        )
+        with patch(
+            "corliss.membership.is_cluster_admin", return_value=True
+        ):
+            self.assertTrue(membership.may_enter(ADMIN_DID))
+            self.assertIsNone(membership.membership_for(admin))
+
+            token = oidc.mint_id_token(admin, client_id=CLIENT_ID)
+
+        rsa_jwk = next(k for k in signing.jwks()["keys"] if k["kty"] == "RSA")
+        claims = jwt.decode(
+            token,
+            key=jwt.PyJWK.from_dict(rsa_jwk).key,
+            algorithms=["RS256"],
+            audience=CLIENT_ID,
+        )
+        self.assertEqual(claims["sub"], ADMIN_DID)
+        for entitlement in ("groups", "tier", "tiers"):
+            self.assertNotIn(entitlement, claims)
 
     def test_id_token_header_advertises_kid(self):
         token = oidc.mint_id_token(self.user, client_id=CLIENT_ID)
