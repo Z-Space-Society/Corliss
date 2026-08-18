@@ -399,6 +399,12 @@ are read live from the registry's public roster record (nothing to go stale). A
 roster that cannot be read renders as a failure, not an empty table — "could not
 find out" and "there are no admins" are different facts.
 
+`MembershipCache` is also visible in the Django admin, **read-only** — no add,
+no change, no delete, not even for a superuser. The table is a cached
+computation over the registry's events, so an edit there is either reverted by
+the next push or, until then, a membership no record backs. Removing an orphan
+stays a deliberate act, taken with the console's orphan report in hand.
+
 The admin table lists only the terms in force **now**, one row per DID. Departed
 terms are not shown and not lost: they stay in the record, where
 `Roster.was_admin_at` reads them when a past grant's authority is being judged.
