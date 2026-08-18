@@ -29,7 +29,7 @@ only by being genuinely standalone.
 | `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `MembershipCache`. |
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
 | `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting. |
-| `corliss/membership.py` | Consuming the registry's membership push; resolving whether a DID is currently a member. |
+| `corliss/membership.py` | Consuming the registry's membership push; reconciling the cache against the registry; resolving whether a DID is currently a member. |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
 | `corliss/signing.py` | Loads the signing keys, builds the JWKS. |
@@ -250,6 +250,7 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | JWKS | `/.well-known/jwks.json` |
 | OIDC authorize / token | `/oidc/authorize`, `/oidc/token` |
 | Membership push (from the registry) | `/membership/events` |
+| Console — members, admins, reconcile (cluster admins) | `/manage/` |
 | Django admin | `/admin/` |
 
 Discovery and JWKS sit at the root deliberately: an OIDC issuer of
@@ -304,6 +305,93 @@ bin/push-grant did:plc:abc… level-2         # grant, or change tier
 bin/push-grant --revoke did:plc:abc…        # revoke
 bin/push-grant --replay did:plc:abc… <rkey> # prove a stale event is a no-op
 ```
+
+### Reconciliation — rebuilding the cache from the registry
+
+The push keeps the cache *fresh*. It cannot *build* it: a Corliss rebuilt from
+scratch has witnessed nothing, and the events it missed already happened, so
+nothing will send them again. `membership.reconcile(events, roster)` is the
+other direction — read every grant and revocation from the registry space and
+re-derive the cache from them. It is what makes an empty database recoverable,
+and therefore a prerequisite for ever gating access on the cache.
+
+It is keyed by DID with no foreign key to `User`, so **a reconcile run needs no
+login and no user rows at all** — it can repopulate membership on a database
+nobody has ever signed in to.
+
+Two ways to run it, one code path — `MembershipRegistry.reconcile` — so a click
+and a scheduled run can never mean different things:
+
+```bash
+manage.py reconcile_membership --dry-run   # report only, writes nothing
+manage.py reconcile_membership             # apply; non-zero exit if incomplete
+```
+
+…or the **Reconcile memberships** button on `/manage/`. The command exits
+non-zero on an incomplete report on purpose: a scheduled run that logged success
+over a half-empty cache would be worse than not running at all.
+
+- **The events must come from the registry space** — an `atproto.spaces.query`,
+  never the firehose index and never a repo read. The grant lexicon is
+  published, so anyone can write a `membership.grant` into their own PDS and
+  have it indexed; what makes a grant real is being *in the space*.
+- **Authority is asked at the event's timestamp**, via `Roster.was_admin_at`.
+  Removing an admin ends their authority going forward and does not un-write
+  what they already approved — asking "is this DID an admin now" would silently
+  de-member everyone a departed admin ever let in.
+- **Only the winning event is parsed.** Events are resolved latest-per-DID by
+  the rkey's TID first, because historically-shaped records are permanent in an
+  append-only log and replaying all of them would fail on records that can never
+  be removed.
+- **`unresolved` and `orphans` are blockers, not warnings.** An unresolved DID
+  is a member missing from the cache. An orphan is a cache row with no
+  admin-authored event behind it — precisely what a leaked push token leaves.
+  Orphans are reported, never pruned here.
+- `dry_run=True` reports what a run would do without writing anything.
+
+**How it reads the space.** `MembershipRegistry` calls `syncMembers`, a
+read-only registry endpoint authenticated by a shared token
+(`MEMBERSHIP_REGISTRY_TOKEN`) rather than by a signed-in admin — because the run
+that matters most happens at boot with nobody present. It is deliberately a
+*different door* from the admin-authenticated `listMembers` the console uses, so
+the two credentials rotate independently and widening one cannot widen the
+other. `MEMBERSHIP_REGISTRY_URL` or `MEMBERSHIP_REGISTRY_TOKEN` blank disables
+reconciliation with a visible reason rather than a traceback.
+
+`MEMBERSHIP_REGISTRY_CLIENT_KEY` is **optional** — sent when set, omitted when
+not. Verified against production: HappyView dispatches to a Lua script with no
+session and no client key at all, so the key adds nothing the token does not
+already carry. Requiring it would tie reconciliation to the *console's*
+origin-bound key having been configured, and the recovery path must not depend on
+the console it replaces.
+
+The registry returns `{rkey, authorDid, record}` with no `did` and no `event`.
+Both are recovered without guessing — `event` is which array the entry arrived
+in, `did` is `did_of(rkey)` — which is what lets the push and the read share one
+parser instead of drifting into two shapes for one lexicon.
+
+Not built yet: the systemd timer and the run at boot. Those land once a real run
+against production has reported clean.
+
+## The console — `/manage/`
+
+Members, admins, and reconciliation, for cluster admins. Gated on
+`is_cluster_admin` — a live roster read — and **never on `is_superuser`**. That
+is what keeps it reachable on a cluster rebuilt from nothing: the roster needs no
+database and no cache, so an admin can arrive with `MembershipCache` empty and
+every member locked out, and press the button that fills it. The recovery action
+sits behind the one door that does not depend on the thing being recovered.
+
+The two tables come from different places, and the difference is the point:
+members are Corliss's own cache (can be stale, incomplete, or orphaned); admins
+are read live from the registry's public roster record (nothing to go stale). A
+roster that cannot be read renders as a failure, not an empty table — "could not
+find out" and "there are no admins" are different facts.
+
+This page supersedes the separate SPA admin console. The write surface (approve,
+revoke, set tier, roster edits) still lives there and moves here next; those are
+*writes* to the registry space and must keep requiring a current-admin caller, so
+`MEMBERSHIP_REGISTRY_TOKEN` must never gain write scope.
 
 ## Wiring up a relying party (Open WebUI shown)
 
