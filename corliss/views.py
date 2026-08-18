@@ -439,8 +439,22 @@ def manage(request):
 
 
 def logout(request):
-    """End this device's Corliss session. GET-friendly (no CSRF risk beyond
-    forcing a re-login) since it's meant to be hit directly for now."""
+    """End this member's Corliss session, and the relying parties' sessions too.
+
+    GET-friendly (no CSRF risk beyond forcing a re-login) since it's meant to
+    be hit directly for now.
+
+    The back-channel notification goes out *before* `auth_logout`, because that
+    call is what makes `request.user` anonymous — afterwards there is no member
+    left to look up. It cannot fail this view: `notify_logout` swallows its own
+    errors, so an unreachable relying party costs a log line, not a sign-out.
+
+    This ends the member's session at the relying party on **every** device,
+    not just this browser — see `OidcSession` for why that is what the RP will
+    do with the token regardless of how finely Corliss tracks sessions.
+    """
+    if request.user.is_authenticated:
+        oidc.notify_logout(request.user)
     auth_logout(request)
     return redirect("login")
 
@@ -654,7 +668,15 @@ def token(request):
     if not claimed:
         return _error("invalid_grant", "code already used")
 
-    id_token = oidc.mint_id_token(code.user, client_id=cid, nonce=code.nonce)
+    # Record the session BEFORE minting, so the id_token can carry the `sid`
+    # that a later logout_token will name. Redemption — not `authorize` — is
+    # where this belongs: a code can expire unredeemed, and the RP has no
+    # session until it trades one in. This row is how logout and revocation
+    # know there is anybody to tell (see corliss.oidc.notify_logout).
+    session = oidc.record_session(code.user, client_id=cid)
+    id_token = oidc.mint_id_token(
+        code.user, client_id=cid, nonce=code.nonce, sid=session.sid
+    )
     return JsonResponse(
         {
             "access_token": id_token,  # we don't issue a separate RP access token

@@ -1,10 +1,11 @@
 """Corliss's data model — deliberately small, all in one module.
 
-Four models: the DID-keyed `User` everything references, the server-side
-atproto token store, the OIDC provider's short-lived auth codes, and the
-membership cache. The import contract is `from corliss.models import ...`; if
-this file ever grows unwieldy it can become a `models/` package re-exporting
-the same names without touching callers or the database.
+Five models: the DID-keyed `User` everything references, the server-side
+atproto token store, the OIDC provider's short-lived auth codes, the record of
+which relying parties hold a session, and the membership cache. The import
+contract is `from corliss.models import ...`; if this file ever grows unwieldy
+it can become a `models/` package re-exporting the same names without touching
+callers or the database.
 """
 
 from django.conf import settings
@@ -162,6 +163,67 @@ class OidcAuthCode(models.Model):
 
     def __str__(self):
         return f"OidcAuthCode({self.user}, used={self.used})"
+
+
+class OidcSession(models.Model):
+    """A relying party is holding a session for this member.
+
+    Corliss needs this for exactly one reason: **back-channel logout has to
+    know who to tell.** Until now the provider stored a short-lived
+    `OidcAuthCode` and nothing else, so once an `id_token` was handed over
+    Corliss had no record that anyone was signed in anywhere. Ending a session
+    it cannot name is impossible, so ending one required waiting for the
+    relying party's own token to expire — which is the whole gap this model
+    exists to close (see `corliss.oidc.notify_logout`).
+
+    **One row per (member, relying party) — not per login, and not per
+    device.** The tempting shape is a row per exchange, mirroring how the RP
+    might hold several browser sessions. It would buy nothing here: Open WebUI
+    revokes per *user* (it writes `…:auth:user:{id}:revoked_at` and rejects
+    every token issued at or before that instant), and its own back-channel
+    handler says sid-based lookup is unsupported. So a per-device row could not
+    be acted on with any more precision than this one, while growing without
+    bound as members sign in over and over. This shape caps the table at
+    members × relying parties and makes "who do I notify" a single lookup.
+
+    The consequence, stated rather than discovered: **logout is all-devices.**
+    Signing out of Corliss in one browser ends the member's chat session
+    everywhere. That is the honest reading of what the RP will actually do with
+    the token, not a limitation this model imposes on it.
+
+    `sid` is minted anyway and rotates on each exchange. Nothing consumes it
+    today — it goes into the `id_token` and the `logout_token` because the OIDC
+    spec expects a session identifier there, and an RP that *does* implement
+    sid-scoped logout should not need Corliss to change to be told about it.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="oidc_sessions",
+    )
+    client_id = models.CharField(max_length=255)
+
+    # Opaque per-exchange identifier, echoed in the id_token and logout_token.
+    sid = models.CharField(max_length=128)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Stamped on every token redemption, so a stale row is visible as stale.
+    last_authorized_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        # The (member, RP) pairing IS the identity of the row — see the
+        # one-row-per-pair reasoning above. The constraint is what makes
+        # `update_or_create` in `oidc.record_session` the whole write path.
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "client_id"],
+                name="unique_oidc_session_per_client",
+            )
+        ]
+
+    def __str__(self):
+        return f"OidcSession({self.user}, {self.client_id})"
 
 
 class MembershipCache(models.Model):

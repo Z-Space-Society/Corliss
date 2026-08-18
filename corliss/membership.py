@@ -53,7 +53,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 
-from corliss import atproto
+from corliss import atproto, oidc
 from corliss.models import MembershipCache, User
 
 GRANT = "grant"
@@ -211,6 +211,11 @@ def apply_event(parsed):
     already stored. Duplicates and out-of-order retries are normal for a
     best-effort push, and the Lua treats any non-2xx as a failure worth
     logging, so a replay must not look like one.
+
+    **This is also where revocation reaches the relying parties.** Both routes
+    into the cache come through here — the registry's push, and `reconcile`'s
+    pass 2 — so putting the notification here rather than in the two callers is
+    what makes "revoked" mean "signed out of chat" no matter which one noticed.
     """
     row = MembershipCache.objects.select_for_update().filter(
         did=parsed["did"]
@@ -220,6 +225,21 @@ def apply_event(parsed):
         return False
 
     is_grant = parsed["event"] == GRANT
+
+    # Only a LIVE membership ending is worth telling anyone about: there was a
+    # row, it said active, and this event ends it. The two cases this
+    # deliberately excludes both look like revocations and are not:
+    #
+    # - **A revoke landing on no row at all.** That is what reconcile does on a
+    #   rebuilt cluster — it replays every DID's winning event into an empty
+    #   cache, and for anyone revoked in the past that winner is a revocation.
+    #   Notifying there would fire a burst of POSTs at a relying party on the
+    #   one path that has to work when little else does, to end sessions that
+    #   ended long ago. The recovery path stays quiet.
+    # - **A revoke landing on an already-revoked row.** A newer revocation of
+    #   someone already revoked ends nothing.
+    ends_live_membership = not is_grant and row is not None and row.active
+
     MembershipCache.objects.update_or_create(
         did=parsed["did"],
         defaults={
@@ -232,6 +252,16 @@ def apply_event(parsed):
             "author_did": parsed["author_did"],
         },
     )
+
+    if ends_live_membership:
+        # on_commit, not inline: this function is atomic, and an outbound HTTP
+        # call has no business running inside an open transaction — it would
+        # hold row locks across a network round trip, and it would fire for a
+        # write that then rolled back. This way the notification happens only
+        # if the revocation is actually durable.
+        did = parsed["did"]
+        transaction.on_commit(lambda: oidc.notify_logout_for_did(did))
+
     return True
 
 
@@ -682,6 +712,12 @@ def _would_change(parsed):
     Mirrors the guard in `apply_event` rather than sharing it: that one runs
     inside `select_for_update`, and a dry run has no business locking rows it
     has already promised not to touch. Keep the two comparisons identical.
+
+    Routing dry runs through here rather than `apply_event` also keeps them
+    silent on the wire: `apply_event` is what notifies relying parties of a
+    revocation, so a preview that reached it would sign people out of chat to
+    show an operator what a run *would* do. Correct by construction today —
+    stated so it survives someone tidying the two paths back together.
     """
     row = MembershipCache.objects.filter(did=parsed["did"]).first()
     return row is None or tid_of(row.last_rkey) < parsed["tid"]

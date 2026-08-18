@@ -74,6 +74,32 @@ OIDC_CLIENT_ID = env("OIDC_CLIENT_ID", default="open-webui")
 OIDC_CLIENT_SECRET = env("OIDC_CLIENT_SECRET", default="")
 OIDC_REDIRECT_URIS = env.list("OIDC_REDIRECT_URIS", default=[])
 
+# Where to POST a `logout_token` when a member signs out or is revoked — the
+# relying party's OIDC back-channel logout endpoint. This is what turns a
+# revocation from "within the RP's token lifetime" into "seconds"; without it
+# Corliss enforces membership at /oidc/authorize and is then never consulted
+# again until the RP's own session expires. See `corliss.oidc.notify_logout`.
+#
+# Blank disables notification outright, and blank is a working configuration:
+# the gate still holds, revocation is simply bounded by the RP's token lifetime
+# the way it was before this existed. Same posture as MEMBERSHIP_PUSH_TOKEN —
+# an unconfigured integration is inert and visible, never a traceback on
+# somebody's sign-out.
+#
+# Point this at the RP's **internal** address, not its public origin. Same
+# reasoning as MEMBERSHIP_REGISTRY_URL: this is a service-to-service call
+# between two CTs on one bridge, not an href a browser follows, so it has no
+# business routing out through public DNS and back in through the edge.
+#
+# The asymmetry is worth knowing before debugging it, because it is not
+# symmetrical and cannot be made so: the RP validates what we send by fetching
+# our discovery document and then the `jwks_uri` inside it, both of which are
+# our PUBLIC origin (the issuer must be the public one, or the token's `iss`
+# will not match what the RP has configured). So delivery still depends on the
+# edge and public DNS being healthy on the return leg. That is one of the two
+# reasons the RP's own token lifetime must stay short even with this wired up.
+OIDC_BACKCHANNEL_LOGOUT_URI = env("OIDC_BACKCHANNEL_LOGOUT_URI", default="")
+
 # --- UI ---------------------------------------------------------------------
 # Public origin of the cluster's chat app (Open WebUI). Blank hides the nav's
 # "Chat" link entirely — e.g. local dev with no Open WebUI configured.

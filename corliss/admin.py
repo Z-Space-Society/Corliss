@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.db.models import OuterRef, Subquery
 
-from corliss.models import MembershipCache, User
+from corliss.models import MembershipCache, OidcSession, User
 
 
 @admin.register(User)
@@ -79,4 +79,38 @@ class MembershipCacheAdmin(admin.ModelAdmin):
         return False
 
     def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(OidcSession)
+class OidcSessionAdmin(admin.ModelAdmin):
+    """Which relying parties Corliss believes are holding a session.
+
+    Worth a page because of what a *lingering* row means. A row is deleted the
+    moment its relying party accepts a logout token, so anything still here
+    after a sign-out or a revocation is a session Corliss tried and failed to
+    end — the RP was unreachable, or it rejected the token. That is the state
+    an operator wants to find when "revoking someone didn't kick them out of
+    chat" gets reported.
+
+    Read-only like `MembershipCache`, but **delete is allowed**, and the
+    difference is real rather than an inconsistency. Deleting a cache row would
+    discard a membership fact the registry owns. Deleting one of these discards
+    only Corliss's belief that somebody is signed in somewhere — which goes
+    stale on its own (a rebuilt relying party has no such session), and whose
+    only cost is a pointless POST on every future logout. Note it forgets the
+    problem rather than fixing it: the session, if it really is live, then runs
+    to the relying party's own token expiry.
+    """
+
+    list_display = ("user", "client_id", "created_at", "last_authorized_at")
+    list_filter = ("client_id",)
+    search_fields = ("user__did", "user__username", "sid")
+    ordering = ("-last_authorized_at",)
+    readonly_fields = ("user", "client_id", "sid", "created_at", "last_authorized_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
         return False

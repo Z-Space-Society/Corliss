@@ -20,15 +20,15 @@ that pushes grants and revocations to it. See
 
 ## Layout
 
-Corliss is a **single Django app**. Four models, one URL table; the protocol
+Corliss is a **single Django app**. Five models, one URL table; the protocol
 halves are plain modules, not sub-apps. A future subsystem earns its own app
 only by being genuinely standalone.
 
 | Module | Responsibility |
 | ------ | -------------- |
-| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `MembershipCache`. |
+| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `OidcSession`, `MembershipCache`. |
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
-| `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting. |
+| `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
 | `corliss/membership.py` | Consuming the registry's membership push; reconciling the cache against the registry; resolving whether a DID is currently a member. |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
@@ -440,25 +440,59 @@ reading a generic failure with nowhere to go.
 roster and nothing else; reconciliation is an operator action and a scheduled
 job, never a step in somebody's login.
 
-**Where the gate stops: the relying party's own session.** "Reached on every
+**Where the gate stopped, and how far past it now reaches.** "Reached on every
 exchange" means every *OIDC* exchange — and a relying party performs one only
 when it has no valid session of its own. Open WebUI mints its own JWT after the
 handoff and authenticates from that, so Corliss is not asked again until it
-expires. Two things follow, and neither is fixable from this side alone:
+expires. That left two holes GATE could not reach from its own side: revoking a
+member did not end their chat session, and signing out of Corliss did not sign
+them out of chat.
 
-- **Revoking a member does not end their chat session.** They keep it for the
-  remainder of the relying party's token lifetime. On this cluster that is
-  bounded by `JWT_EXPIRES_IN` (4h), not by anything Corliss does.
-- **Signing out of Corliss does not sign you out of the relying party.** There
-  is no `end_session_endpoint` here and no back-channel logout, so nothing tells
-  it the session ended. The converse was already true and is noted on
-  `views.logout`.
+**Back-channel logout closes both** — see below. What it does *not* do is make
+the gate self-sufficient, and the distinction is the thing to hold onto: it is a
+message Corliss sends, so it works exactly as well as the delivery does. The
+relying party's own token lifetime is still the bound that holds when the
+message doesn't arrive, and it is deliberately kept short (4h on this cluster)
+rather than relaxed now that this exists.
 
-The fix is OIDC back-channel logout — Corliss POSTing a signed `logout_token` to
-each relying party on logout and on revocation — which needs a record of issued
-sessions here and a revocation store there. Not built. Until it is, the relying
-party's token lifetime *is* the revocation window, and it should be set short
-enough to say so out loud.
+### Back-channel logout — ending a session, not waiting it out
+
+`corliss.oidc` mints a `logout_token` (RS256, the same key and the same JWKS as
+the `id_token`, so an RP that can validate one validates the other with no extra
+configuration) and POSTs it to the relying party's back-channel endpoint. Three
+things trigger it:
+
+| Trigger | What it fixes |
+| ------- | ------------- |
+| `views.logout` | signing out of Corliss now ends the chat session too |
+| a revoke reaching `membership.apply_event` | **the point of the whole thing** — revocation goes from "within the RP's token lifetime" to seconds |
+| `reconcile` deactivating someone | free, because reconcile's pass 2 applies events through `apply_event` — one trigger, both routes into the cache |
+
+**Corliss had to learn that anyone was signed in at all.** It stored a
+short-lived `OidcAuthCode` and nothing else, so there was no record of who to
+notify. `OidcSession` is that record: one row per (member, relying party),
+written at token *redemption* — not at `authorize`, because a code can expire
+unredeemed and the RP has no session until it trades one in.
+
+Four properties worth stating, because each has a plausible wrong answer:
+
+- **A notification never fails its caller.** Every trigger is something that
+  already happened and cannot be undone — a member signed out, the registry
+  recorded a revocation. Failing the sign-out because a chat server was
+  unreachable would break a working thing to report a broken one.
+- **Only a *live* membership ending notifies.** A revoke landing on a DID with
+  no active row revokes nothing. That is not a corner case: it is what reconcile
+  does on a rebuilt cluster, replaying every winning event into an empty cache,
+  where past revocations are many people's winner. The recovery path stays
+  quiet.
+- **A dry run notifies nobody**, because `reconcile --dry-run` goes through
+  `_would_change` rather than `apply_event`. A preview must not sign anyone out
+  to show an operator what a run would do.
+- **The return leg is not internal, and cannot be made so.** Corliss POSTs to
+  the RP's internal address, but the RP validates what it receives by fetching
+  our discovery document and the `jwks_uri` inside it — both the *public*
+  origin, because the issuer must be the public one or `iss` won't match. So
+  delivery still depends on the edge. One more reason the short expiry stays.
 
 ## The console — `/manage/`
 
@@ -505,17 +539,36 @@ OPENID_PROVIDER_URL=https://<PUBLIC_BASE_URL>/.well-known/openid-configuration
 OAUTH_SCOPES=openid email profile
 OAUTH_USERNAME_CLAIM=handle                      # we emit `handle` (= the atproto handle)
 OAUTH_EMAIL_CLAIM=email                          # present when the member's PDS supplied one
+ENABLE_OAUTH_BACKCHANNEL_LOGOUT=true             # exposes POST /oauth/backchannel-logout
+REDIS_URL=redis://…                              # required, or the RP cannot revoke its own JWTs
 ```
 
 Register the RP's redirect URI in Corliss's `OIDC_REDIRECT_URIS`
-(e.g. `https://chat.example.com/oauth/oidc/callback`).
+(e.g. `https://chat.example.com/oauth/oidc/callback`), and its back-channel
+logout endpoint in `OIDC_BACKCHANNEL_LOGOUT_URI` — its *internal* address, since
+that call is service-to-service and has no business routing out through public
+DNS and back in through the edge.
+
+**Redis is not optional on the RP side, and not merely for logout.** Open WebUI
+can drop stored OAuth sessions without it, but revoking an already-issued JWT is
+what makes a logout token mean anything, and that needs the revocation store. Be
+deliberate about it: once `REDIS_URL` is set, Open WebUI consults Redis on
+*every* authenticated request, so Redis being unreachable takes chat down rather
+than degrading it. See zai-ops' `docs/roles/redis.md` for the full shape of that
+trade.
 
 **`id_token` claims:** `sub` = DID, `handle` (also `preferred_username`),
-`iss`/`aud`/`exp`/`iat`/`nonce`, plus `email` + `email_verified` when the
-member's PDS supplied one. Email is best-effort — sourced at login via the
-`transition:email` scope and `com.atproto.server.getSession` — so a member who
-declines the scope simply gets no `email` claim. DID is the only stable
-identifier; never key on handle or email.
+`iss`/`aud`/`exp`/`iat`/`nonce`, `sid` (the `OidcSession` a later `logout_token`
+will name), plus `email` + `email_verified` when the member's PDS supplied one.
+Email is best-effort — sourced at login via the `transition:email` scope and
+`com.atproto.server.getSession` — so a member who declines the scope simply gets
+no `email` claim. DID is the only stable identifier; never key on handle or
+email.
+
+**`logout_token` claims:** `iss`/`aud`/`sub`/`iat`/`jti`/`sid`, plus the
+`events` claim naming `http://schemas.openid.net/event/backchannel-logout`. No
+`nonce` — the spec forbids one and relying parties reject a token that carries
+it.
 
 ## Deployment
 
