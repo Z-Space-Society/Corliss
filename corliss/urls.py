@@ -51,6 +51,8 @@ urlpatterns = [
     # The cluster console. Gated on the atproto admin roster, not on a Django
     # flag — see `views.manage`.
     path("manage/", views.manage, name="manage"),
+    # The stack, for cluster admins. A stub today — see `views.systems`.
+    path("systems/", views.systems, name="systems"),
     path("", views.home, name="home"),
 ]
 

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% comment %}
+The stack, for cluster admins.
+
+A stub. It says what this cluster is made of and admits it does not yet know
+whether most of it is running — see `views.STACK` for why "unknown" is rendered
+rather than a guess. The grouping is zai-ops' own CTID tiering: core infra is
+the data foundations, platform is what other services consume, applications are
+what members use.
+{% endcomment %}
+
+{% block title %}Systems — ZAI{% endblock %}
+
+{% block content %}
+<div class="account-view console-view">
+  <h1>Systems</h1>
+
+  <p class="page-text">What this cluster runs, grouped the way it is built:
+  storage and databases at the bottom, the services that sit on them, then what
+  members actually use.</p>
+
+  <p class="alert alert--notice" role="status">
+    <strong>Health checks aren't wired up yet.</strong> Everything below reads
+    <em>unknown</em> except the two this page can answer for free — Corliss is
+    serving it, and PostgreSQL answered the query behind it.
+  </p>
+
+  {% for group in groups %}
+    <h2 class="section-title">{{ group.name }}</h2>
+    <div class="card">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Service</th>
+              <th>What it does</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for service in group.services %}
+              <tr>
+                <td>{{ service.name }}</td>
+                <td class="data-table__muted">{{ service.purpose }}</td>
+                <td>
+                  <span class="status">
+                    <span class="status__dot status__dot--{{ service.state }}"></span>
+                    {% if service.state == "up" %}Up{% else %}Unknown{% endif %}
+                  </span>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endfor %}
+</div>
+{% endblock %}

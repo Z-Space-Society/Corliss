@@ -62,15 +62,26 @@
               {% if user.is_cluster_admin and MANAGE_URL %}
                 <a class="nav__dropdown-item" href="{{ MANAGE_URL }}">Manage Console</a>
               {% endif %}
+              {% if user.is_cluster_admin %}
+                <a class="nav__dropdown-item" href="{% url 'systems' %}">Systems</a>
+              {% endif %}
+              {% comment %}
+              The three service consoles below are OTHER systems' admin UIs, not
+              Corliss surfaces. Each authenticates on its own terms — LiteLLM
+              with the proxy's master key, HappyView and Proxmox with their own
+              accounts — none of which this app holds or sends anywhere. So they
+              open a login, not a session: they are offered to cluster admins
+              because that is who would hold those credentials, not because
+              clicking one grants anything.
+              {% endcomment %}
               {% if user.is_cluster_admin and API_ADMIN_URL %}
-                {% comment %}
-                LiteLLM's own admin UI, on the API origin. It authenticates
-                separately — with the proxy's master key, which this app does
-                not hold and never sends anywhere — so this link opens a login,
-                not a session. Offered to cluster admins because they are who
-                would have that key, not because clicking it grants anything.
-                {% endcomment %}
-                <a class="nav__dropdown-item" href="{{ API_ADMIN_URL }}">API admin</a>
+                <a class="nav__dropdown-item" href="{{ API_ADMIN_URL }}">LiteLLM Admin</a>
+              {% endif %}
+              {% if user.is_cluster_admin and HAPPYVIEW_URL %}
+                <a class="nav__dropdown-item" href="{{ HAPPYVIEW_URL }}">HappyView Admin</a>
+              {% endif %}
+              {% if user.is_cluster_admin and PROXMOX_URL %}
+                <a class="nav__dropdown-item" href="{{ PROXMOX_URL }}">Proxmox Admin</a>
               {% endif %}
               {% if user.is_superuser %}
                 <a class="nav__dropdown-item" href="{% url 'admin:index' %}">Django admin</a>

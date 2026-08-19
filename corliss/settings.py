@@ -119,6 +119,25 @@ API_URL = env("API_URL", default="")
 # the console is deployed separately, so a Corliss without one is a real state.
 MANAGE_URL = env("MANAGE_URL", default="")
 
+# Public origin of HappyView, the membership registry (view.<domain>). Linked
+# from the nav's Manage menu for cluster admins. Blank hides the link.
+#
+# Not the same value as MEMBERSHIP_REGISTRY_URL, and deliberately so: that one
+# is the internal address Corliss *calls*, this one is an href a browser
+# follows. Same service, two addresses, and pointing either at the other breaks
+# something quietly.
+HAPPYVIEW_URL = env("HAPPYVIEW_URL", default="")
+
+# Origin of the Proxmox host's own web UI, linked from the Manage menu for
+# cluster admins. Blank hides the link.
+#
+# Free-form rather than derived from anything here, because unlike every other
+# origin above there is nothing to derive it from: the Proxmox UI runs on the
+# host, not a container behind the edge, so it has no subdomain of ours. On the
+# cluster it is the host's LAN address on :8006 — which means a self-signed
+# cert warning, and no reachability from outside the LAN.
+PROXMOX_URL = env("PROXMOX_URL", default="")
+
 # --- LiteLLM (the cluster's API service) ------------------------------------
 # Corliss provisions members into LiteLLM and issues them API keys from /api/.
 # URL or PROVISIONER_KEY blank leaves that page explaining itself with a

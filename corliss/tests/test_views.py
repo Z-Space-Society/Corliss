@@ -227,12 +227,12 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.assertNotContains(resp, "Manage Console")
 
     @override_settings(API_URL="https://api.example.com")
-    def test_cluster_admin_sees_the_api_admin_link(self):
+    def test_cluster_admin_sees_the_litellm_admin_link(self):
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
         self.assertContains(resp, "https://api.example.com/ui/")
-        self.assertContains(resp, "API admin")
+        self.assertContains(resp, "LiteLLM Admin")
 
     @override_settings(API_URL="https://api.example.com/")
     def test_a_trailing_slash_on_api_url_does_not_double_up(self):
@@ -244,21 +244,104 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.assertNotContains(resp, "com//ui/")
 
     @override_settings(API_URL="https://api.example.com")
-    def test_a_plain_member_never_sees_the_api_admin_link(self):
+    def test_a_plain_member_never_sees_the_litellm_admin_link(self):
         # The proxy's admin UI is not a member surface, and the /api/ page they
         # do get is a different thing entirely.
         _grant()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertNotContains(resp, "API admin")
+        self.assertNotContains(resp, "LiteLLM Admin")
 
     @override_settings(API_URL="")
     def test_no_api_url_drops_the_link_rather_than_pointing_at_slash_ui(self):
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertNotContains(resp, "API admin")
+        self.assertNotContains(resp, "LiteLLM Admin")
         self.assertNotContains(resp, '"/ui/"')
+
+    @override_settings(HAPPYVIEW_URL="https://view.example.com")
+    def test_cluster_admin_sees_the_happyview_link(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, "https://view.example.com")
+        self.assertContains(resp, "HappyView Admin")
+
+    @override_settings(PROXMOX_URL="https://pve.example.lan:8006")
+    def test_cluster_admin_sees_the_proxmox_link_when_there_is_one(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, "Proxmox Admin")
+
+    @override_settings(PROXMOX_URL="", HAPPYVIEW_URL="")
+    def test_unconfigured_service_consoles_are_absent_not_empty_hrefs(self):
+        # Proxmox is blank on the cluster today — the host is LAN-only and not a
+        # Caddy route — so this is the live case, not a hypothetical one.
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, "Proxmox Admin")
+        self.assertNotContains(resp, "HappyView Admin")
+
+    def test_cluster_admin_sees_systems(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, reverse("systems"))
+
+    def test_a_plain_member_sees_no_systems_link(self):
+        _grant()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, reverse("systems"))
+
+
+class SystemsViewTests(NoRosterMixin, TestCase):
+    """`/systems/` — the stack, for cluster admins.
+
+    A stub, so what is worth asserting is the gate and the honesty of the
+    status column: it must not claim anything is up that nobody checked.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+
+    def _as_cluster_admin(self):
+        patcher = patch("corliss.membership.is_cluster_admin", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_cluster_admin_sees_the_whole_stack(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("systems"))
+        self.assertEqual(resp.status_code, 200)
+        for service in ("Garage", "PostgreSQL", "Redis", "Caddy",
+                        "HappyView", "LiteLLM", "Corliss", "Open WebUI"):
+            self.assertContains(resp, service)
+
+    def test_unchecked_services_say_unknown_rather_than_up(self):
+        # The whole point of the stub. A page that guessed would be worse than
+        # one that admits it has not looked.
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("systems"))
+        self.assertContains(resp, "Unknown")
+        self.assertContains(resp, "wired up yet")
+
+    def test_a_non_admin_gets_404_not_403(self):
+        # A non-admin has no business learning the page exists — same posture
+        # as /manage/.
+        _grant()
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(reverse("systems")).status_code, 404)
+
+    def test_an_anonymous_visitor_is_bounced_through_login(self):
+        resp = self.client.get(reverse("systems"))
+        self.assertRedirects(resp, reverse("login"))
 
 
 class ManageViewTests(NoRosterMixin, TestCase):
@@ -449,7 +532,7 @@ class ManageViewTests(NoRosterMixin, TestCase):
             ) as run:
                 resp = self.client.post(reverse("manage"))
 
-        run.assert_called_once_with(dry_run=False)
+        run.assert_called_once_with()
         self.assertContains(resp, "Complete")
 
     @override_settings(
@@ -457,7 +540,15 @@ class ManageViewTests(NoRosterMixin, TestCase):
         MEMBERSHIP_REGISTRY_CLIENT_KEY="hvc_key",
         MEMBERSHIP_REGISTRY_TOKEN="token",
     )
-    def test_preview_asks_for_a_dry_run(self):
+    def test_the_console_never_previews(self):
+        """The Preview button is gone, and a stray `dry_run` must not revive it.
+
+        It sat beside the real action and mostly invited clicking the wrong one.
+        Previewing still exists where it is asked for deliberately —
+        `manage.py reconcile_membership --dry-run`, through this same entry
+        point — so what must not happen is this page quietly running one because
+        a form field said so.
+        """
         from corliss import membership
 
         self._as_cluster_admin()
@@ -469,9 +560,10 @@ class ManageViewTests(NoRosterMixin, TestCase):
                 "reconcile",
                 return_value=membership.ReconcileReport(),
             ) as run:
-                self.client.post(reverse("manage"), {"dry_run": "1"})
+                resp = self.client.post(reverse("manage"), {"dry_run": "1"})
 
-        run.assert_called_once_with(dry_run=True)
+        run.assert_called_once_with()
+        self.assertNotContains(resp, "Preview")
 
     @override_settings(
         MEMBERSHIP_REGISTRY_URL="https://registry.example",

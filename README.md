@@ -64,9 +64,18 @@ Configuration is entirely env-driven — see [`.env.example`](.env.example) for
 the full list. `.env` is git-ignored; **never commit secrets or private keys**.
 `CHAT_URL` drives the nav's "Chat" link, `MANAGE_URL` the "Manage Console" entry
 in its Manage menu, and `API_URL` both the endpoint shown on `/api/` and the
-"API admin" entry in the Manage menu (`API_URL` + `/ui/`, cluster admins only —
-derived rather than configured separately, since a second setting for the same
-origin could only ever disagree with the first). Each can be
+"LiteLLM Admin" entry in the Manage menu (`API_URL` + `/ui/`, cluster admins
+only — derived rather than configured separately, since a second setting for the
+same origin could only ever disagree with the first). `HAPPYVIEW_URL` and
+`PROXMOX_URL` add the other two service consoles to that menu; each is dropped
+when blank. `PROXMOX_URL` is the odd one out — the Proxmox UI runs on the host
+rather than behind the edge, so it has no subdomain of ours and points at the
+LAN instead (self-signed cert, not reachable from outside).
+
+Those three link *other systems'* admin UIs. Each authenticates on its own terms
+with credentials Corliss does not hold, so they open a login rather than a
+session — offered to cluster admins because that is who would have those
+credentials, not because Corliss grants anything by linking them. Each can be
 left blank, which simply hides what it feeds. The `LITELLM_*` trio is what makes
 `/api/` able to issue keys rather than only describe them — see
 [API keys](#api-keys--api).
@@ -257,6 +266,7 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
 | Membership push (from the registry) | `/membership/events` |
 | Console — members, admins, reconcile (cluster admins) | `/manage/` |
+| Systems — the stack, status stubbed (cluster admins) | `/systems/` |
 | Django admin | `/admin/` |
 
 Discovery and JWKS sit at the root deliberately: an OIDC issuer of

@@ -16,6 +16,10 @@ def ui(request):
         # second setting could only ever disagree with the first — and this way
         # a `zai-set-domain` moves it along with everything else. Blank when
         # API_URL is, which drops the link rather than pointing it at "/ui/".
+        # HappyView and Proxmox are plain hrefs for the Manage menu; each is
+        # blank when there is nowhere to point it, which drops the link.
+        "HAPPYVIEW_URL": settings.HAPPYVIEW_URL,
+        "PROXMOX_URL": settings.PROXMOX_URL,
         "API_ADMIN_URL": (
             settings.API_URL.rstrip("/") + "/ui/" if settings.API_URL else ""
         ),

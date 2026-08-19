@@ -455,6 +455,75 @@ def _api_action(request, client, tier):
     return redirect("api")
 
 
+# --- The stack, for /systems/ ------------------------------------------------
+#
+# A description of what this cluster is made of, grouped the way zai-ops groups
+# its CTIDs: core infra is the data foundations (storage with no logic of its
+# own), platform is services other services consume, apps are what members
+# actually use. Held here rather than read from anywhere because nothing in
+# Corliss knows the shape of the cluster — this is the one place that claims to.
+#
+# **Status is not checked yet.** Every entry reports "unknown" except the two
+# this request can answer for free: Corliss is serving the page, and Postgres
+# answered the query that rendered it. Anything else needs a probe per service,
+# which is the next piece of work and deliberately not this one. An entry that
+# guessed would be worse than one that admits it does not know.
+STACK = [
+    ("Core", [
+        ("Garage", "object store — backup target for the control node"),
+        ("PostgreSQL", "the cluster's database: Corliss, LiteLLM, Open WebUI, HappyView"),
+        ("Redis", "session revocation store, so signing out reaches chat in seconds"),
+    ]),
+    ("Platform", [
+        ("Caddy", "the edge — the only LAN-facing container, terminates TLS"),
+        ("HappyView", "the membership registry: applications, grants, admin roster"),
+        ("LiteLLM", "the API gateway in front of the models"),
+    ]),
+    ("Applications", [
+        ("Corliss", "login, membership, OIDC, and members' API keys"),
+        ("Open WebUI", "the chat app"),
+        ("Manage Console", "the registry's admin surface, served as static files"),
+    ]),
+]
+
+
+@require_http_methods(["GET"])
+def systems(request):
+    """What the cluster is made of, and (eventually) whether it is up.
+
+    A stub, deliberately: it renders the stack and marks almost everything
+    "unknown" rather than inventing a status. Two entries are honest without a
+    probe — this app is serving the response, and Postgres answered the query
+    behind `request.user` — and the rest need a check per service, which is the
+    next piece of work rather than this one.
+
+    Admin-gated the same way `manage` is, and 404 rather than 403 for the same
+    reason: a non-admin has no business learning the page exists.
+    """
+    if not request.user.is_authenticated:
+        request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
+        return redirect("login")
+    if not request.user.is_cluster_admin:
+        raise Http404
+
+    live = {"Corliss", "PostgreSQL"}
+    groups = [
+        {
+            "name": name,
+            "services": [
+                {
+                    "name": service,
+                    "purpose": purpose,
+                    "state": "up" if service in live else "unknown",
+                }
+                for service, purpose in services
+            ],
+        }
+        for name, services in STACK
+    ]
+    return render(request, "systems.html", {"groups": groups})
+
+
 @require_http_methods(["GET", "POST"])
 def manage(request):
     """The cluster console: who is a member, who is an admin, and reconcile.
@@ -483,7 +552,11 @@ def manage(request):
 
     if request.method == "POST":
         try:
-            report = registry.reconcile(dry_run="dry_run" in request.POST)
+            # No dry-run switch here any more: the button is the recovery
+            # action, and a preview beside it mostly invited clicking the wrong
+            # one. `manage.py reconcile_membership --dry-run` still previews,
+            # through this same entry point, for the case that wants it.
+            report = registry.reconcile()
         except (membership.RegistryError, membership.ReconcileError) as exc:
             # "The answer would not be trustworthy" — distinct from a report
             # that ran and came back bad, which renders as the report.

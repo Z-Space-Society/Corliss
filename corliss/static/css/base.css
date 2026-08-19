@@ -711,3 +711,32 @@ a.btn-primary {
   color: var(--text-secondary);
   line-height: 1.7;
 }
+
+/* --- Systems ------------------------------------------------------------- */
+
+/* A status light and its label. The dot alone would carry the meaning in
+   colour only, which is unreadable to anyone who can't distinguish them and
+   invisible to a screen reader — so the word is always there beside it and
+   the dot is decoration. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.status__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status__dot--up {
+  background: var(--success);
+}
+
+/* Unknown is grey, not red: nothing is claimed to be broken, only unmeasured. */
+.status__dot--unknown {
+  background: oklch(0.5 0.01 255);
+}
