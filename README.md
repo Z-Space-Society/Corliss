@@ -63,7 +63,10 @@ to activate. `uv run python manage.py …` is the explicit equivalent.
 Configuration is entirely env-driven — see [`.env.example`](.env.example) for
 the full list. `.env` is git-ignored; **never commit secrets or private keys**.
 `CHAT_URL` drives the nav's "Chat" link, `MANAGE_URL` the "Manage Console" entry
-in its Manage menu, and `API_URL` the endpoint shown on `/api/`. Each can be
+in its Manage menu, and `API_URL` both the endpoint shown on `/api/` and the
+"API admin" entry in the Manage menu (`API_URL` + `/ui/`, cluster admins only —
+derived rather than configured separately, since a second setting for the same
+origin could only ever disagree with the first). Each can be
 left blank, which simply hides what it feeds. The `LITELLM_*` trio is what makes
 `/api/` able to issue keys rather than only describe them — see
 [API keys](#api-keys--api).

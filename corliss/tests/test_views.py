@@ -226,6 +226,40 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.assertContains(resp, reverse("manage"))
         self.assertNotContains(resp, "Manage Console")
 
+    @override_settings(API_URL="https://api.example.com")
+    def test_cluster_admin_sees_the_api_admin_link(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, "https://api.example.com/ui/")
+        self.assertContains(resp, "API admin")
+
+    @override_settings(API_URL="https://api.example.com/")
+    def test_a_trailing_slash_on_api_url_does_not_double_up(self):
+        # API_URL is operator-set, so it can arrive either way.
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, "https://api.example.com/ui/")
+        self.assertNotContains(resp, "com//ui/")
+
+    @override_settings(API_URL="https://api.example.com")
+    def test_a_plain_member_never_sees_the_api_admin_link(self):
+        # The proxy's admin UI is not a member surface, and the /api/ page they
+        # do get is a different thing entirely.
+        _grant()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, "API admin")
+
+    @override_settings(API_URL="")
+    def test_no_api_url_drops_the_link_rather_than_pointing_at_slash_ui(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, "API admin")
+        self.assertNotContains(resp, '"/ui/"')
+
 
 class ManageViewTests(NoRosterMixin, TestCase):
     """`/manage/` — the cluster console.

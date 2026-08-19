@@ -11,6 +11,14 @@ def ui(request):
         # The nav's Manage menu links here, for cluster admins only and only
         # when configured — see base.html.
         "MANAGE_URL": settings.MANAGE_URL,
+        # LiteLLM's own admin UI, derived from API_URL rather than configured
+        # separately: it is served from the same origin as the API itself, so a
+        # second setting could only ever disagree with the first — and this way
+        # a `zai-set-domain` moves it along with everything else. Blank when
+        # API_URL is, which drops the link rather than pointing it at "/ui/".
+        "API_ADMIN_URL": (
+            settings.API_URL.rstrip("/") + "/ui/" if settings.API_URL else ""
+        ),
         # The footer's build stamp: which version is running, and where to read
         # it. APP_VERSION is "" when it can't be resolved and APP_VERSION_URL is
         # None on a dirty tree, so the template branches on both — see

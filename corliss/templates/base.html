@@ -62,6 +62,16 @@
               {% if user.is_cluster_admin and MANAGE_URL %}
                 <a class="nav__dropdown-item" href="{{ MANAGE_URL }}">Manage Console</a>
               {% endif %}
+              {% if user.is_cluster_admin and API_ADMIN_URL %}
+                {% comment %}
+                LiteLLM's own admin UI, on the API origin. It authenticates
+                separately — with the proxy's master key, which this app does
+                not hold and never sends anywhere — so this link opens a login,
+                not a session. Offered to cluster admins because they are who
+                would have that key, not because clicking it grants anything.
+                {% endcomment %}
+                <a class="nav__dropdown-item" href="{{ API_ADMIN_URL }}">API admin</a>
+              {% endif %}
               {% if user.is_superuser %}
                 <a class="nav__dropdown-item" href="{% url 'admin:index' %}">Django admin</a>
               {% endif %}
