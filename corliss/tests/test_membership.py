@@ -7,11 +7,12 @@ re-admits a revoked member.
 
 import json
 from datetime import datetime, timezone as dt_timezone
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from corliss import membership
+from corliss import litellm, membership, oidc
 from corliss.models import MembershipCache
 
 DID = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
@@ -244,3 +245,83 @@ class PushEndpointTests(TestCase):
     def test_get_is_not_allowed(self):
         res = self.client.get(reverse("membership_push"))
         self.assertEqual(res.status_code, 405)
+
+
+class LiteLLMNotificationTests(TestCase):
+    """Where a membership event reaches LiteLLM.
+
+    The mirror of `test_backchannel`'s revocation tests, one surface over: GATE
+    decides who may *start*, and neither a chat session nor an API key ends by
+    itself. Both notifications hang off the same `apply_event` guard, so what is
+    asserted here is which events fire and — just as important — which do not.
+
+    `captureOnCommitCallbacks` because these run after commit: inside a
+    TestCase's wrapping transaction they would otherwise never fire at all,
+    which would make every assertion here vacuously pass.
+    """
+
+    def apply(self, payload):
+        with self.captureOnCommitCallbacks(execute=True):
+            return membership.apply_event(membership.parse(payload))
+
+    def test_a_grant_provisions_the_member(self):
+        with patch.object(litellm, "on_membership_granted") as provision:
+            self.apply(grant(tier="level-3"))
+        provision.assert_called_once_with(DID, "level-3")
+
+    def test_a_revocation_takes_the_keys_with_the_session(self):
+        # Both relying parties, one event. Chat holds a session that outlives
+        # the grant; LiteLLM holds keys that do the same.
+        membership.apply_event(membership.parse(grant()))
+        with patch.object(litellm, "on_membership_revoked") as revoke_keys:
+            with patch.object(oidc, "notify_logout_for_did") as logout:
+                self.apply(revoke(tid=TID_2))
+        revoke_keys.assert_called_once_with(DID)
+        logout.assert_called_once_with(DID)
+
+    def test_one_notification_failing_does_not_skip_the_other(self):
+        # They are independent relying parties. A LiteLLM outage must not
+        # leave a revoked member still signed in to chat.
+        membership.apply_event(membership.parse(grant()))
+        with patch.object(
+            oidc, "notify_logout_for_did", side_effect=RuntimeError("chat is down")
+        ):
+            with patch.object(litellm, "on_membership_revoked") as revoke_keys:
+                self.apply(revoke(tid=TID_2))
+        revoke_keys.assert_called_once_with(DID)
+
+    def test_a_replayed_grant_notifies_nobody(self):
+        membership.apply_event(membership.parse(grant()))
+        with patch.object(litellm, "on_membership_granted") as provision:
+            self.apply(grant())
+        provision.assert_not_called()
+
+    def test_a_revocation_replayed_into_an_empty_cache_stays_quiet(self):
+        """The recovery path, asserted from LiteLLM's side.
+
+        A rebuilt cluster reconciles by replaying every DID's winning event,
+        and for anyone revoked in the past that winner is a revocation landing
+        on no row. Deleting keys there would fire a burst of calls to end
+        access that ended long ago.
+        """
+        with patch.object(litellm, "on_membership_revoked") as revoke_keys:
+            self.apply(revoke())
+        revoke_keys.assert_not_called()
+
+    def test_a_grant_replayed_into_an_empty_cache_does_provision(self):
+        """The asymmetry with the test above, and it is deliberate.
+
+        A revocation into an empty cache ends nothing. A *grant* into an empty
+        cache is a member who must exist in LiteLLM again — that is the rebuild
+        working, not a burst to suppress. It is idempotent and cannot raise.
+        """
+        with patch.object(litellm, "on_membership_granted") as provision:
+            self.apply(grant())
+        provision.assert_called_once()
+
+    def test_a_second_revocation_notifies_nobody(self):
+        membership.apply_event(membership.parse(grant()))
+        membership.apply_event(membership.parse(revoke(tid=TID_2)))
+        with patch.object(litellm, "on_membership_revoked") as revoke_keys:
+            self.apply(revoke(tid=TID_3))
+        revoke_keys.assert_not_called()

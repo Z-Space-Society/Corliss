@@ -45,6 +45,7 @@ service DID's repo, no push, no credential — which is precisely what makes it
 usable when the cache is empty. See "The admin roster" below.
 """
 
+import logging
 import re
 from datetime import datetime, timezone as dt_timezone
 
@@ -53,8 +54,10 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 
-from corliss import atproto, oidc
+from corliss import atproto, litellm, oidc
 from corliss.models import MembershipCache, User
+
+log = logging.getLogger(__name__)
 
 GRANT = "grant"
 REVOKE = "revoke"
@@ -253,16 +256,55 @@ def apply_event(parsed):
         },
     )
 
+    # on_commit, not inline: this function is atomic, and an outbound HTTP call
+    # has no business running inside an open transaction — it would hold row
+    # locks across a network round trip, and it would fire for a write that then
+    # rolled back. This way the notifications happen only if the change is
+    # actually durable.
+    did = parsed["did"]
+
     if ends_live_membership:
-        # on_commit, not inline: this function is atomic, and an outbound HTTP
-        # call has no business running inside an open transaction — it would
-        # hold row locks across a network round trip, and it would fire for a
-        # write that then rolled back. This way the notification happens only
-        # if the revocation is actually durable.
-        did = parsed["did"]
-        transaction.on_commit(lambda: oidc.notify_logout_for_did(did))
+        # Two relying parties on one event, and neither may swallow the other:
+        # chat holds a session that outlives the grant, and LiteLLM holds keys
+        # that do the same. `_notify` keeps one failing from skipping the next.
+        transaction.on_commit(lambda: _notify(oidc.notify_logout_for_did, did))
+        transaction.on_commit(lambda: _notify(litellm.on_membership_revoked, did))
+    elif is_grant:
+        # **Provisioning before the first request is the point.** LiteLLM's
+        # spend accounting silently no-ops for a user it has never heard of, so
+        # a member who reaches it unprovisioned looks fine and accrues nothing.
+        #
+        # Unlike the revocation branch this deliberately fires on every applied
+        # grant, including a reconcile replaying the whole log into a rebuilt
+        # cluster: that is LiteLLM being re-provisioned from the record, which
+        # is the same recovery the cache itself is getting. It is idempotent and
+        # it never raises, which is what makes the burst safe.
+        tier = parsed["tier"]
+        transaction.on_commit(
+            lambda: _notify(litellm.on_membership_granted, did, tier)
+        )
 
     return True
+
+
+def _notify(fn, *args):
+    """Run one outbound notification, swallowing anything it throws.
+
+    These run after commit, so there is nothing left to roll back and no caller
+    left to tell. An exception here would surface as a 500 on the push — the
+    registry logging a failure for a grant that succeeded — or abort the
+    remaining notifications for the same event. Both are worse than a warning.
+    """
+    try:
+        fn(*args)
+    except Exception:
+        # `getattr`, not `fn.__name__`: a callable without one (a partial, a
+        # test double) would make the handler that exists to swallow errors
+        # raise one of its own, which is the failure this whole function is here
+        # to prevent.
+        log.exception(
+            "membership: notification %s failed", getattr(fn, "__name__", fn)
+        )
 
 
 def membership_for(user):

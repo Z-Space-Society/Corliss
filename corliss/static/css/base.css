@@ -590,11 +590,12 @@ a.btn-primary {
 
 /* --- Manage console ------------------------------------------------------ */
 
-/* The console's own width. 560px is right for a form and a paragraph, but the
-   member roll is five columns of identifiers and timestamps, and at 560 it
-   scrolled sideways inside its card to show columns that fit a wider page
-   easily. Widened here rather than on .account-view so /api/ and the account
-   pages keep the reading measure they were set at. */
+/* The wider measure, for pages that are mostly tables. 560px is right for a
+   form and a paragraph, but the member roll is five columns of identifiers and
+   timestamps, and at 560 it scrolled sideways inside its card to show columns
+   that fit a wider page easily. Applied per page rather than to .account-view
+   so the account pages keep the reading measure they were set at — /api/ opted
+   in when it gained the key and usage tables. */
 .console-view {
   max-width: 900px;
 }

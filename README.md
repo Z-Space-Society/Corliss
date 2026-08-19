@@ -30,6 +30,7 @@ only by being genuinely standalone.
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
 | `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
 | `corliss/membership.py` | Consuming the registry's membership push; reconciling the cache against the registry; resolving whether a DID is currently a member. |
+| `corliss/litellm.py` | Provisioning members into LiteLLM and issuing their API keys — the only place a gateway credential is used (same one-relationship-one-module rule). |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
 | `corliss/signing.py` | Loads the signing keys, builds the JWKS. |
@@ -63,7 +64,9 @@ Configuration is entirely env-driven — see [`.env.example`](.env.example) for
 the full list. `.env` is git-ignored; **never commit secrets or private keys**.
 `CHAT_URL` drives the nav's "Chat" link, `MANAGE_URL` the "Manage Console" entry
 in its Manage menu, and `API_URL` the endpoint shown on `/api/`. Each can be
-left blank, which simply hides what it feeds.
+left blank, which simply hides what it feeds. The `LITELLM_*` trio is what makes
+`/api/` able to issue keys rather than only describe them — see
+[API keys](#api-keys--api).
 
 The nav's two admin links answer to **two different authorities**, deliberately:
 "Manage Console" to the atproto admin roster (`user.is_cluster_admin`), and
@@ -242,7 +245,7 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | Endpoint | Path |
 | -------- | ---- |
 | Home | `/` |
-| API access (placeholder, members) | `/api/` |
+| API keys — issue, revoke, usage (members) | `/api/` |
 | Login / logout | `/auth/login`, `/auth/logout` |
 | ATProto callback | `/auth/oauth/callback` |
 | ATProto client metadata (**is** the `client_id`) | `/auth/client-metadata.json` |
@@ -506,6 +509,127 @@ Five properties worth stating, because each has a plausible wrong answer:
   our discovery document and the `jwks_uri` inside it — both the *public*
   origin, because the issuer must be the public one or `iss` won't match. So
   delivery still depends on the edge. One more reason the short expiry stays.
+
+## API keys — `/api/`
+
+Members reach the cluster's models directly over HTTP, with a key they issue
+themselves. Corliss holds the credential that mints those keys; the page shows
+each secret exactly once.
+
+This is the half of the deploy plan's Phase E that moves LiteLLM provisioning
+out of the registry. It was HappyView Lua until the registry was stripped of its
+gateway integration (scn-ops `ad9b424`, "Phase E0"), which was right — a registry
+that provisions nothing needs no credential that can act on anyone's behalf — and
+left nothing provisioning LiteLLM until this.
+
+### Settings
+
+| Setting | Meaning |
+| ------- | ------- |
+| `LITELLM_URL` | Where **Corliss** reaches LiteLLM. The **internal** address (`http://10.1.1.<ctid>:4000`), not `API_URL`. |
+| `LITELLM_PROVISIONER_KEY` | A `proxy_admin` virtual key, **not** the LiteLLM master key. |
+| `LITELLM_MAX_KEYS_PER_MEMBER` | How many keys one member may hold (default 5). LiteLLM enforces no limit of its own. |
+
+Either of the first two blank leaves `/api/` saying it is not configured, the
+same posture the registry settings take. Nothing 500s because an integration is
+absent.
+
+**`LITELLM_URL` is not `API_URL`, and conflating them breaks this quietly.**
+`API_URL` is the public origin a *member* points their client at. `LITELLM_URL`
+is a service-to-service call between two CTs on one bridge — and server-side
+Python **cannot** fetch our own public origin, because Cloudflare's Browser
+Integrity Check refuses non-browser user agents with `error code: 1010`. That is
+the defect that shipped back-channel logout fully built and completely inert; it
+is set for this call too.
+
+### What is stored
+
+**Nothing.** LiteLLM is the source of truth for keys. `/api/` calls `/key/list`
+on every render, so a key revoked from `zai-litellm-key` is gone from the page
+too. The plaintext exists for exactly one render — the view pops it out of the
+session as it draws — and Corliss never writes it anywhere. A stored key would
+be a credential in a second place for no gain: it cannot be re-shown, and
+LiteLLM already knows every fact about it worth reading.
+
+### The rules that make a shared provisioner key safe
+
+The provisioner key can mint and delete keys for *anyone*, so every operation
+re-establishes on the server who is asking rather than trusting the request:
+
+- **The LiteLLM `user_id` IS the member's DID.** Not a handle, not a hash. That
+  is what makes `/user/new` idempotent on retry, which is what lets a page load,
+  a push and `sync_litellm` all provision without coordinating.
+- **Issuance proves an active grant; revocation proves ownership.** The token in
+  the revoke form arrives from the client, so it is looked up in *that DID's* key
+  list before anything is deleted.
+- **GATE is not the entitlement question.** A roster admin passes GATE and
+  reaches this page — that is the recovery path — and still gets no key, because
+  the tier comes from `MembershipCache` and they have no grant.
+- **A tierless membership cannot mint a key, and that is a security check.** A
+  key with no team inherits every model, so an unscoped key is *more* permissive
+  than any tier. The five pre-E0 grants in the production space carry no tier;
+  their holders exist in LiteLLM and are refused a key until one is set.
+- **The key list is filtered by `user_id` twice** — once as a query parameter,
+  once over the response. Handing one member another's keys would be this
+  module's worst failure and the second check costs one comparison.
+
+### Tiers are LiteLLM teams
+
+A grant's tier slug (`level-0` … `level-9`) maps to a LiteLLM **team**, resolved
+at runtime by `team_alias`. The teams are created by the zai-ops `litellm` role;
+Corliss looks them up rather than holding a team id, because an id is generated
+at creation and would have to be carried out of Ansible by hand.
+
+Model access and per-member limits live on the team, so changing someone's tier
+is a team move — and **a tier change ends the member's existing keys.**
+
+That is not a design preference. LiteLLM refuses to move an existing key between
+teams: `/key/update` with a new `team_id` answers **403** and the key does not
+move (probed against the deployed proxy, 2026-08-19). A key's access is fixed at
+the team it was minted against, so the only way a tier change can take effect is
+to delete what predates it — `litellm.prune_foreign_keys`, called from
+`apply_event` and again by `sync_litellm`.
+
+Leaving them is the unsafe direction: a member moved *down* a tier would keep
+the access they just lost, silently and for as long as the key lives. The rule
+applies to upgrades too, uniformly, because one that deletes on the way down but
+not on the way up is unpredictable — and the alternative on the way up is an
+upgrade that visibly does nothing. `/api/` says so above the key table.
+
+Pruning is keyed on the team, not on "did the tier change", which the hook has
+no way to know. A key already on the right team is left alone, which is what
+keeps a reconcile replay on a rebuilt cluster quiet.
+
+### Revocation reaches LiteLLM
+
+The same `apply_event` hook that ends a chat session ends API access, for the
+same reason: GATE decides who may *start*, and neither a chat JWT nor an API key
+stops by itself. Keys are deleted first, then the team membership — if the second
+half fails the member has already lost access and a retry only finishes the
+paperwork.
+
+Both notifications are best effort and neither may swallow the other. They also
+must not fail the push: the grant already happened in the registry, so raising
+here would report a failure for something that succeeded.
+
+### `manage.py sync_litellm`
+
+The repair for what the push is allowed to drop.
+
+```bash
+manage.py sync_litellm --dry-run
+manage.py sync_litellm
+```
+
+Walks `MembershipCache`, ensures every active member exists in LiteLLM in their
+tier's team, and deletes keys still held by revoked ones. **Exits non-zero when
+anything could not be aligned** — a member missing from LiteLLM accrues no spend
+and reads as working from every direction, so a run that reported success over
+one would hide exactly the state it exists to find.
+
+Reads the cache, never the registry, which keeps the two repairs separable. On a
+rebuilt cluster run `reconcile_membership` first: that re-derives the cache from
+the registry, this re-derives LiteLLM from the cache.
 
 ## The console — `/manage/`
 

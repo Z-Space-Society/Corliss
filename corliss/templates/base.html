@@ -23,7 +23,13 @@
           <a class="nav__item" href="{{ CHAT_URL }}">Chat</a>
         {% endif %}
 
-        {% if user.is_authenticated %}
+        {% comment %}
+        Offered on the same terms the page is gated on. It used to be shown to
+        anyone signed in while the view required membership, so a non-member
+        got a link that bounced them home — harmless while the page was a
+        placeholder, and a broken promise now that it holds their keys.
+        {% endcomment %}
+        {% if user.is_authenticated and user.may_enter %}
           <a class="nav__item" href="{% url 'api' %}">API</a>
         {% endif %}
 

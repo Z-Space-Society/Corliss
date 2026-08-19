@@ -67,6 +67,23 @@ class User(AbstractUser):
         return membership.is_cluster_admin(self.did)
 
     @cached_property
+    def may_enter(self):
+        """GATE, as an attribute — so the nav can offer only what it can open.
+
+        The same question `views.require_membership` asks, exposed here for the
+        one caller that is not a view: a template deciding whether to show a
+        link. Offering a member-only page to someone the gate will bounce is a
+        promise the next click breaks.
+
+        Deliberately **not** the entitlement question. A roster admin with no
+        grant passes this and still gets no tier and no key — see
+        `membership.may_enter`.
+        """
+        from corliss import membership
+
+        return membership.may_enter(self.did)
+
+    @cached_property
     def has_pending_application(self):
         """Has this member asked for membership and not yet been answered?
 

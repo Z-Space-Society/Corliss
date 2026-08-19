@@ -1,15 +1,27 @@
 {% extends "base.html" %}
 
 {% comment %}
-Placeholder. Nothing on this page works yet: the endpoint is read from a
-setting and the "Create key" button posts nowhere. It is here so the nav entry
-and the shape of the key flow exist before either is built.
+The member's own API keys.
+
+Three things this page has to get right, all of them about the secret:
+
+- It is shown exactly once, at creation, and the copy says so before the button
+  is pressed rather than after. Nothing stores it — not Corliss, not this page
+  on a refresh (the view pops it out of the session as it renders).
+- Everything else here is read live from LiteLLM. A key revoked from the
+  operator CLI is gone from this table on the next load, because there is no
+  local copy to disagree.
+- The `token` in the revoke form is the key's HASH, not the key. It identifies
+  the key and is useless as a credential — which is why it can sit in a form.
+
+The page never names LiteLLM. A member is pointed at "the cluster's API"; which
+proxy serves it is ours to change.
 {% endcomment %}
 
 {% block title %}API — ZAI{% endblock %}
 
 {% block content %}
-<div class="account-view">
+<div class="account-view console-view">
   <h1>API</h1>
 
   <p class="page-text">Models on the cluster can be reached directly, without
@@ -26,14 +38,148 @@ and the shape of the key flow exist before either is built.
 
   <h2 class="section-title">Keys</h2>
   <div class="card">
-    <p class="alert alert--notice" role="status">
-      <strong>Not available yet.</strong> Key issuing is still to be built —
-      this button does nothing today.
-    </p>
+    {% if not litellm_configured %}
+      <p class="alert alert--notice" role="status">
+        <strong>Not configured.</strong> This deployment has no API service
+        connected, so keys cannot be issued here yet.
+      </p>
+    {% else %}
 
-    <button type="button" class="btn-primary">Create key</button>
-    <p class="hint-text">You'll be shown the key once, at creation. It won't be
-    recoverable afterwards.</p>
+      {% if new_key %}
+        <p class="alert alert--notice" role="status">
+          <strong>Copy this now.</strong> It will not be shown again — if you
+          lose it, revoke it and make another.
+        </p>
+        <div class="endpoint">{{ new_key }}</div>
+        <p class="hint-text">Treat it like a password. Anything holding it can
+        use the cluster as you.</p>
+      {% endif %}
+
+      {% if key_error %}
+        <p class="alert" role="alert">{{ key_error }}</p>
+      {% endif %}
+
+      {% if keys_error %}
+        <p class="alert" role="alert">
+          <strong>Your keys could not be listed.</strong> {{ keys_error }}
+        </p>
+        <p class="hint-text">Existing keys are unaffected and still work — this
+        page could not read them, which is not the same as losing them.</p>
+      {% else %}
+
+        {% if keys %}
+          <div class="table-scroll">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Key</th>
+                  <th>Created</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for key in keys %}
+                  <tr>
+                    <td>{{ key.label }}</td>
+                    <td class="data-table__did">{{ key.masked|default:"—" }}</td>
+                    <td class="data-table__muted">{{ key.created_at|default:"—" }}</td>
+                    <td>
+                      <form method="post" action="{% url 'api' %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="revoke">
+                        <input type="hidden" name="token" value="{{ key.token }}">
+                        <button type="submit" class="btn-secondary">Revoke</button>
+                      </form>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          <p class="hint-text">Revoking a key stops anything using it,
+          immediately and without warning them. A change to your tier also ends
+          your existing keys — the access a key carries is fixed when it is
+          made, so a new tier means a new key.</p>
+        {% else %}
+          <p class="hint-text">No keys yet. You only need one to call the
+          cluster from your own tools.</p>
+        {% endif %}
+
+        {% if not tier %}
+          <p class="alert alert--notice" role="status">
+            <strong>No tier yet.</strong> Your membership does not carry a tier,
+            so there is nothing to scope a key to. Ask an administrator to set
+            one.
+          </p>
+        {% elif at_limit %}
+          <p class="alert alert--notice" role="status">
+            <strong>Key limit reached.</strong> You can hold {{ max_keys }} at
+            once — revoke one to make another.
+          </p>
+        {% else %}
+          <form method="post" action="{% url 'api' %}">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="create">
+            <div class="input-row">
+              <input type="text" name="label" maxlength="64" required
+                     placeholder="what is it for?" aria-label="Key name">
+            </div>
+            <button type="submit" class="btn-primary">Create key</button>
+          </form>
+          <p class="hint-text">You'll be shown the key once, at creation. It
+          won't be recoverable afterwards.</p>
+        {% endif %}
+
+      {% endif %}
+    {% endif %}
   </div>
+
+  {% if litellm_configured and not keys_error %}
+    <h2 class="section-title">Usage</h2>
+    <div class="card">
+      {% if usage_error %}
+        <p class="hint-text">Usage is unavailable right now.</p>
+      {% elif usage_rows %}
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Model</th>
+                <th>In</th>
+                <th>Out</th>
+                <th>Requests</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in usage_rows %}
+                <tr>
+                  <td class="data-table__muted">{{ row.date }}</td>
+                  <td>{{ row.model|default:"—" }}</td>
+                  <td>{{ row.prompt_tokens }}</td>
+                  <td>{{ row.completion_tokens }}</td>
+                  <td>{{ row.requests }}</td>
+                </tr>
+              {% endfor %}
+              {% if usage_totals %}
+                <tr>
+                  <td colspan="2"><strong>Total</strong></td>
+                  <td><strong>{{ usage_totals.prompt_tokens }}</strong></td>
+                  <td><strong>{{ usage_totals.completion_tokens }}</strong></td>
+                  <td><strong>{{ usage_totals.requests }}</strong></td>
+                </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+        <p class="hint-text">The last {{ usage_days }} days, counted from
+        completed requests. Chat usage is not included — this covers keys
+        issued above.</p>
+      {% else %}
+        <p class="hint-text">Nothing in the last {{ usage_days }} days.</p>
+      {% endif %}
+    </div>
+  {% endif %}
 </div>
 {% endblock %}

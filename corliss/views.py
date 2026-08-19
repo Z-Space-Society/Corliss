@@ -8,7 +8,9 @@ ATProto client (people):
   store tokens server-side, establish the Django session.
 - `home`: the root page — an intro when signed out, your standing when in. The
   one page GATE never covers: it is where refused members land.
-- `api`: placeholder for direct API access; nothing on it is wired up yet.
+- `api`: the member's own API keys — issue, list, revoke, and usage, read live
+  from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
+  GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
 - `manage`: the cluster console — members, admins, and reconciliation. Gated on
   the atproto roster, not on any Django flag, so it survives a rebuild.
 - `logout`: ends this device's Corliss session. Local-session-only for now (no
@@ -37,6 +39,7 @@ import base64
 import hmac
 import json
 import secrets
+from datetime import timedelta
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -45,10 +48,11 @@ from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from corliss import atproto, membership, oidc, signing
+from corliss import atproto, litellm, membership, oidc, signing
 from corliss.models import AtprotoToken, MembershipCache, OidcAuthCode
 
 User = get_user_model()
@@ -57,6 +61,19 @@ SESSION_PREFIX = "corliss:oauth:"
 
 # Key in the Django session for "where to resume after atproto login".
 POST_LOGIN_REDIRECT = "post_login_redirect"
+
+# Where a freshly minted API key waits between the POST that made it and the
+# GET that shows it exactly once. See `api` for why it goes through the session
+# rather than being rendered straight off the POST.
+NEW_KEY_SESSION_KEY = "corliss:new_api_key"
+
+# Where a refusal from LiteLLM waits for the same hop, so the redirect that
+# follows a failed POST can explain itself.
+API_ERROR_SESSION_KEY = "corliss:api_error"
+
+# How far back /api/ reports usage. A month is what fits on the page and what
+# a member is actually asking when they look ("am I using a lot?").
+USAGE_WINDOW_DAYS = 30
 
 
 # --- GATE: is this person allowed in? --------------------------------------
@@ -323,16 +340,26 @@ def home(request):
     )
 
 
+@require_http_methods(["GET", "POST"])
 def api(request):
-    """Placeholder for direct API access — copy and a dead "create key" button.
+    """The member's own API keys: issue one, see them, revoke one, see usage.
 
-    Nothing here is wired up yet. It exists so the nav entry, the endpoint, and
-    the shape of the key flow are settled before any of it is built.
+    **GATE lets a roster admin in here without a grant; issuing does not.**
+    `require_membership` answers "may this person be in Corliss", and the
+    entitlement question is a different one — an admin with no grant receives
+    nothing they were never given. So the tier comes from the cache row and an
+    inactive or absent row means the form is not offered and a POST is refused,
+    with `litellm.issue_key` refusing a blank tier again on its own account.
 
-    Gated now rather than when it grows teeth. This page becomes the member's
-    key surface, and a page that has been reachable by anyone for months is the
-    kind of thing a "create key" button gets added to without anyone rechecking
-    who could already see it.
+    **Post/Redirect/Get, with the secret parked in the session for one hop.**
+    Rendering the new key straight off the POST would mint a second one on
+    refresh, which the per-member cap makes immediately visible. The cost is
+    that the plaintext sits in the server-side session store between the two
+    requests — smaller than what `AtprotoToken` already keeps, and it is popped
+    on the next render whether or not anyone reads it.
+
+    Nothing about keys is stored by Corliss. LiteLLM is asked afresh on every
+    render, so a key revoked from the CLI is gone from this page too.
     """
     if not request.user.is_authenticated:
         request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
@@ -340,7 +367,92 @@ def api(request):
     denial = require_membership(request)
     if denial is not None:
         return denial
-    return render(request, "api.html")
+
+    client = litellm.LiteLLM.from_settings()
+    row = membership.membership_for(request.user)
+    tier = row.tier if row is not None and row.active else ""
+
+    if request.method == "POST":
+        return _api_action(request, client, tier)
+
+    # Popped, not read: a secret that survives one refresh is a secret shown
+    # twice, and the page promises otherwise.
+    new_key = request.session.pop(NEW_KEY_SESSION_KEY, None)
+    key_error = request.session.pop(API_ERROR_SESSION_KEY, None)
+
+    keys, keys_error = [], None
+    if client.is_configured:
+        try:
+            keys = client.keys_for(request.user.did)
+        except litellm.LiteLLMError as exc:
+            # Carries LiteLLM's own words. The fail-visible posture is what
+            # turned the last two integration defects into ten-minute fixes.
+            keys_error = str(exc)
+
+    usage_rows, usage_totals, usage_error = [], None, None
+    if client.is_configured and not keys_error:
+        try:
+            # One `now()`, not two: taken either side of midnight they would
+            # ask for a window a day wider than the page claims.
+            today = timezone.now().date()
+            usage_rows, usage_totals = client.usage(
+                request.user.did,
+                (today - timedelta(days=USAGE_WINDOW_DAYS - 1)).isoformat(),
+                today.isoformat(),
+            )
+        except litellm.LiteLLMError as exc:
+            # Non-fatal on purpose: usage is the least important thing on this
+            # page and must never take the keys panel down with it.
+            usage_error = str(exc)
+
+    return render(
+        request,
+        "api.html",
+        {
+            "litellm_configured": client.is_configured,
+            "tier": tier,
+            "keys": keys,
+            "keys_error": keys_error,
+            "key_error": key_error,
+            "new_key": new_key,
+            "max_keys": client.max_keys,
+            "at_limit": len(keys) >= client.max_keys,
+            "usage_rows": usage_rows,
+            "usage_totals": usage_totals,
+            "usage_error": usage_error,
+            "usage_days": USAGE_WINDOW_DAYS,
+        },
+    )
+
+
+def _api_action(request, client, tier):
+    """Issue or revoke one key, then redirect back to `/api/`.
+
+    Errors go into the session rather than being rendered here, for the same
+    reason the new key does: the response to a POST is a redirect, so anything
+    the next page needs has to survive one hop.
+    """
+    if not client.is_configured:
+        raise Http404
+
+    did = request.user.did
+    try:
+        if request.POST.get("action") == "revoke":
+            client.revoke_key(did, request.POST.get("token", ""))
+        else:
+            # The handle is display only — it goes into the key's alias so a
+            # LiteLLM admin can attribute it. Ownership is the DID, always.
+            handle = membership.handles_for([did]).get(did, "")
+            request.session[NEW_KEY_SESSION_KEY] = client.issue_key(
+                did,
+                request.POST.get("label", ""),
+                handle=handle,
+                tier=tier,
+            )
+    except litellm.LiteLLMError as exc:
+        request.session[API_ERROR_SESSION_KEY] = str(exc)
+
+    return redirect("api")
 
 
 @require_http_methods(["GET", "POST"])

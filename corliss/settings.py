@@ -108,12 +108,44 @@ CHAT_URL = env("CHAT_URL", default="")
 # Public origin of the cluster's API service (api.<domain>, served from heron).
 # Shown on /api/ as the endpoint to point a client at. Blank leaves that page's
 # endpoint block out — the page itself still explains what is coming.
+#
+# This is the origin a MEMBER points their client at. It is deliberately not
+# LITELLM_URL below: that one is where *Corliss* reaches the same service from
+# inside the cluster, and the two must not be conflated — see that comment.
 API_URL = env("API_URL", default="")
 
 # Public origin of the Manage Console, linked from the home page's admin block.
 # Blank hides that one link (the Django admin link beside it always renders) —
 # the console is deployed separately, so a Corliss without one is a real state.
 MANAGE_URL = env("MANAGE_URL", default="")
+
+# --- LiteLLM (the cluster's API service) ------------------------------------
+# Corliss provisions members into LiteLLM and issues them API keys from /api/.
+# URL or PROVISIONER_KEY blank leaves that page explaining itself with a
+# "not configured" notice rather than a traceback — the same posture the
+# registry settings below take.
+#
+# Point URL at LiteLLM's **internal** address (http://10.1.1.<ctid>:4000), not
+# at API_URL above. Three reasons, and the first is the one that bites:
+# server-side Python cannot fetch our own public origin, because Cloudflare's
+# Browser Integrity Check refuses non-browser user agents with error 1010 —
+# the defect that shipped back-channel logout fully built and inert. Beyond
+# that, this is a service-to-service call between two CTs on one bridge, and
+# the provisioner key has no business crossing an edge to reach a neighbour.
+#
+# Unlike the registry there is no HOST setting: LiteLLM does not route by
+# virtual host, so a bare-IP Host needs no compensating header.
+#
+# The PROVISIONER_KEY is a `proxy_admin` virtual key minted by the zai-ops
+# litellm role — NOT the master key. It can mint and delete keys for any
+# member, so `corliss.litellm` re-proves on the server who is asking before
+# every use of it. A leak costs one revocation, not a proxy-wide rotation.
+LITELLM_URL = env("LITELLM_URL", default="")
+LITELLM_PROVISIONER_KEY = env("LITELLM_PROVISIONER_KEY", default="")
+
+# How many keys one member may hold. LiteLLM enforces no per-user limit, so
+# this cap is ours or there is none.
+LITELLM_MAX_KEYS_PER_MEMBER = env.int("LITELLM_MAX_KEYS_PER_MEMBER", default=5)
 
 # --- Registry membership push ----------------------------------------------
 # Shared bearer token the SCN registry presents when POSTing a grant or

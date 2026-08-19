@@ -15,7 +15,7 @@ Two more that look like housekeeping and are not:
   being recovered.
 """
 
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from django.contrib.auth import get_user_model
@@ -332,8 +332,19 @@ class HomeIsWhereRefusalsLandTests(NoRosterMixin, TestCase):
         self.assertContains(resp, "The Shared Computer Network")
 
 
+LITELLM_SETTINGS = {
+    "LITELLM_URL": "http://10.1.1.112:4000",
+    "LITELLM_PROVISIONER_KEY": "sk-provisioner",
+}
+
+
 class ApiGateTests(NoRosterMixin, TestCase):
-    """`/api/` — placeholder copy, gated before it grows a real key button."""
+    """`/api/` — the member's keys, and who is refused them.
+
+    The POST cases are the ones that matter now the page has teeth. GET being
+    gated only costs a refused reader; POST being gated is what stands between
+    a non-member and a working credential minted with the provisioner key.
+    """
 
     def setUp(self):
         super().setUp()
@@ -357,6 +368,68 @@ class ApiGateTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("api"))
         self.assertRedirects(resp, reverse("login"))
         self.assertEqual(self.client.session[POST_LOGIN_REDIRECT], reverse("api"))
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_a_non_member_posting_never_reaches_litellm(self):
+        # The refusal has to happen before the provisioner key is touched, not
+        # inside the call. Patched at the transport so ANY request would show.
+        self.client.force_login(self.user)
+        with patch("corliss.litellm.requests.request") as request:
+            resp = self.client.post(
+                reverse("api"), {"action": "create", "label": "laptop"}
+            )
+        self.assertRedirects(resp, reverse("home"))
+        request.assert_not_called()
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_a_revoked_member_posting_never_reaches_litellm(self):
+        _grant(active=False)
+        self.client.force_login(self.user)
+        with patch("corliss.litellm.requests.request") as request:
+            resp = self.client.post(
+                reverse("api"), {"action": "revoke", "token": "abc123def456"}
+            )
+        self.assertRedirects(resp, reverse("home"))
+        request.assert_not_called()
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_an_anonymous_post_never_reaches_litellm(self):
+        with patch("corliss.litellm.requests.request") as request:
+            resp = self.client.post(
+                reverse("api"), {"action": "create", "label": "laptop"}
+            )
+        self.assertRedirects(resp, reverse("login"))
+        request.assert_not_called()
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_a_roster_admin_with_no_grant_gets_the_page_but_no_key(self):
+        """The split GATE exists for, at the surface that hands out
+        entitlements.
+
+        An admin must be able to reach a Corliss whose cache is empty — that is
+        the recovery path. They must not receive a key, because a key with no
+        tier reaches every model and the registry granted them nothing.
+        """
+        admin = User.objects.create_user(username="admin.bsky.social", did=ADMIN)
+        self.as_roster_admin(ADMIN)
+        self.client.force_login(admin)
+
+        empty = Mock(status_code=200, content=b"{}", text="{}")
+        empty.json.return_value = {"keys": [], "results": [], "metadata": {}}
+        with patch("corliss.litellm.requests.request", return_value=empty) as request:
+            page = self.client.get(reverse("api"))
+            posted = self.client.post(
+                reverse("api"), {"action": "create", "label": "laptop"}
+            )
+
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "No tier yet")
+        self.assertNotContains(page, 'value="create"')
+        # The POST is not refused by GATE — they passed it — so it reaches the
+        # view and is stopped by the tier check, having minted nothing.
+        self.assertRedirects(posted, reverse("api"), fetch_redirect_response=False)
+        for call in request.call_args_list:
+            self.assertNotIn("/key/generate", call.args[1])
 
 
 class GateDoesNotCoverTheRecoveryDoorsTests(NoRosterMixin, TestCase):

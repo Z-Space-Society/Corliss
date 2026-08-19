@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import patch
 
 from django.conf import settings
@@ -7,7 +7,7 @@ from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from corliss import atproto
+from corliss import atproto, litellm, views
 from corliss.models import AtprotoToken, MembershipCache
 from corliss.views import SESSION_PREFIX
 
@@ -537,11 +537,28 @@ class AccountMenuTests(NoRosterMixin, TestCase):
         self.assertNotContains(resp, ">level 1<")
 
 
+LITELLM_SETTINGS = {
+    "LITELLM_URL": "http://10.1.1.112:4000",
+    "LITELLM_PROVISIONER_KEY": "sk-provisioner",
+    "LITELLM_MAX_KEYS_PER_MEMBER": 5,
+}
+
+
+def _key(token="abc123def456", alias="alice.bsky.social/laptop"):
+    return litellm.ApiKey(
+        token=token, masked="sk-...4f2a", alias=alias,
+        spend=0, created_at="2026-08-01", blocked=False,
+    )
+
+
 class ApiViewTests(NoRosterMixin, TestCase):
-    """`/api/` — placeholder copy today, so only its wiring is worth asserting.
+    """`/api/` — the member's keys.
 
     Member-gated, so these sign in as one. The gate's own behaviour on this page
-    — who is refused, and where they land — is `test_gate.ApiGateTests`.
+    — who is refused, and where they land — is `test_gate.ApiGateTests`, and the
+    LiteLLM client's own rules are `test_litellm`. What is asserted here is the
+    wiring between them: that the page asks about the right member, that a POST
+    cannot outrun the gate, and that the secret is shown once.
     """
 
     def setUp(self):
@@ -561,12 +578,145 @@ class ApiViewTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("api"))
         self.assertNotContains(resp, "endpoint")
 
-    @override_settings(API_URL="https://api.example.com")
-    def test_key_creation_is_advertised_as_not_built(self):
-        # The button is deliberately inert. If it ever posts somewhere, this
-        # notice has to go with it.
+    @override_settings(LITELLM_URL="", LITELLM_PROVISIONER_KEY="")
+    def test_no_litellm_says_so_instead_of_erroring(self):
+        # An unconfigured integration is inert and visible. Same posture as the
+        # console's reconcile panel.
         resp = self.client.get(reverse("api"))
-        self.assertContains(resp, "Not available yet")
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Not configured")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_the_page_lists_the_signed_in_members_keys(self):
+        with patch.object(litellm.LiteLLM, "keys_for", return_value=[_key()]) as keys_for:
+            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                resp = self.client.get(reverse("api"))
+        keys_for.assert_called_once_with(DID)
+        self.assertContains(resp, "laptop")
+        self.assertContains(resp, "sk-...4f2a")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_a_form_posts_where_the_dead_button_used_to_sit(self):
+        with patch.object(litellm.LiteLLM, "keys_for", return_value=[]):
+            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                resp = self.client.get(reverse("api"))
+        self.assertContains(resp, 'name="csrfmiddlewaretoken"')
+        self.assertContains(resp, 'name="action" value="create"')
+        self.assertContains(resp, "Create key")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_creating_a_key_shows_the_secret_exactly_once(self):
+        with patch.object(litellm.LiteLLM, "issue_key", return_value="sk-brand-new"):
+            resp = self.client.post(reverse("api"), {"action": "create", "label": "laptop"})
+        # Not followed: fetching the redirect target here would render the page
+        # once before the assertions below, and rendering is what consumes the
+        # secret. That is the behaviour under test, so it must not be spent by
+        # the harness.
+        self.assertRedirects(resp, reverse("api"), fetch_redirect_response=False)
+
+        with patch.object(litellm.LiteLLM, "keys_for", return_value=[_key()]):
+            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                first = self.client.get(reverse("api"))
+                second = self.client.get(reverse("api"))
+        self.assertContains(first, "sk-brand-new")
+        self.assertContains(first, "Copy this now")
+        # A secret that survives a refresh is a secret shown twice.
+        self.assertNotContains(second, "sk-brand-new")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_the_key_is_issued_for_the_session_did_and_the_cached_tier(self):
+        # Neither comes from the request body. A member choosing their own DID
+        # or tier is the whole failure the provisioner key makes possible.
+        with patch.object(litellm.LiteLLM, "issue_key", return_value="sk-x") as issue:
+            self.client.post(
+                reverse("api"),
+                {"action": "create", "label": "laptop",
+                 "did": "did:plc:someoneelse", "tier": "level-9"},
+            )
+        did, label = issue.call_args.args
+        self.assertEqual(did, DID)
+        self.assertEqual(label, "laptop")
+        self.assertEqual(issue.call_args.kwargs["tier"], "level-2")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_a_refused_issue_renders_the_reason_and_mints_nothing(self):
+        with patch.object(
+            litellm.LiteLLM, "issue_key",
+            side_effect=litellm.LiteLLMError("key limit reached"),
+        ):
+            self.client.post(reverse("api"), {"action": "create", "label": "laptop"})
+        with patch.object(litellm.LiteLLM, "keys_for", return_value=[]):
+            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                resp = self.client.get(reverse("api"))
+        self.assertContains(resp, "key limit reached")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_revoking_passes_the_token_through_with_the_session_did(self):
+        with patch.object(litellm.LiteLLM, "revoke_key") as revoke:
+            resp = self.client.post(
+                reverse("api"), {"action": "revoke", "token": "abc123def456"}
+            )
+        revoke.assert_called_once_with(DID, "abc123def456")
+        self.assertRedirects(resp, reverse("api"), fetch_redirect_response=False)
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_a_tierless_member_is_not_offered_the_form(self):
+        # An unscoped key reaches every model, so this is the page half of the
+        # refusal `litellm.issue_key` also makes on its own account.
+        MembershipCache.objects.filter(did=DID).update(tier="")
+        with patch.object(litellm.LiteLLM, "keys_for", return_value=[]):
+            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                resp = self.client.get(reverse("api"))
+        self.assertContains(resp, "No tier yet")
+        self.assertNotContains(resp, 'value="create"')
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_a_member_at_the_cap_is_told_rather_than_offered_the_form(self):
+        with patch.object(
+            litellm.LiteLLM, "keys_for",
+            return_value=[_key(token=f"tok{n}0000000") for n in range(5)],
+        ):
+            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                resp = self.client.get(reverse("api"))
+        self.assertContains(resp, "Key limit reached")
+        self.assertNotContains(resp, 'value="create"')
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_unreadable_usage_does_not_take_the_keys_panel_with_it(self):
+        with patch.object(litellm.LiteLLM, "keys_for", return_value=[_key()]):
+            with patch.object(
+                litellm.LiteLLM, "usage",
+                side_effect=litellm.LiteLLMError("usage is down"),
+            ):
+                resp = self.client.get(reverse("api"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "laptop")
+        self.assertContains(resp, "Usage is unavailable right now")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_unreadable_keys_say_so_without_claiming_there_are_none(self):
+        # "Could not list your keys" and "you have no keys" are different
+        # facts, and rendering the empty state for the first is a lie.
+        with patch.object(
+            litellm.LiteLLM, "keys_for",
+            side_effect=litellm.LiteLLMError("the API service could not be reached"),
+        ):
+            resp = self.client.get(reverse("api"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "could not be listed")
+        self.assertNotContains(resp, "No keys yet")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_usage_is_asked_for_the_trailing_window(self):
+        with patch.object(litellm.LiteLLM, "keys_for", return_value=[]):
+            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)) as usage:
+                self.client.get(reverse("api"))
+        did, start, end = usage.call_args.args
+        self.assertEqual(did, DID)
+        self.assertEqual(
+            (date.fromisoformat(end) - date.fromisoformat(start)).days,
+            views.USAGE_WINDOW_DAYS - 1,
+        )
 
 
 class CallbackViewTests(TestCase):
