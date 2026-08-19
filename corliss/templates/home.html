@@ -35,7 +35,51 @@ every page, so this page cannot drift from them.
   {% endcomment %}
   <div class="account-view">
     {% if is_member %}
-      <p class="status-line status-line--member">Member of the cluster.</p>
+      {% comment %}
+      The member's landing. Two ways in, and they are genuinely different
+      things rather than one feature described twice: chat is the app, the API
+      is your own tools talking to the same models. Each block links the thing
+      it describes, and the chat one hides itself when CHAT_URL is unset — the
+      same rule the nav follows, so the page can't offer what isn't deployed.
+      {% endcomment %}
+      <h1>Welcome to the cluster.</h1>
+      <p class="page-text">You're in — the models on this machine are yours to
+      use. There are two ways to reach them, and you can use both.</p>
+
+      {% if CHAT_URL %}
+        <h2 class="section-title">Chat</h2>
+        <div class="card">
+          <p class="page-text">The quickest way in: a chat window in your
+          browser, already signed in as you. Ask questions, work through a
+          problem, hand it a document to read. Nothing to install and nothing
+          to configure — your membership is the whole setup.</p>
+          <p>
+            <a class="btn-primary" href="{{ CHAT_URL }}">Open chat</a>
+          </p>
+        </div>
+      {% endif %}
+
+      <h2 class="section-title">Your own tools</h2>
+      <div class="card">
+        <p class="page-text">The same models, over HTTP, from wherever you
+        already work — a script, your editor, an agent you're building. The
+        cluster speaks the OpenAI API, so most tools need only a base URL and a
+        key to point at it instead of a commercial provider.</p>
+        <p class="page-text">Create a key on the API page. You'll see it once,
+        so keep it somewhere safe — and if it ever goes astray, revoke it there
+        and make another.</p>
+        <p>
+          <a class="btn-primary" href="{% url 'api' %}">Create an API key</a>
+        </p>
+      </div>
+
+      <h2 class="section-title">Fair use</h2>
+      <div class="card">
+        <p class="page-text">This is one machine, shared. Your tier sets how
+        much of it you can draw on at once, so heavy jobs may be paced rather
+        than refused — nothing here bills you, and there is nothing to run up.
+        Use it well and use it often.</p>
+      </div>
     {% else %}
       <h2 class="section-title">Application</h2>
       <div class="card">

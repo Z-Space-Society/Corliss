@@ -321,10 +321,14 @@ class HomeIsWhereRefusalsLandTests(NoRosterMixin, TestCase):
         self.assertContains(resp, "Apply for membership")
 
     def test_a_member_gets_their_standing(self):
+        # The claim is which of the two states this page renders, not the exact
+        # words: a member gets the welcome, and specifically NOT the refusal
+        # that every gated surface redirects here to show.
         _grant()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertContains(resp, "Member of the cluster")
+        self.assertContains(resp, "Welcome to the cluster")
+        self.assertNotContains(resp, "not a member yet")
 
     def test_a_signed_out_visitor_still_gets_the_intro(self):
         resp = self.client.get(reverse("home"))
