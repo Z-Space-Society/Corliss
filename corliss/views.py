@@ -748,76 +748,96 @@ def manage(request):
     )
 
 
-# States an application can be in, as far as this cluster can tell. The
-# question "has this been dealt with" is answered by the cache and never by the
-# application record, which knows nothing about what happened to it — the
-# applicant writes it and it stays exactly as written whether they were
-# approved, refused, or never looked at.
-APPLICATION_PENDING = "pending"
-APPLICATION_MEMBER = "member"
-APPLICATION_REVOKED = "revoked"
-
-# Pending first: the queue is a to-do list, and the rows needing a decision are
-# the reason to open the page. Within a state, newest first — the order the
-# registry already returns them in.
-_APPLICATION_ORDER = {
-    APPLICATION_PENDING: 0,
-    APPLICATION_MEMBER: 1,
-    APPLICATION_REVOKED: 1,
-}
-
-
 def _applications(registry, members):
-    """The application queue for `/manage/`, cross-referenced with the cache.
+    """The application queue for `/manage/`: **only the ones still waiting.**
 
-    Returns a context dict rather than a list, because two facts about the
-    *read* have to reach the template alongside the rows: how many records
-    could not be parsed, and whether the list was cut short. Both would
-    otherwise show up as rows that simply are not there.
+    An application record is permanent — the applicant writes it once and it
+    stays exactly as written whether they were approved, refused, or never
+    looked at, because it knows nothing about what happened to it. So the index
+    returns every application ever made, and listing all of them made this panel
+    a second copy of the member table below it, with the actual queue — the
+    people nobody has answered — buried inside it. A to-do list that includes
+    everything already done is not a to-do list.
+
+    **Whether an application has been answered is a question for
+    `MembershipCache`, and it is answered here by time, not by presence.** A DID
+    having a cache row means somebody decided *once*; it does not mean the
+    record on file now has been decided. A revoked member who applies again
+    writes a fresh record — rkey `self`, so it replaces the old one with a new
+    `createdAt` — and a rule of "has a cache row, therefore handled" would drop
+    exactly the person who is asking to come back. So a row is still waiting
+    when there is no membership event for that DID at all, **or** when the
+    application post-dates the last one.
+
+    The cost is that an application whose `createdAt` could not be parsed is
+    treated as decided when the DID has a cache row, since it cannot be shown to
+    post-date anything. It is counted in `decided` rather than dropped — nothing
+    here vanishes without a number attached, which is the same reason
+    `unreadable` exists.
+
+    The comparison is between two clocks nobody here owns — the applicant's
+    client wrote `createdAt`, the registry wrote `grantedAt`/`revokedAt`, and
+    the latter is only second-resolution — so an approval issued moments after
+    an application could in principle read as earlier than it. **No grace margin
+    is applied deliberately.** Skew that close would leave a decided member
+    sitting in the queue flagged "asked again", which is visible, explains
+    itself, and clears the next time anyone decides anything about them; a
+    margin would instead hide a genuine re-application made inside it. This
+    panel's whole posture is that being seen twice beats not being seen.
+
+    Returns a context dict rather than a list, because three facts about the
+    *read* have to reach the template alongside the rows: how many applications
+    were already decided, how many records could not be parsed, and whether the
+    list was cut short. All three would otherwise show up as rows that simply
+    are not there.
 
     A failed read renders as a failure. Never as an empty queue — same posture
     as the roster above, and for the same reason: "nobody has applied" and "we
     could not find out" are different facts and the page must not conflate
     them.
 
-    The state of each application comes from `MembershipCache`, which is
-    already loaded for the table below — no extra query, and no second opinion
-    about who is a member.
+    `members` is already loaded for the table below, so the cross-reference
+    costs no extra query and there is no second opinion about who is a member.
     """
     try:
         listing = registry.fetch_applications()
     except membership.RegistryError as exc:
         return {
             "rows": [],
-            "pending": 0,
+            "decided": 0,
             "unreadable": 0,
             "truncated": False,
             "error": str(exc),
         }
 
     cached = {m.did: m for m in members}
-    rows = []
+    rows, decided = [], 0
     for application in listing:
         row = cached.get(application.did)
-        if row is None:
-            state = APPLICATION_PENDING
-        elif row.active:
-            state = APPLICATION_MEMBER
-        else:
-            state = APPLICATION_REVOKED
+        # Asked again since whatever was last decided about them. Worth saying
+        # on the row: "come back after a revocation" is a different decision
+        # from "let this stranger in", and the queue should not flatten them.
+        reapplied = (
+            row is not None
+            and application.created_at is not None
+            and application.created_at > row.last_event_at
+        )
+        if row is not None and not reapplied:
+            decided += 1
+            continue
         rows.append(
             {
                 "did": application.did,
                 "created_at": application.created_at,
                 "note": application.note,
-                "state": state,
+                "reapplied": reapplied,
             }
         )
 
-    rows.sort(key=lambda r: _APPLICATION_ORDER[r["state"]])
+    # No sort: the registry returns newest first and that is the order kept.
     return {
         "rows": rows,
-        "pending": sum(1 for r in rows if r["state"] == APPLICATION_PENDING),
+        "decided": decided,
         "unreadable": listing.unreadable,
         "truncated": listing.truncated,
         "error": None,

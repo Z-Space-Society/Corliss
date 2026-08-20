@@ -19,18 +19,43 @@
       </a>
 
       <div class="nav__items">
+        {% comment %}
+        Both entries are shown to any signed-in visitor and **opened** only by
+        GATE (`user.may_enter`), which is the same condition the pages
+        themselves enforce.
+
+        Shown-but-closed rather than hidden, and the difference matters in both
+        directions. Hiding them left a non-member with no idea what membership
+        is for — the home page explains the refusal, but the nav is where the
+        cluster says what it has. A live link would be worse: it used to be
+        exactly that, and a non-member clicking API got bounced home, which is a
+        promise broken on the next click rather than a door visibly closed.
+
+        A <span>, not an <a> without an href: nothing to click, nothing to
+        focus, nothing to middle-click into a new tab. `aria-disabled` says the
+        same thing to a screen reader that the colour says to everyone else, and
+        the title answers the question the closed door raises.
+
+        Chat still hides entirely when CHAT_URL is unset. A disabled entry says
+        "not for you yet"; on a cluster with no chat deployed, that would be a
+        different and false statement.
+        {% endcomment %}
         {% if user.is_authenticated and CHAT_URL %}
-          <a class="nav__item" href="{{ CHAT_URL }}">Chat</a>
+          {% if user.may_enter %}
+            <a class="nav__item" href="{{ CHAT_URL }}">Chat</a>
+          {% else %}
+            <span class="nav__item nav__item--closed" aria-disabled="true"
+                  title="Members only — a cluster admin has to let you in first">Chat</span>
+          {% endif %}
         {% endif %}
 
-        {% comment %}
-        Offered on the same terms the page is gated on. It used to be shown to
-        anyone signed in while the view required membership, so a non-member
-        got a link that bounced them home — harmless while the page was a
-        placeholder, and a broken promise now that it holds their keys.
-        {% endcomment %}
-        {% if user.is_authenticated and user.may_enter %}
-          <a class="nav__item" href="{% url 'api' %}">API</a>
+        {% if user.is_authenticated %}
+          {% if user.may_enter %}
+            <a class="nav__item" href="{% url 'api' %}">API</a>
+          {% else %}
+            <span class="nav__item nav__item--closed" aria-disabled="true"
+                  title="Members only — a cluster admin has to let you in first">API</span>
+          {% endif %}
         {% endif %}
 
         {% comment %}

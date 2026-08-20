@@ -371,7 +371,24 @@ difference from how the Manage Console does the same thing.
 #### The queue
 
 `/manage/` reads applications back through the registry's `listRequests` query
-(`MembershipRegistry.fetch_applications`).
+(`MembershipRegistry.fetch_applications`) and lists **only the ones still
+awaiting a decision** — see `views._applications`.
+
+- **An application record is permanent, so "everyone who has applied" is not a
+  queue.** The record reads identically whether its author was approved,
+  refused, or never looked at, and it stays on file afterwards; listing all of
+  them made this panel a second copy of the member table below it.
+- **Whether one has been answered is settled by time, not by presence.** A DID
+  having a `MembershipCache` row means somebody decided *once* — not that the
+  record on file now has been decided. A revoked member who applies again writes
+  a fresh record at the same rkey, so "has a cache row, therefore handled" would
+  drop exactly the person asking to come back. A row is still waiting when there
+  is no membership event for that DID, **or** when the application post-dates
+  the last one; the latter is flagged *asked again*, because readmitting someone
+  is a different decision from admitting a stranger.
+- **What is left out is counted, never silently dropped** — the same posture as
+  the unreadable count, so the queue can be short without anything going
+  missing.
 
 - **This is the one collection Corliss may read from the firehose index**, and
   the exception is not a softening of the rule above it. Grants must come from
@@ -526,6 +543,18 @@ place membership can be asked for, so `authorize` refuses to there rather than
 returning an OIDC `error=access_denied` to the relying party — a deliberate
 deviation, because the spec-shaped answer leaves the person inside Open WebUI
 reading a generic failure with nowhere to go.
+
+**The nav shows the gated surfaces to a non-member and opens neither.** Chat and
+API render as disabled entries on the same `may_enter` condition the pages
+enforce, so the row does not reflow when someone is let in. Both alternatives
+were worse in opposite directions: hiding them left a non-member with no idea
+what membership is *for* — the home page explains the refusal, but the nav is
+where the cluster says what it has — while a live link is a promise broken on
+the next click, which is exactly what Chat used to be. They are `<span>`s rather
+than `<a>`s without an `href`, so there is nothing to click, focus, or
+middle-click into a tab. Chat still vanishes entirely when `CHAT_URL` is unset:
+a closed door says "not for you yet", which on a cluster with no chat deployed
+would be a different statement, and a false one.
 
 **A cache miss never reaches the registry.** The gate reads the cache and the
 roster and nothing else; reconciliation is an operator action and a scheduled

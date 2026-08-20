@@ -5,8 +5,11 @@ The cluster console. Three tables that come from three completely different
 places, and the difference is the point:
 
 - Applications are read live from the registry's *index*, and are written by
-  the applicants themselves. They carry no authority whatsoever — the state
-  column is answered by the member cache, never by the application.
+  the applicants themselves. They carry no authority whatsoever. Only the ones
+  still awaiting a decision are listed: an application record is permanent and
+  reads the same however it was answered, so the member cache is what tells the
+  answered ones apart — see `views._applications` for why that question is
+  settled by time rather than by the mere existence of a cache row.
 - Members are Corliss's own cache — what this deployment believes. It can be
   stale, incomplete, or (in the orphan case) wrong.
 - Admins are read live from the registry's public roster record. No cache, no
@@ -35,10 +38,12 @@ question, "who can decide membership today".
   is the authority.</p>
 
   <h2 class="section-title">Applications</h2>
-  <p class="hint-text">Who has asked to join. Each one is a public record in the
-  applicant's own PDS, read live from the registry's index — a request, never an
-  entitlement. Whether it was acted on is answered by the member cache below,
-  not by the application, which reads the same however it was decided.</p>
+  <p class="hint-text">Who is waiting for a decision. Each one is a public
+  record in the applicant's own PDS, read live from the registry's index — a
+  request, never an entitlement. Applications already answered are left out:
+  the record itself reads the same however it was decided, so the member cache
+  below is what tells them apart, and listing every one of them would make this
+  a second copy of that table rather than a queue.</p>
 
   <div class="card">
     {% if applications.error %}
@@ -55,24 +60,26 @@ question, "who can decide membership today".
               <th>Applicant</th>
               <th>Applied</th>
               <th>Note</th>
-              <th>State</th>
             </tr>
           </thead>
           <tbody>
+            {% comment %}
+            No state column: every row here is awaiting a decision, so it would
+            be one value repeated. The one distinction worth drawing is the
+            applicant who already has a membership history — letting someone
+            back in after a revocation is a different decision from admitting a
+            stranger, and the queue should not flatten the two.
+            {% endcomment %}
             {% for row in applications.rows %}
               <tr>
-                <td class="data-table__handle" title="{{ row.did }}">{{ row.handle }}</td>
-                <td class="data-table__muted">{{ row.created_at|date:"Y-m-d H:i"|default:"—" }}</td>
-                <td class="data-table__note">{{ row.note|default:"—" }}</td>
-                <td>
-                  {% if row.state == "member" %}
-                    <span class="pill pill--active">member</span>
-                  {% elif row.state == "revoked" %}
-                    <span class="pill">revoked</span>
-                  {% else %}
-                    <span class="pill">awaiting a decision</span>
+                <td class="data-table__handle" title="{{ row.did }}">
+                  {{ row.handle }}
+                  {% if row.reapplied %}
+                    <span class="pill" title="Has a membership history and has applied again since it last changed">asked again</span>
                   {% endif %}
                 </td>
+                <td class="data-table__muted">{{ row.created_at|date:"Y-m-d H:i"|default:"—" }}</td>
+                <td class="data-table__note">{{ row.note|default:"—" }}</td>
               </tr>
             {% endfor %}
           </tbody>
@@ -80,10 +87,12 @@ question, "who can decide membership today".
       </div>
 
       <p class="hint-text">
-        {% if applications.pending %}
-          {{ applications.pending }} awaiting a decision, listed first.
-        {% else %}
-          Every application on file has been decided.
+        {{ applications.rows|length }} awaiting a decision.
+        {% if applications.decided %}
+          {{ applications.decided }} already-decided
+          application{{ applications.decided|pluralize }}
+          {{ applications.decided|pluralize:"is,are" }} on file and not shown —
+          counted here so the queue can be short without anything going missing.
         {% endif %}
         {% if applications.unreadable %}
           {{ applications.unreadable }}
@@ -96,6 +105,18 @@ question, "who can decide membership today".
           There are more than this page shows; the list stops early rather than
           following the registry's cursor indefinitely.
         {% endif %}
+      </p>
+    {% elif applications.decided %}
+      {% comment %}
+      An empty queue with applications on file is the ordinary good state, and
+      it reads differently from having none at all — which is why these are two
+      messages and not one. Saying "nobody has applied" to an admin who has
+      approved four people would be plainly false.
+      {% endcomment %}
+      <p class="alert alert--notice" role="status">
+        <strong>Nothing is waiting.</strong> All
+        {{ applications.decided }} application{{ applications.decided|pluralize }}
+        on file {{ applications.decided|pluralize:"has,have" }} been decided.
       </p>
     {% else %}
       <p class="alert alert--notice" role="status">

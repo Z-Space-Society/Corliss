@@ -132,13 +132,23 @@ every page, so this page cannot drift from them.
           <p class="page-text">Applying writes a short, <strong>public</strong>
           record to your own atproto repo — anyone can read it, and it stays
           yours. Keep the note brief, and don't put contact details in it.</p>
+          {% comment %}
+          One line, not a textarea. The lexicon caps the note at 300 graphemes
+          and it is world-readable, so the field should look like the small
+          public thing it is — a box the size of a paragraph invites an essay,
+          and invites putting something in it that shouldn't be public.
+
+          `.input-row` is the same shape login.html uses for the handle field,
+          with the label sitting where the `@` prefix does there.
+          {% endcomment %}
           <form method="post" action="{% url 'apply' %}">
             {% csrf_token %}
-            <p>
-              <label for="note">A line about yourself (optional, public)</label>
-              <textarea id="note" name="note" rows="3" maxlength="300"
-                        class="input"></textarea>
-            </p>
+            <div class="input-row">
+              <label class="input-row__prefix input-row__prefix--label"
+                     for="note">Public note:</label>
+              <input id="note" name="note" type="text" maxlength="300"
+                     autocomplete="off" placeholder="optional">
+            </div>
             <button type="submit" class="btn-primary">Apply for membership</button>
           </form>
         {% endif %}

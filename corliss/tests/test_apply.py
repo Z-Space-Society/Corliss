@@ -31,7 +31,7 @@ from unittest.mock import patch
 
 import requests
 from django.core.cache import cache
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -454,6 +454,16 @@ class HomePageStateTests(ClearsCache):
             resp = self.client.get(reverse("home"))
         self.assertContains(resp, "Apply for membership")
         self.assertContains(resp, 'action="/membership/apply"')
+
+    def test_the_note_is_one_line(self):
+        # A box the size of a paragraph invites an essay into a field the
+        # lexicon caps at 300 graphemes — and invites putting something in it
+        # that the author may not have registered is world-readable.
+        with patch.object(atproto, "find_record", return_value=None):
+            resp = self.client.get(reverse("home"))
+        self.assertContains(resp, 'name="note" type="text"')
+        self.assertContains(resp, 'maxlength="300"')
+        self.assertNotContains(resp, "<textarea")
         self.assertContains(resp, "public")
 
     def test_an_existing_application_shows_pending_and_hides_the_form(self):
@@ -498,6 +508,59 @@ class HomePageStateTests(ClearsCache):
         )
         self.assertContains(resp, "no connection to a PDS")
         self.assertNotContains(resp, 'action="/membership/apply"')
+
+
+class NavForANonMemberTests(ClearsCache):
+    """GATE's nav-side form: the member surfaces are visible and shut, not
+    absent.
+
+    Hiding them told a non-member nothing about what membership is for; linking
+    them live — which is what Chat did — handed out a promise that breaks on the
+    next click, since both pages refuse them anyway.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = make_member()
+        self.client.force_login(self.user)
+        patcher = patch.object(atproto, "find_record", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    @override_settings(CHAT_URL="https://chat.example.com")
+    def test_a_non_member_sees_both_entries_and_can_open_neither(self):
+        resp = self.client.get(reverse("home"))
+        html = resp.content.decode()
+
+        self.assertIn(">Chat</span>", html)
+        self.assertIn(">API</span>", html)
+        # The claim that matters: no way through. A span has no href, so this
+        # also fails if either ever reverts to a bare <a>.
+        self.assertNotIn('href="https://chat.example.com"', html)
+        self.assertNotIn(f'href="{reverse("api")}"', html)
+
+    @override_settings(CHAT_URL="https://chat.example.com")
+    def test_a_member_gets_real_links(self):
+        MembershipCache.objects.create(
+            did=DID,
+            active=True,
+            tier="level-2",
+            last_rkey=f"{DID}:3lqx",
+            last_event_at=timezone.now(),
+            author_did="did:plc:admin",
+        )
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertIn('href="https://chat.example.com"', html)
+        self.assertIn(f'href="{reverse("api")}"', html)
+        self.assertNotIn("nav__item--closed", html)
+
+    @override_settings(CHAT_URL="")
+    def test_chat_stays_hidden_when_it_is_not_deployed(self):
+        # A closed door says "not for you yet". On a cluster with no chat, that
+        # would be a different statement, and a false one.
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertNotIn(">Chat</span>", html)
+        self.assertIn(">API</span>", html)
 
 
 class MembershipLabelTests(ClearsCache):

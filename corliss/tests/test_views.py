@@ -471,11 +471,12 @@ class ManageViewTests(NoRosterMixin, TestCase):
         self.assertContains(resp, "did:plc:applicant")
         self.assertContains(resp, "HEYO")
         self.assertContains(resp, "2026-08-17")
-        self.assertContains(resp, "awaiting a decision")
+        self.assertContains(resp, "1 awaiting a decision")
 
-    def test_an_applicants_state_is_answered_by_the_cache_not_the_application(self):
-        """The record reads the same however it was decided, so the only place
-        that can say what happened is the membership cache."""
+    def test_applications_already_decided_are_left_out_but_counted(self):
+        """The queue is the people nobody has answered, not everyone who ever
+        asked. Listing the decided ones made this a second copy of the member
+        table below it."""
         from corliss import membership
 
         _grant(did="did:plc:member")
@@ -484,11 +485,14 @@ class ManageViewTests(NoRosterMixin, TestCase):
             active=False,
             tier="level-1",
             last_rkey="did:plc:exmember:3lqxaaaaaaaab",
-            last_event_at="2026-02-01T00:00:00Z",
+            last_event_at="2026-09-01T00:00:00Z",
             author_did="did:plc:anadmin",
         )
+        # Each decided application predates the event that decided it, which is
+        # the ordinary order of things: you ask, then you are answered.
+        # `_grant` stamps 2026-01-01; the revocation above stamps 2026-09-01.
         self._applications([
-            membership.Application("did:plc:member", _at("2026-08-01T00:00:00Z")),
+            membership.Application("did:plc:member", _at("2025-12-01T00:00:00Z")),
             membership.Application("did:plc:exmember", _at("2026-08-02T00:00:00Z")),
             membership.Application("did:plc:applicant", _at("2026-08-03T00:00:00Z")),
         ])
@@ -498,14 +502,67 @@ class ManageViewTests(NoRosterMixin, TestCase):
         with self._roster():
             resp = self.client.get(reverse("manage"))
 
-        html = resp.content.decode()
-        # Pending first: the queue is a to-do list before it is a record.
-        self.assertLess(
-            html.index("did:plc:applicant"), html.index("did:plc:member")
+        # Scoped to the applications panel: both decided DIDs still appear
+        # further down, in the member table, which is the whole point of not
+        # repeating them here.
+        html = " ".join(resp.content.decode().split())
+        # Split on the heading, not the bare word — "Membership" contains it.
+        queue = html.split('<h2 class="section-title">Members</h2>')[0]
+        self.assertIn("did:plc:applicant", queue)
+        # Both were answered before their application on file, so neither is
+        # waiting — including the revoked one, whose decision was "no longer".
+        self.assertNotIn("did:plc:member", queue)
+        self.assertNotIn("did:plc:exmember", queue)
+        # Counted, not silently dropped: the same posture as `unreadable`.
+        self.assertIn("1 awaiting a decision", queue)
+        self.assertIn("2 already-decided applications are on file", queue)
+
+    def test_applying_again_after_a_decision_puts_them_back_in_the_queue(self):
+        """The case a "has a cache row, therefore handled" rule would drop: a
+        revoked member asking to come back writes a fresh record at the same
+        rkey, and would otherwise be invisible forever."""
+        from corliss import membership
+
+        MembershipCache.objects.create(
+            did="did:plc:exmember",
+            active=False,
+            tier="level-1",
+            last_rkey="did:plc:exmember:3lqxaaaaaaaab",
+            last_event_at="2026-02-01T00:00:00Z",
+            author_did="did:plc:anadmin",
         )
-        self.assertContains(resp, "1 awaiting a decision")
-        for state in ("member", "revoked"):
-            self.assertContains(resp, f">{state}</span>")
+        self._applications([
+            membership.Application(
+                "did:plc:exmember", _at("2026-08-02T00:00:00Z"), "let me back in"
+            ),
+        ])
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, "did:plc:exmember")
+        self.assertContains(resp, "let me back in")
+        # Flagged rather than shown as an ordinary applicant: readmitting
+        # someone is a different decision from admitting a stranger.
+        self.assertContains(resp, "asked again")
+
+    def test_an_empty_queue_with_history_does_not_claim_nobody_applied(self):
+        from corliss import membership
+
+        _grant(did="did:plc:member")  # stamps 2026-01-01
+        self._applications([
+            membership.Application("did:plc:member", _at("2025-12-01T00:00:00Z")),
+        ])
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, "Nothing is waiting")
+        self.assertNotContains(resp, "Nobody has applied")
 
     def test_records_that_could_not_be_read_are_reported_as_a_count(self):
         from corliss import membership

@@ -134,6 +134,20 @@ a {
   color: var(--text);
 }
 
+/* A surface this visitor can see but not open yet — GATE's nav-side form. It
+   keeps the row's shape so the nav does not reflow when someone is let in, and
+   drops every affordance that would suggest otherwise: no hover, no pointer,
+   and dimmed to the token that already means "present, not available". */
+.nav__item--closed {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.nav__item--closed:hover {
+  background: none;
+  color: var(--text-disabled);
+}
+
 .nav__divider {
   width: 1px;
   height: 22px;
@@ -393,6 +407,13 @@ a {
   font-size: 14px;
   font-family: var(--font-mono);
   margin-right: 2px;
+}
+
+/* The prefix as a label rather than a sigil. `@` wants to sit flush against
+   what follows it; a word does not. */
+.input-row__prefix--label {
+  margin-right: 10px;
+  white-space: nowrap;
 }
 
 .input-row input {
