@@ -409,6 +409,64 @@ a {
   margin-right: 2px;
 }
 
+/* --- Console row controls ------------------------------------------------ */
+/* The membership decisions, which live inside table cells. Each is its own
+   form — one per row, since each carries its own DID — so they need to sit
+   side by side without the block layout a bare <form> brings. */
+
+.row-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 6px 0 0;
+}
+
+.select {
+  background: var(--inset);
+  border: 1px solid var(--border-input);
+  border-radius: 7px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 5px 8px;
+}
+
+.select:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+/* Not .btn-primary: that one is full-width and block, which is right for the
+   one action a page is about and wrong for a control repeated down a column. */
+.btn-row {
+  background: var(--surface);
+  border: 1px solid var(--border-input);
+  border-radius: 7px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+
+.btn-row:hover {
+  border-color: var(--border-hover);
+}
+
+/* Revoking ends someone's access. It stays a button like any other until the
+   pointer is on it, then says what kind of button it is. */
+.btn-row--danger:hover {
+  background: var(--danger-hover-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.hint-inline {
+  color: var(--text-disabled);
+  font-size: 12px;
+}
+
 /* The prefix as a label rather than a sigil. `@` wants to sit flush against
    what follows it; a word does not. */
 .input-row__prefix--label {

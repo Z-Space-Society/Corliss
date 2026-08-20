@@ -1,0 +1,24 @@
+{% comment %}
+The tier control, shared by the two tables that write a grant — approving an
+application and changing a member's tier are the same registry call, so they
+must offer the same vocabulary or one of them is lying about what it will do.
+
+`tiers` comes from `membership.TIERS`, the same tuple `MembershipRegistry.approve`
+validates against and a copy of the table `approve_member.lua` enforces. Three
+places, one list, and this template is deliberately not a fourth.
+
+**There is no blank option.** A grant with no tier is a fail-open bug rather
+than a harmless default — a consumer that turns it into an empty group claim
+makes Open WebUI remove nothing, so the member silently keeps whatever they had.
+The control cannot express one, which is the near half of the same guard the Lua
+enforces at the far end.
+
+Callers pass `selected`: the free tier when admitting someone new, that member's
+current tier when changing it, so the dropdown always opens on the answer that
+changes nothing.
+{% endcomment %}
+<select name="tier" class="select" aria-label="Tier">
+  {% for tier in tiers %}
+    <option value="{{ tier }}"{% if tier == selected %} selected{% endif %}>{{ tier }}</option>
+  {% endfor %}
+</select>

@@ -50,11 +50,15 @@ here that may be read from the firehose index. See "Applications" below for why
 that does not contradict the first invariant above.
 """
 
+import json
 import logging
 import re
 from datetime import datetime, timezone as dt_timezone
 
 import requests
+from cryptography.hazmat.primitives.asymmetric import ec
+from jwt.algorithms import ECAlgorithm
+from jwt.exceptions import InvalidKeyError
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
@@ -1144,6 +1148,26 @@ class RegistryError(Exception):
 
 SYNC_MEMBERS_NSID = "network.sharedcomputer.membership.syncMembers"
 LIST_REQUESTS_NSID = "network.sharedcomputer.membership.listRequests"
+APPROVE_MEMBER_NSID = "network.sharedcomputer.admin.approveMember"
+REVOKE_MEMBER_NSID = "network.sharedcomputer.admin.revokeMember"
+
+# The tier vocabulary, mirroring `scn-ops/src/tiers.ts` and the TIERS table in
+# `lua/approve_member.lua`. SCN owns these slugs; they are not read from
+# whatever enforces entitlements, which is the point — the registry decides
+# what a tier is, and the enforcer maps from the slug.
+#
+# Slugs rather than integers because `level-0` is the free tier and the most
+# common one. The reason is stated upstream in JavaScript terms (`0` is falsy,
+# so `if (grant.tier)` drops exactly the members it matters most for) and it
+# survives the trip to Python unchanged: `if row.tier` is the same bug here.
+#
+# Copied rather than fetched, deliberately. The list is a decision, not data,
+# and a registry outage must not leave Corliss unable to name a tier.
+TIERS = tuple(f"level-{n}" for n in range(10))
+DEFAULT_TIER = "level-0"
+
+# The revocation lexicon's cap on `reason`.
+REASON_MAX_CHARS = 300
 
 REGISTRY_TIMEOUT = 30
 
@@ -1154,6 +1178,108 @@ REGISTRY_TIMEOUT = 30
 # design anyway, and the list says when it stopped early.
 APPLICATIONS_PAGE_SIZE = 100
 APPLICATIONS_MAX_PAGES = 5
+
+
+# --- The registry as an OAuth party ----------------------------------------
+#
+# To *write* to the registry an admin needs a HappyView session, and getting one
+# has a constraint that decides the shape of Corliss's whole login path:
+#
+# **HappyView provisions the DPoP key itself.** `POST /oauth/dpop-keys` returns
+# a private JWK, and a client is expected to run its atproto handshake with that
+# key before handing the resulting tokens back at `POST /oauth/sessions`.
+# HappyView holds the key so it can prove possession to the PDS on the member's
+# behalf.
+#
+# The consequence: **Corliss cannot register a session from tokens it already
+# has.** An ordinary login binds its tokens to the ephemeral key
+# `atproto.generate_key()` mints per flow, which HappyView has never seen and
+# cannot use. Whoever does the handshake has to already be using HappyView's
+# key — which is why `views.login` asks the roster *before* PAR and provisions
+# from here when the answer is yes. See that function for why deciding on an
+# unverified DID is safe.
+#
+# Corliss is a **public** client here, exactly as the SPA is: a client key and a
+# PKCE verifier binding the provision to the registration, no client secret.
+# Nothing needs one — the pair is single-use and short-lived — and not minting a
+# secret keeps this repo's answer to "what can this key do if it leaks" the same
+# as scn-ops': register a session for someone who has already authorised, which
+# still cannot write anything the roster does not allow.
+
+
+def provision_registry_key(registry, *, pkce_challenge):
+    """Ask HappyView for a DPoP keypair. Returns `(provision_id, private_key)`.
+
+    The key comes back as a private JWK and leaves here as a `cryptography` EC
+    key, so callers hold the same type `atproto.generate_key()` returns and
+    nothing downstream needs to know where it came from.
+
+    Raises `RegistryError`. Callers on the login path must treat that as
+    "no approve powers this session", never as a failed login: HappyView being
+    unreachable means no approvals, which is a documented consequence, and must
+    not escalate into nobody being able to sign in.
+    """
+    if not registry.url or not registry.client_key:
+        raise RegistryError(
+            "registry is not configured for sessions: MEMBERSHIP_REGISTRY_URL "
+            "and MEMBERSHIP_REGISTRY_CLIENT_KEY must both be set"
+        )
+    payload = registry._post(
+        "/oauth/dpop-keys", {"pkce_challenge": pkce_challenge}
+    )
+    provision_id = payload.get("provision_id")
+    jwk = payload.get("dpop_key")
+    if not provision_id or not isinstance(jwk, dict):
+        raise RegistryError("registry did not return a DPoP key provision")
+    try:
+        # PyJWT is already a dependency and already parses JWKs for the OIDC
+        # half; no second key library for one conversion.
+        key = ECAlgorithm.from_jwk(json.dumps(jwk))
+    except (ValueError, TypeError, InvalidKeyError) as exc:
+        raise RegistryError(f"registry returned an unusable DPoP key: {exc}") from exc
+    if not isinstance(key, ec.EllipticCurvePrivateKey):
+        # A public key would leave the session unable to sign anything, and the
+        # failure would surface much later as an unexplained 401.
+        raise RegistryError("registry returned a public DPoP key, not a private one")
+    return provision_id, key
+
+
+def register_registry_session(
+    registry,
+    *,
+    provision_id,
+    pkce_verifier,
+    did,
+    token_data,
+    pds_url,
+    issuer,
+    scopes,
+):
+    """Hand the freshly-exchanged tokens to HappyView as a session for `did`.
+
+    After this the admin can call procedures: HappyView resolves the bearer to
+    `did`, the Lua reads that as `caller_did`, and the runtime stamps it as the
+    author of whatever gets written.
+
+    Raises `RegistryError`, which on the login path is not fatal — see
+    `provision_registry_key`.
+    """
+    payload = {
+        "provision_id": provision_id,
+        "pkce_verifier": pkce_verifier,
+        "did": did,
+        "access_token": token_data.get("access_token", ""),
+        "refresh_token": token_data.get("refresh_token", ""),
+        "scopes": scopes,
+        "pds_url": pds_url,
+        "issuer": issuer,
+    }
+    result = registry._post("/oauth/sessions", payload)
+    if result.get("did") != did:
+        raise RegistryError(
+            f"registry registered a session for {result.get('did')!r}, not {did!r}"
+        )
+    return result
 
 
 class MembershipRegistry:
@@ -1251,6 +1377,156 @@ class MembershipRegistry:
         if not isinstance(payload, dict):
             raise RegistryError("registry response was not a JSON object")
         return payload
+
+    def _post(self, path, payload):
+        """POST JSON to one of the registry's own (non-XRPC) endpoints.
+
+        Its OAuth surface — `/oauth/dpop-keys`, `/oauth/sessions` — rather than
+        `/xrpc/...`. Unauthenticated in the DPoP sense: there is no session yet,
+        which is what these calls exist to create. The client key is what
+        identifies the caller, and it is required here even though `_query` does
+        without one.
+        """
+        try:
+            response = requests.post(
+                f"{self.url}{path}",
+                json=payload,
+                headers={"Content-Type": "application/json", **self._headers()},
+                timeout=REGISTRY_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            raise RegistryError(f"could not reach the registry: {exc}") from exc
+
+        if not response.ok:
+            raise RegistryError(
+                f"registry returned HTTP {response.status_code} for {path}: "
+                f"{response.text[:300]}"
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise RegistryError(f"registry response to {path} was not JSON") from exc
+        if not isinstance(body, dict):
+            raise RegistryError(f"registry response to {path} was not an object")
+        return body
+
+    def _headers(self):
+        """The two headers every call to the registry carries.
+
+        `Host` is what makes the internal address usable at all — see `_query`.
+        The client key identifies which registry client is calling; a query does
+        not need it, and a procedure does.
+        """
+        headers = {}
+        if self.client_key:
+            headers["x-client-key"] = self.client_key
+        if self.host:
+            headers["Host"] = self.host
+        return headers
+
+    def _procedure(self, nsid, payload, *, token):
+        """Call one XRPC *procedure* on the registry, as the admin who owns
+        `token`. Returns its JSON object.
+
+        The authenticated sibling of `_query`, and the asymmetry between them is
+        the whole architecture in miniature. A query dispatches with no session
+        at all, which is why every read script begins by checking `caller_did`
+        itself. A procedure never reaches the script without DPoP
+        authentication — HappyView refuses it with "XRPC procedures require
+        DPoP authentication" first — and that refusal is exactly what makes a
+        write safe to expose: no shared token can produce a proof, so no shared
+        token can ever author a grant.
+
+        What authenticates here is the **admin's own** session: their access
+        token as the bearer, and a proof signed by the DPoP key HappyView
+        provisioned for them at login. `caller_did` follows from that, the Lua
+        checks it against the roster, and the runtime stamps it as the record's
+        author. There is deliberately no way to call this as Corliss itself.
+        """
+        if not self.url:
+            raise RegistryError(
+                "registry is not configured: MEMBERSHIP_REGISTRY_URL must be set"
+            )
+        if not self.client_key:
+            # Unlike a query, which works without one. Said plainly because the
+            # fix is a deployment step (`zai-set-console client_key`), not a bug.
+            raise RegistryError(
+                "registry is not configured for writes: "
+                "MEMBERSHIP_REGISTRY_CLIENT_KEY must be set"
+            )
+
+        dpop_key = atproto.key_from_pem(token.dpop_private_pem)
+        try:
+            response, nonce = atproto.post_json_with_dpop(
+                f"{self.url}/xrpc/{nsid}",
+                payload,
+                token.access_token,
+                dpop_key,
+                nonce=token.dpop_nonce or None,
+                headers=self._headers(),
+                timeout=REGISTRY_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            raise RegistryError(f"could not reach the registry: {exc}") from exc
+
+        if nonce and nonce != token.dpop_nonce:
+            token.dpop_nonce = nonce
+            token.save(update_fields=["dpop_nonce", "updated_at"])
+
+        if response.status_code != 200:
+            # A Lua `error()` comes back as HTTP 500 with the script's own text
+            # ("forbidden: caller is not a current admin"), which is the half an
+            # operator — or an admin who has just been removed from the roster —
+            # actually needs to read.
+            raise RegistryError(
+                f"registry returned HTTP {response.status_code}: "
+                f"{response.text[:300]}"
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RegistryError("registry response was not JSON") from exc
+        if not isinstance(payload, dict):
+            raise RegistryError("registry response was not a JSON object")
+        return payload
+
+    def approve(self, token, did, tier):
+        """Grant membership at `tier`, authored by the admin behind `token`.
+
+        **Also how a tier change is made.** Re-approving writes a fresh grant
+        and latest-event-wins resolves it; no record is ever edited, and the old
+        grant stays in the space as the history of what was decided when. So
+        there is no `change_tier` here and there should not be one — it would be
+        a second name for this call and would imply an edit that never happens.
+
+        Approving twice is harmless for the same reason, which matters because
+        the push that clears the row from the queue is asynchronous and an admin
+        may well click again before it lands.
+        """
+        if tier not in TIERS:
+            # Refused here as well as in the Lua. A tierless or unknown grant is
+            # a fail-open bug rather than a harmless default — a consumer that
+            # turns it into an empty group claim makes Open WebUI remove
+            # nothing, so the member silently keeps the tier they had.
+            raise RegistryError(f"not a tier this network issues: {tier!r}")
+        return self._procedure(
+            APPROVE_MEMBER_NSID, {"did": did, "tier": tier}, token=token
+        )
+
+    def revoke(self, token, did, reason=""):
+        """End membership, authored by the admin behind `token`.
+
+        A revocation is a **new record**, never a deletion: the space is
+        append-only, so what this writes is the event "access ended here", and
+        the grant it answers stays exactly where it was. A member is active iff
+        there is a grant with no later revocation.
+        """
+        payload = {"did": did}
+        reason = (reason or "").strip()
+        if reason:
+            payload["reason"] = reason[:REASON_MAX_CHARS]
+        return self._procedure(REVOKE_MEMBER_NSID, payload, token=token)
 
     def fetch_events(self):
         """Every grant and revocation in the registry space, push-shaped.

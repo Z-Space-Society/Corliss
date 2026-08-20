@@ -37,6 +37,20 @@ question, "who can decide membership today".
   to decide that. Membership is cached here; the membership registry (HappyView)
   is the authority.</p>
 
+  {% comment %}
+  What the last decision did, carried one hop through the session because
+  approve and revoke redirect after posting. Read once and gone — a refresh
+  should not replay an announcement about a write that happened before it.
+  {% endcomment %}
+  {% if manage_notice %}
+    <p class="alert alert--notice" role="status">{{ manage_notice }}
+    <span class="hint-inline">The tables below may take a moment to catch up:
+    the registry pushes the event back here after writing it.</span></p>
+  {% endif %}
+  {% if manage_error %}
+    <p class="alert" role="alert">{{ manage_error }}</p>
+  {% endif %}
+
   <h2 class="section-title">Applications</h2>
   <p class="hint-text">Who is waiting for a decision. Each one is a public
   record in the applicant's own PDS, read live from the registry's index — a
@@ -60,6 +74,7 @@ question, "who can decide membership today".
               <th>Applicant</th>
               <th>Applied</th>
               <th>Note</th>
+              <th>Decide</th>
             </tr>
           </thead>
           <tbody>
@@ -69,6 +84,10 @@ question, "who can decide membership today".
             applicant who already has a membership history — letting someone
             back in after a revocation is a different decision from admitting a
             stranger, and the queue should not flatten the two.
+
+            One form per row rather than one around the table: each carries its
+            own DID and its own tier, and a single form would make the browser
+            decide which row a submit belonged to.
             {% endcomment %}
             {% for row in applications.rows %}
               <tr>
@@ -80,6 +99,19 @@ question, "who can decide membership today".
                 </td>
                 <td class="data-table__muted">{{ row.created_at|date:"Y-m-d H:i"|default:"—" }}</td>
                 <td class="data-table__note">{{ row.note|default:"—" }}</td>
+                <td>
+                  {% if can_decide %}
+                    <form method="post" class="row-form">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="approve">
+                      <input type="hidden" name="did" value="{{ row.did }}">
+                      {% include "_tier_select.html" with selected=default_tier %}
+                      <button type="submit" class="btn-row">Approve</button>
+                    </form>
+                  {% else %}
+                    <span class="hint-inline">no registry session</span>
+                  {% endif %}
+                </td>
               </tr>
             {% endfor %}
           </tbody>
@@ -126,11 +158,20 @@ question, "who can decide membership today".
       </p>
     {% endif %}
 
-    {% if MANAGE_URL %}
-      <p class="hint-text">Approving is still done in the
-      <a href="{{ MANAGE_URL }}">Manage Console</a>. A grant is a write to the
-      registry space, and the registry accepts one only from the approving
-      admin's own session — which Corliss does not hold yet.</p>
+    {% comment %}
+    What used to stand here sent the admin to the Manage Console, because a
+    grant needs the approving admin's own DPoP-authenticated session and Corliss
+    held none. It holds one now — provisioned from the registry during an
+    admin's login — so the buttons above are that link's replacement. What has
+    not moved is roster editing, which the console still owns.
+    {% endcomment %}
+    {% if not can_decide %}
+      <p class="hint-text">Deciding needs a registry session, and this sign-in
+      picked one up. <a href="{% url 'logout' %}">Sign out and in again</a> to
+      get one — or if the registry was unreachable when you signed in, once it
+      is back.{% if MANAGE_URL %} The
+      <a href="{{ MANAGE_URL }}">Manage Console</a> still works in the
+      meantime.{% endif %}</p>
     {% endif %}
   </div>
 
@@ -149,6 +190,7 @@ question, "who can decide membership today".
               <th>Tier</th>
               <th>Last event</th>
               <th>Granted by</th>
+              <th>Change</th>
             </tr>
           </thead>
           <tbody>
@@ -165,6 +207,41 @@ question, "who can decide membership today".
                 <td>{{ m.tier|default:"—" }}</td>
                 <td class="data-table__muted">{{ m.last_event_at|date:"Y-m-d H:i" }}</td>
                 <td class="data-table__handle data-table__muted" title="{{ m.author_did }}">{{ m.author_handle }}</td>
+                <td>
+                  {% comment %}
+                  Both controls write a record; neither edits one. Setting a
+                  tier is the same `approveMember` call that admits someone —
+                  a fresh grant, resolved latest-event-wins — which is why the
+                  button says what it does rather than "save", and why it reads
+                  the same for an active member and a revoked one: for the
+                  revoked, submitting it is readmission.
+
+                  The tier select opens on this member's *current* tier, so the
+                  control's default changes nothing.
+                  {% endcomment %}
+                  {% if can_decide %}
+                    <form method="post" class="row-form">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="approve">
+                      <input type="hidden" name="did" value="{{ m.did }}">
+                      {% include "_tier_select.html" with selected=m.tier %}
+                      <button type="submit" class="btn-row">
+                        {% if m.active %}Set tier{% else %}Readmit{% endif %}
+                      </button>
+                    </form>
+                    {% if m.active %}
+                      <form method="post" class="row-form"
+                            onsubmit="return confirm('Revoke {{ m.handle|escapejs }}? They lose access now. The grant stays on record — this writes a revocation after it.');">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="revoke">
+                        <input type="hidden" name="did" value="{{ m.did }}">
+                        <button type="submit" class="btn-row btn-row--danger">Revoke</button>
+                      </form>
+                    {% endif %}
+                  {% else %}
+                    <span class="hint-inline">—</span>
+                  {% endif %}
+                </td>
               </tr>
             {% endfor %}
           </tbody>

@@ -458,7 +458,10 @@ def _get_with_dpop(url, access_token, dpop_key, nonce=None):
     return _retry_once_for_nonce(_send, nonce)
 
 
-def _post_json_with_dpop(url, payload, access_token, dpop_key, nonce=None):
+def post_json_with_dpop(
+    url, payload, access_token, dpop_key, nonce=None, *, headers=None,
+    timeout=TIMEOUT,
+):
     """POST JSON to a DPoP-bound XRPC procedure, with one-shot nonce retry.
 
     A third sibling rather than a flag on `_post_with_dpop`, because the two
@@ -468,6 +471,16 @@ def _post_json_with_dpop(url, payload, access_token, dpop_key, nonce=None):
     an `Authorization: DPoP` header plus the access-token hash bound into the
     proof as `ath`. Collapsing them would mean a function whose every line is
     conditional on which caller it has.
+
+    `headers` is merged in underneath the two this function owns, for callers
+    whose destination wants more than the DPoP pair — the registry needs its
+    client key and an explicit `Host`. It cannot override the proof or the
+    authorization, which are the whole point of the call.
+
+    Public, unlike its siblings, because `membership.MembershipRegistry` calls
+    it: writing to the registry is a DPoP-authenticated POST like any other, and
+    a second copy of the nonce dance living over there is exactly the drift this
+    module exists to prevent.
     """
 
     def _send(use_nonce):
@@ -477,8 +490,12 @@ def _post_json_with_dpop(url, payload, access_token, dpop_key, nonce=None):
         return requests.post(
             url,
             json=payload,
-            headers={"DPoP": proof, "Authorization": f"DPoP {access_token}"},
-            timeout=TIMEOUT,
+            headers={
+                **(headers or {}),
+                "DPoP": proof,
+                "Authorization": f"DPoP {access_token}",
+            },
+            timeout=timeout,
         )
 
     return _retry_once_for_nonce(_send, nonce)
@@ -613,7 +630,7 @@ def put_record(
     The PDS enforces that `repo` is the authenticated member's own — this is
     not the place that could write into someone else's, and there isn't one.
     """
-    return _post_json_with_dpop(
+    return post_json_with_dpop(
         f"{pds_url}/xrpc/com.atproto.repo.putRecord",
         {
             "repo": repo,

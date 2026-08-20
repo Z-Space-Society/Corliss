@@ -172,6 +172,27 @@ class AtprotoToken(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # When this login also registered a session with the membership registry,
+    # and therefore whether this admin can write to it. Null for everyone else,
+    # which is almost everyone: it is only attempted when the handle resolved to
+    # a current admin before the flow began.
+    #
+    # A timestamp rather than a boolean because the useful question turns out to
+    # be "how old", not "whether" — the registry session's bearer is the PDS
+    # access token, so its life is bounded by the same expiry, and an operator
+    # looking at a row that cannot approve wants to see when it last could.
+    #
+    # **Nothing new is stored to make the write work.** `access_token` and
+    # `dpop_private_pem` are already here and already spent on the member's own
+    # PDS; for an admin the key simply came from the registry rather than from
+    # `atproto.generate_key()`. This column exists so the console can offer a
+    # disabled button with a reason instead of a live one that fails.
+    registry_session_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def can_write_registry(self):
+        return self.registry_session_at is not None
+
     def __str__(self):
         return f"AtprotoToken({self.user})"
 

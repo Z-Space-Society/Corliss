@@ -44,6 +44,7 @@ Registry (machines):
 import base64
 import hmac
 import json
+import logging
 import secrets
 from datetime import timedelta
 from urllib.parse import urlencode
@@ -64,6 +65,8 @@ from corliss.models import AtprotoToken, MembershipCache, OidcAuthCode
 
 User = get_user_model()
 
+log = logging.getLogger(__name__)
+
 SESSION_PREFIX = "corliss:oauth:"
 
 # Key in the Django session for "where to resume after atproto login".
@@ -80,6 +83,11 @@ API_ERROR_SESSION_KEY = "corliss:api_error"
 
 # The same one-hop handoff for a failed membership application.
 APPLY_ERROR_SESSION_KEY = "corliss:apply_error"
+
+# And for the console's own writes, which redirect after posting: what happened
+# has to survive exactly one hop to be read on the page that follows.
+MANAGE_NOTICE_SESSION_KEY = "corliss:manage_notice"
+MANAGE_ERROR_SESSION_KEY = "corliss:manage_error"
 
 # How far back /api/ reports usage. A month is what fits on the page and what
 # a member is actually asking when they look ("am I using a lot?").
@@ -177,7 +185,7 @@ def login(request):
         doc = atproto.fetch_did_document(did)
         pds_url = atproto.pds_endpoint_from_doc(doc)
         meta = atproto.discover_auth_server(pds_url)
-        dpop_key = atproto.generate_key()
+        dpop_key, registry = _dpop_key_for(did)
         verifier, challenge = atproto.pkce_pair()
         state = secrets.token_urlsafe(32)
         request_uri, nonce = atproto.pushed_authorization_request(
@@ -201,8 +209,57 @@ def login(request):
         "did": did,
         "pds_url": pds_url,
         "handle": handle,
+        # Present only for an admin whose key came from the registry, and named
+        # apart from `code_verifier` because the two PKCE pairs in flight here
+        # are for different servers and confusing them would be silent.
+        **registry,
     }
     return redirect(atproto.authorization_url(meta, request_uri))
+
+
+def _dpop_key_for(did):
+    """The DPoP key this login should use, and the pending state that goes with
+    it: the registry's, for a current admin, or a fresh ephemeral one.
+
+    **Why the key has to be decided here, before PAR.** The registry provisions
+    the DPoP key that an admin's session will be bound to, and it expects the
+    atproto handshake to have been run with it. A key chosen after the token
+    exchange is too late — the tokens are already bound to something the
+    registry has never seen and cannot prove possession of. So an admin's login
+    is a different login from the first network call onwards, and this is where
+    that forks.
+
+    **Deciding on an unverified DID is safe, and it is the opposite of the rule
+    `callback` follows.** That function refuses to key on anything but the DID
+    the token response asserts, because that decides *who someone is*. This
+    decides only which key to generate. Guess wrong and the cost is a registry
+    session nobody can use: the Lua re-reads the roster on every write, so a
+    non-admin who talked their way into a provisioned key still gets
+    "forbidden: caller is not a current admin".
+
+    **A registry that cannot be reached is not a failed login.** It means no
+    approvals until it is back, which is the documented consequence of the
+    registry being down; turning it into "nobody can sign in" would be a much
+    larger outage than the one actually happening. So this falls back, logs, and
+    says nothing to the person signing in — they are not the one who can fix it.
+    """
+    if not membership.is_cluster_admin(did):
+        return atproto.generate_key(), {}
+
+    registry = membership.MembershipRegistry.from_settings()
+    verifier, challenge = atproto.pkce_pair()
+    try:
+        provision_id, key = membership.provision_registry_key(
+            registry, pkce_challenge=challenge
+        )
+    except membership.RegistryError as exc:
+        log.warning("registry key provision failed for %s: %s", did, exc)
+        return atproto.generate_key(), {}
+
+    return key, {
+        "registry_provision_id": provision_id,
+        "registry_pkce_verifier": verifier,
+    }
 
 
 def callback(request):
@@ -270,6 +327,7 @@ def callback(request):
         email_confirmed=email_confirmed,
     )
     _store_tokens(user, token_data, dpop_key, nonce, pending)
+    _register_registry_session(user, token_data, pending)
 
     auth_login(
         request, user, backend="django.contrib.auth.backends.ModelBackend"
@@ -670,6 +728,13 @@ def manage(request):
     report, reconcile_error = None, None
 
     if request.method == "POST":
+        action = request.POST.get("action", "reconcile")
+        if action in ("approve", "revoke"):
+            # Post/Redirect/Get, unlike reconcile below: these append a record
+            # to the registry, and a refresh that re-posted would append a
+            # second one. Harmless by design — latest-event-wins — but an
+            # audit log should record decisions, not browser reloads.
+            return _decide_membership(request, registry, action)
         try:
             # No dry-run switch here any more: the button is the recovery
             # action, and a preview beside it mostly invited clicking the wrong
@@ -744,8 +809,86 @@ def manage(request):
             "registry_configured": registry.is_configured,
             "report": report,
             "reconcile_error": reconcile_error,
+            # Whether this admin's session can author a registry write, and the
+            # vocabulary the controls offer. `tiers` comes from the module that
+            # validates it, so the dropdown cannot drift from what the Lua will
+            # accept — and there is no blank option anywhere, because a grant
+            # with no tier is a fail-open bug rather than a harmless default.
+            "can_decide": _can_decide(request.user),
+            "tiers": membership.TIERS,
+            "default_tier": membership.DEFAULT_TIER,
+            "manage_notice": request.session.pop(
+                MANAGE_NOTICE_SESSION_KEY, None
+            ),
+            "manage_error": request.session.pop(MANAGE_ERROR_SESSION_KEY, None),
         },
     )
+
+
+def _can_decide(user):
+    """Does this admin hold a registry session, and so a way to approve?
+
+    False for anyone who signed in before this shipped, for anyone whose login
+    happened while the registry was unreachable, and for every `dev_login`
+    account — none of which is an error, and all of which the console has to say
+    rather than discover at the click.
+    """
+    token = AtprotoToken.objects.filter(user=user).first()
+    return token is not None and token.can_write_registry
+
+
+def _decide_membership(request, registry, action):
+    """Approve or revoke, authored by the signed-in admin. Redirects to
+    `/manage/`.
+
+    **The authority here is the registry's, not this function's.** The Lua
+    re-reads the admin roster on every write and refuses a caller who is not on
+    it, and the runtime stamps the caller's DID as the record's author — which
+    is what makes a grant real. The `is_cluster_admin` check that got the admin
+    onto this page is a courtesy, so a stale roster shows a refusal here rather
+    than a 500 from the registry. Neither check makes the other redundant, and
+    removing the far one would hand membership to whoever could reach this view.
+
+    Everything about the decision travels as the admin's own session: their
+    access token and the DPoP key the registry provisioned at login. There is no
+    Corliss credential that could do this, deliberately.
+
+    Nothing here touches `MembershipCache`. The registry's Lua pushes the event
+    back to `/membership/events` after the space write, and that push is the
+    only thing allowed to move the cache — so the tables on the next render may
+    lag this click by a round trip.
+    """
+    did = request.POST.get("did", "").strip()
+    if not did:
+        request.session[MANAGE_ERROR_SESSION_KEY] = "No member was named."
+        return redirect("manage")
+
+    token = AtprotoToken.objects.filter(user=request.user).first()
+    if token is None or not token.can_write_registry:
+        request.session[MANAGE_ERROR_SESSION_KEY] = (
+            "This session cannot write to the registry. Sign out and in again "
+            "to pick one up."
+        )
+        return redirect("manage")
+
+    handle = membership.handles_for([did]).get(did, did)
+    try:
+        if action == "approve":
+            tier = request.POST.get("tier", "")
+            registry.approve(token, did, tier)
+            request.session[MANAGE_NOTICE_SESSION_KEY] = (
+                f"{handle} is a member at {tier}."
+            )
+        else:
+            registry.revoke(token, did, request.POST.get("reason", ""))
+            request.session[MANAGE_NOTICE_SESSION_KEY] = (
+                f"{handle}'s membership is revoked."
+            )
+    except membership.RegistryError as exc:
+        log.warning("membership %s of %s failed: %s", action, did, exc)
+        request.session[MANAGE_ERROR_SESSION_KEY] = str(exc)
+
+    return redirect("manage")
 
 
 def _applications(registry, members):
@@ -911,6 +1054,44 @@ def _store_tokens(user, token_data, dpop_key, nonce, pending):
             "dpop_nonce": nonce or "",
             "expires_at": expires_at,
         },
+    )
+
+
+def _register_registry_session(user, token_data, pending):
+    """Hand an admin's freshly-exchanged tokens to the registry as a session.
+
+    The second half of `_dpop_key_for`, and it runs only when that one
+    provisioned a key — so for everyone else this is a dictionary lookup that
+    misses and returns.
+
+    Failure is swallowed for the same reason it is there: the person signing in
+    cannot fix a registry outage, and refusing their login over it would turn
+    "no approvals right now" into "no access at all". They arrive with
+    `registry_session_at` unset, the console offers its buttons disabled with
+    the reason, and signing in again once the registry is back is the fix.
+    """
+    provision_id = pending.get("registry_provision_id")
+    if not provision_id:
+        return
+
+    registry = membership.MembershipRegistry.from_settings()
+    try:
+        membership.register_registry_session(
+            registry,
+            provision_id=provision_id,
+            pkce_verifier=pending.get("registry_pkce_verifier", ""),
+            did=user.did,
+            token_data=token_data,
+            pds_url=pending["pds_url"],
+            issuer=pending["issuer"],
+            scopes=atproto.SCOPE,
+        )
+    except membership.RegistryError as exc:
+        log.warning("registry session registration failed for %s: %s", user.did, exc)
+        return
+
+    AtprotoToken.objects.filter(user=user).update(
+        registry_session_at=timezone.now()
     )
 
 
