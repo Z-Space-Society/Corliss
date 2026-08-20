@@ -13,7 +13,7 @@ class CorlissUserAdmin(UserAdmin):
     surfaces the atproto identity fields (`did`, `pds_url`, `last_seen`).
     """
 
-    list_display = ("username", "did", "pds_url", "last_seen", "is_staff")
+    list_display = ("username", "did", "email", "pds_url", "last_seen", "is_staff")
     search_fields = ("username", "did")
     readonly_fields = ("did", "last_seen", "last_login", "date_joined")
 
