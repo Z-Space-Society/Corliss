@@ -29,7 +29,7 @@ only by being genuinely standalone.
 | `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `OidcSession`, `MembershipCache`. |
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
 | `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
-| `corliss/membership.py` | Consuming the registry's membership push; reconciling the cache against the registry; reading the application queue; resolving whether a DID is currently a member. |
+| `corliss/membership.py` | The whole registry relationship: consuming its membership push, reconciling the cache against it, reading the application queue, writing grants and revocations as the acting admin, and resolving whether a DID is currently a member. |
 | `corliss/litellm.py` | Provisioning members into LiteLLM and issuing their API keys — the only place a gateway credential is used (same one-relationship-one-module rule). |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
@@ -266,7 +266,7 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
 | Membership push (from the registry) | `/membership/events` |
 | Apply for membership (signed-in non-members) | `/membership/apply` |
-| Console — applications, members, admins, reconcile (cluster admins) | `/manage/` |
+| Console — decide applications, members, admins, reconcile (cluster admins) | `/manage/` |
 | Systems — the stack, status stubbed (cluster admins) | `/systems/` |
 | Django admin | `/admin/` |
 
@@ -408,11 +408,40 @@ awaiting a decision** — see `views._applications`.
   an unparseable row is rendered as a number rather than as an absence. A
   registry that cannot be reached renders as a failure, never as an empty queue.
 
-**Approving is not here yet.** A grant is a write to the registry space, and
-the registry accepts writes only from the approving admin's own session — an
-XRPC procedure behind DPoP authentication, which the read-only reconcile token
-cannot provide by design. Until that session layer exists in Corliss, approving
-stays in the separately deployed Manage Console, which the panel links.
+#### Deciding — approve, tier change, revoke
+
+Each waiting row carries a tier and an **Approve**; each member row carries a
+tier and **Set tier**, plus **Revoke**. All three go to the registry as
+`admin.approveMember` / `admin.revokeMember` (`MembershipRegistry.approve` and
+`.revoke`).
+
+- **A tier change is an approval.** There is no third call and there should not
+  be one: re-approving writes a fresh grant and latest-event-wins resolves it,
+  so a member row's button and an applicant's button are the same operation
+  pointed at different people. Nothing is ever edited, and a revoked member's
+  button reads *Readmit* because that is literally what submitting it does.
+- **Revoking appends.** The grant it answers stays exactly where it was — the
+  space is append-only, and a member is active iff there is a grant with no
+  later revocation.
+- **The write is authored by the admin, not by Corliss.** It travels as their
+  own access token with a DPoP proof signed by a key the registry provisioned
+  during their login, so `caller_did` is them and the runtime stamps them as the
+  author. There is deliberately no Corliss credential that could do this: a
+  procedure needs a proof, and no shared token can produce one. That is the same
+  asymmetry that lets `syncMembers` be a read-only query with a bearer token.
+- **The roster is checked twice and both are load-bearing.** `is_cluster_admin`
+  gets the admin onto the page; the Lua re-reads the roster on every write and
+  refuses a caller who is not on it. The near check is ergonomics — a stale
+  roster shows a refusal instead of a 500 — and the far one is the authority.
+- **Nothing here writes `MembershipCache`.** The registry pushes the event back
+  to `/membership/events` after the space write, so the tables lag a decision by
+  that round trip, and clicking approve twice writes a redundant grant rather
+  than doing damage.
+- **It needs a registry session, which only an admin's login picks up** — see
+  [Signing in as an admin](#signing-in-as-an-admin). Without one the controls
+  render disabled with the reason rather than failing at the click.
+
+Roster editing is the one thing still left to the Manage Console.
 
 ### Reconciliation — rebuilding the cache from the registry
 
@@ -494,6 +523,55 @@ since reported clean, so what remains is wiring rather than a precondition —
 `manage.py reconcile_membership` already exits non-zero on an incomplete report,
 which is what lets a scheduled run fail loudly instead of logging success over a
 half-empty cache.
+
+### Signing in as an admin
+
+An admin's login is a **different login from the first network call onwards**,
+and it has to be, because of one constraint at the registry: it provisions the
+DPoP key that a session's tokens must be bound to. `POST /oauth/dpop-keys`
+returns a private JWK, and the handshake is expected to have been run with it
+before the tokens come back at `POST /oauth/sessions`. So a key chosen after the
+token exchange is too late — the tokens are already bound to something the
+registry has never seen. Corliss cannot adopt the tokens it already holds.
+
+`views._dpop_key_for` is where that forks. It asks `is_cluster_admin` — a cached
+read of a public record, no session needed — and for a current admin provisions
+the key from the registry instead of minting an ephemeral one. `callback` then
+registers the session and stamps `AtprotoToken.registry_session_at`.
+
+Four things worth holding onto:
+
+- **The decision is made on the *unverified* pre-resolved DID**, which is the
+  opposite of the rule `callback` follows for the DID it keys on. That rule
+  decides *who someone is*; this decides only which key to generate. Guess wrong
+  and the cost is a session nobody can use, because the Lua re-reads the roster
+  on every write.
+- **A registry outage means no approvals, never no login.** Provisioning failure
+  falls back to the ephemeral key and the login completes; the admin lands on
+  `/manage/` with the controls disabled and the reason, and the failure is a
+  `registry key provision failed` line in the log. Making this unconditional
+  would turn a registry outage into a total login outage.
+- **Non-admin logins are untouched**, and the registry never sees a non-admin's
+  tokens.
+- **Nothing new is stored to make the write work.** For an admin,
+  `dpop_private_pem` simply *is* the registry's key, so one key pair serves both
+  the member's own PDS and the registry, and `atproto.write_record`'s refresh
+  path works on it unchanged. `registry_session_at` exists only so the console
+  can offer a disabled button with a reason.
+
+Corliss is a **public** client here, as the SPA is: a client key
+(`MEMBERSHIP_REGISTRY_CLIENT_KEY`, which reads do not require but writes do) and
+a PKCE verifier binding the provisioning to the registration. That verifier is a
+*second* one, for a different server than the PDS OAuth's, and the two are named
+apart because confusing them would be silent.
+
+**The proof names the public origin, not the address dialled.** Corliss reaches
+the registry internally while presenting the public `Host`; the registry rebuilds
+the request URI from that header and compares it to the proof's `htu`. Signing
+the internal address earns `401 DPoP proof htu mismatch` on every write — the
+same internal-address-with-a-public-name trap as the HTTP 421 in
+[Reconciliation](#reconciliation--rebuilding-the-cache-from-the-registry). See
+`MembershipRegistry.public_url`.
 
 ### GATE — where membership is actually enforced
 
