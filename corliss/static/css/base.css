@@ -661,6 +661,16 @@ a.btn-primary {
   color: var(--text-muted);
 }
 
+/* The one free-text column: an applicant's note, which they wrote and which
+   can be any length. Everything else in these tables is an identifier or a
+   date and is better off refusing to wrap; this wraps inside a bounded width
+   so one long note cannot stretch the table past the card. */
+.data-table__note {
+  white-space: normal;
+  max-width: 38ch;
+  min-width: 16ch;
+}
+
 /* State, not decoration: `active`/`current` is the only thing on these rows
    that a reader is really checking, so it carries the only colour. */
 .pill {

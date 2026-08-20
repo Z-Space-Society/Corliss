@@ -1,15 +1,18 @@
 {% extends "base.html" %}
 
 {% comment %}
-The cluster console. Two tables that come from two completely different places,
-and the difference is the point:
+The cluster console. Three tables that come from three completely different
+places, and the difference is the point:
 
+- Applications are read live from the registry's *index*, and are written by
+  the applicants themselves. They carry no authority whatsoever — the state
+  column is answered by the member cache, never by the application.
 - Members are Corliss's own cache — what this deployment believes. It can be
   stale, incomplete, or (in the orphan case) wrong.
 - Admins are read live from the registry's public roster record. No cache, no
   credential, nothing to go stale.
 
-Reconciliation is what makes the first agree with the record.
+Reconciliation is what makes the second agree with the record.
 
 Both tables show handles with the DID on the cell's title. The handle is a
 label — `membership.handles_for` resolves it for reading, and the DID stays the
@@ -30,6 +33,85 @@ question, "who can decide membership today".
   <p class="page-text">Who this cluster believes is a member, and who is allowed
   to decide that. Membership is cached here; the membership registry (HappyView)
   is the authority.</p>
+
+  <h2 class="section-title">Applications</h2>
+  <p class="hint-text">Who has asked to join. Each one is a public record in the
+  applicant's own PDS, read live from the registry's index — a request, never an
+  entitlement. Whether it was acted on is answered by the member cache below,
+  not by the application, which reads the same however it was decided.</p>
+
+  <div class="card">
+    {% if applications.error %}
+      <p class="alert" role="alert">
+        <strong>The applications could not be read.</strong> {{ applications.error }}
+      </p>
+      <p class="hint-text">This is not "nobody has applied" — it is a failure to
+      find out.</p>
+    {% elif applications.rows %}
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Applicant</th>
+              <th>Applied</th>
+              <th>Note</th>
+              <th>State</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in applications.rows %}
+              <tr>
+                <td class="data-table__handle" title="{{ row.did }}">{{ row.handle }}</td>
+                <td class="data-table__muted">{{ row.created_at|date:"Y-m-d H:i"|default:"—" }}</td>
+                <td class="data-table__note">{{ row.note|default:"—" }}</td>
+                <td>
+                  {% if row.state == "member" %}
+                    <span class="pill pill--active">member</span>
+                  {% elif row.state == "revoked" %}
+                    <span class="pill">revoked</span>
+                  {% else %}
+                    <span class="pill">awaiting a decision</span>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <p class="hint-text">
+        {% if applications.pending %}
+          {{ applications.pending }} awaiting a decision, listed first.
+        {% else %}
+          Every application on file has been decided.
+        {% endif %}
+        {% if applications.unreadable %}
+          {{ applications.unreadable }}
+          record{{ applications.unreadable|pluralize }} could not be read and
+          {{ applications.unreadable|pluralize:"is,are" }} not in the table —
+          counted rather than dropped, so an applicant cannot go missing
+          silently.
+        {% endif %}
+        {% if applications.truncated %}
+          There are more than this page shows; the list stops early rather than
+          following the registry's cursor indefinitely.
+        {% endif %}
+      </p>
+    {% else %}
+      <p class="alert alert--notice" role="status">
+        <strong>Nobody has applied.</strong> Applications are written by the
+        applicant, so an empty queue here means the registry's index holds none
+        — not that this deployment has missed them.
+      </p>
+    {% endif %}
+
+    {% if MANAGE_URL %}
+      <p class="hint-text">Approving is still done in the
+      <a href="{{ MANAGE_URL }}">Manage Console</a>. A grant is a write to the
+      registry space, and the registry accepts one only from the approving
+      admin's own session — which Corliss does not hold yet.</p>
+    {% endif %}
+  </div>
 
   <h2 class="section-title">Members</h2>
   <p class="hint-text">Corliss's cache, filled by the registry's push. A revoked

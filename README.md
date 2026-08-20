@@ -29,7 +29,7 @@ only by being genuinely standalone.
 | `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `OidcSession`, `MembershipCache`. |
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
 | `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
-| `corliss/membership.py` | Consuming the registry's membership push; reconciling the cache against the registry; resolving whether a DID is currently a member. |
+| `corliss/membership.py` | Consuming the registry's membership push; reconciling the cache against the registry; reading the application queue; resolving whether a DID is currently a member. |
 | `corliss/litellm.py` | Provisioning members into LiteLLM and issuing their API keys — the only place a gateway credential is used (same one-relationship-one-module rule). |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
@@ -265,7 +265,7 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | JWKS | `/.well-known/jwks.json` |
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
 | Membership push (from the registry) | `/membership/events` |
-| Console — members, admins, reconcile (cluster admins) | `/manage/` |
+| Console — applications, members, admins, reconcile (cluster admins) | `/manage/` |
 | Systems — the stack, status stubbed (cluster admins) | `/systems/` |
 | Django admin | `/admin/` |
 
@@ -321,6 +321,37 @@ bin/push-grant did:plc:abc… level-2         # grant, or change tier
 bin/push-grant --revoke did:plc:abc…        # revoke
 bin/push-grant --replay did:plc:abc… <rkey> # prove a stale event is a no-op
 ```
+
+### Applications — who has asked
+
+`/manage/` lists everyone who has applied, above the member roll. An
+application is a `membership.request` record with rkey `self` in the
+**applicant's own PDS**, indexed by the registry and read back through its
+`listRequests` query (`MembershipRegistry.fetch_applications`).
+
+- **This is the one collection Corliss may read from the firehose index**, and
+  the exception is not a softening of the rule above it. Grants must come from
+  the space because the grant lexicon is published and anyone can write one
+  into their own repo; an application is *self-authored by definition*, asserts
+  only "I would like in", and is worth nothing until an admin writes a grant. So
+  reading it from the index is reading exactly what it claims to be.
+- **It needs no credential** — only `MEMBERSHIP_REGISTRY_URL`. `listRequests`
+  is a query over records that are already public, so it deliberately does not
+  require `MEMBERSHIP_REGISTRY_TOKEN`, and never sends it: a token in a URL is a
+  token in a log, and this endpoint has no use for one.
+- **The state column comes from `MembershipCache`, never from the
+  application.** The record reads identically whether its author was approved,
+  refused, or never looked at — only the cache knows which.
+- **A record that cannot be read is counted, not dropped.** The failure this
+  panel exists to prevent is somebody asking and the console not showing it, so
+  an unparseable row is rendered as a number rather than as an absence. A
+  registry that cannot be reached renders as a failure, never as an empty queue.
+
+**Approving is not here yet.** A grant is a write to the registry space, and
+the registry accepts writes only from the approving admin's own session — an
+XRPC procedure behind DPoP authentication, which the read-only reconcile token
+cannot provide by design. Until that session layer exists in Corliss, approving
+stays in the separately deployed Manage Console, which the panel links.
 
 ### Reconciliation — rebuilding the cache from the registry
 

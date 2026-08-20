@@ -392,6 +392,23 @@ class ManageViewTests(NoRosterMixin, TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+        # The page reads the application queue on every render. Pinned empty by
+        # default so the tests below stay about what they are about — and so
+        # that the ones which configure a registry URL cannot reach for it.
+        self._applications([])
+
+    def _applications(self, applications, unreadable=0, truncated=False):
+        from corliss import membership
+
+        patcher = patch.object(
+            membership.MembershipRegistry,
+            "fetch_applications",
+            return_value=membership.ApplicationList(
+                applications, unreadable, truncated
+            ),
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _as_cluster_admin(self):
         patcher = patch("corliss.membership.is_cluster_admin", return_value=True)
@@ -429,6 +446,97 @@ class ManageViewTests(NoRosterMixin, TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, DID)
         self.assertContains(resp, "level-5")
+
+    def test_the_queue_says_who_has_asked_and_what_they_said(self):
+        from corliss import membership
+
+        self._applications(
+            [membership.Application(
+                "did:plc:applicant", _at("2026-08-17T13:44:05Z"), "HEYO"
+            )]
+        )
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, "did:plc:applicant")
+        self.assertContains(resp, "HEYO")
+        self.assertContains(resp, "2026-08-17")
+        self.assertContains(resp, "awaiting a decision")
+
+    def test_an_applicants_state_is_answered_by_the_cache_not_the_application(self):
+        """The record reads the same however it was decided, so the only place
+        that can say what happened is the membership cache."""
+        from corliss import membership
+
+        _grant(did="did:plc:member")
+        MembershipCache.objects.create(
+            did="did:plc:exmember",
+            active=False,
+            tier="level-1",
+            last_rkey="did:plc:exmember:3lqxaaaaaaaab",
+            last_event_at="2026-02-01T00:00:00Z",
+            author_did="did:plc:anadmin",
+        )
+        self._applications([
+            membership.Application("did:plc:member", _at("2026-08-01T00:00:00Z")),
+            membership.Application("did:plc:exmember", _at("2026-08-02T00:00:00Z")),
+            membership.Application("did:plc:applicant", _at("2026-08-03T00:00:00Z")),
+        ])
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        html = resp.content.decode()
+        # Pending first: the queue is a to-do list before it is a record.
+        self.assertLess(
+            html.index("did:plc:applicant"), html.index("did:plc:member")
+        )
+        self.assertContains(resp, "1 awaiting a decision")
+        for state in ("member", "revoked"):
+            self.assertContains(resp, f">{state}</span>")
+
+    def test_records_that_could_not_be_read_are_reported_as_a_count(self):
+        from corliss import membership
+
+        self._applications(
+            [membership.Application("did:plc:applicant", _at("2026-08-01T00:00:00Z"))],
+            unreadable=2,
+        )
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        # Whitespace-normalised: the sentence wraps in the template, and the
+        # assertion is about what a reader sees, not where the newlines fell.
+        html = " ".join(resp.content.decode().split())
+        self.assertIn("2 records could not be read", html)
+
+    def test_an_unreadable_queue_shows_a_failure_not_an_empty_one(self):
+        """Same posture as the roster: "could not find out" is not "none"."""
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            with patch.object(
+                membership.MembershipRegistry,
+                "fetch_applications",
+                side_effect=membership.RegistryError("registry returned HTTP 500"),
+            ):
+                resp = self.client.get(reverse("manage"))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "could not be read")
+        self.assertContains(resp, "registry returned HTTP 500")
+        self.assertNotContains(resp, "Nobody has applied")
 
     def test_an_admin_reaches_it_with_an_empty_cache(self):
         """The rebuild case, and the reason this page is gated on the roster."""

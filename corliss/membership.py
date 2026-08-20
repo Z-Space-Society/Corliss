@@ -43,6 +43,11 @@ author was a current admin when they wrote it. The roster arrives by a
 different route from everything above — a public record read straight from the
 service DID's repo, no push, no credential — which is precisely what makes it
 usable when the cache is empty. See "The admin roster" below.
+
+Last, and lowest in authority: **applications**, which are what someone writes
+in their own PDS to ask. They confer nothing, and they are the only records
+here that may be read from the firehose index. See "Applications" below for why
+that does not contradict the first invariant above.
 """
 
 import logging
@@ -868,6 +873,94 @@ def reconcile(events, roster, *, dry_run=False):
     return report
 
 
+# --- Applications ----------------------------------------------------------
+#
+# Someone asking to join. An application is a `membership.request` record with
+# rkey `self` in the **applicant's own PDS** — one per account — picked up by
+# HappyView's firehose indexer and handed back by the `listRequests` query.
+#
+# **This is the one collection Corliss may read from the index, and the
+# exception proves the rule rather than weakening it.** The standing invariant
+# a few sections up — never treat a `membership.grant` found in the firehose or
+# in a PDS as authoritative — exists because the grant lexicon is published, so
+# anyone can write a record of that shape into their own repo and have it
+# indexed. That argument does not apply here for the reason it is fatal there:
+# an application is *self-authored by definition*. It asserts only "I would
+# like in", carries no authority, and is worth precisely nothing until an admin
+# writes a grant into the registry space. Reading one from the index is
+# therefore reading exactly what it claims to be.
+#
+# Two consequences worth stating, since both are easy to get backwards:
+#
+# - **An application is never evidence of membership.** Whether an applicant is
+#   a member is answered by `MembershipCache`, and nowhere else on this page.
+# - **The record is world-readable, so it holds no contact details** — by
+#   design, upstream. Do not add a field here expecting one.
+
+
+class Application:
+    """One membership application: who asked, when, and what they said.
+
+    A value object like `AdminEntry` — parsed, displayed, discarded. Nothing
+    here is stored: the applicant's PDS holds the record and the registry
+    indexes it, so a copy in Corliss could only ever be a third version to
+    disagree with the other two.
+    """
+
+    __slots__ = ("did", "created_at", "note")
+
+    def __init__(self, did, created_at, note=""):
+        self.did = did
+        self.created_at = created_at
+        self.note = note
+
+    def __repr__(self):
+        return f"Application({self.did}, {self.created_at})"
+
+
+def did_from_uri(uri):
+    """The repo DID out of an `at://<did>/<collection>/<rkey>` record uri.
+
+    Raises `PushError` — the module's "one record is malformed" error — on
+    anything that is not one, including a leading segment that is not a DID.
+    The registry's applications carry no `did` field; this is the only place
+    the subject comes from, so a bad uri means an applicant we cannot name.
+    """
+    if not isinstance(uri, str) or not uri.startswith("at://"):
+        raise PushError(f"not a record uri: {uri!r}")
+    did = uri[len("at://"):].split("/", 1)[0]
+    if not _DID_RE.match(did) or len(did) > MAX_DID_LEN:
+        raise PushError(f"record uri does not start with a DID: {uri!r}")
+    return did
+
+
+class ApplicationList:
+    """What one read of the applications returned, including what it could not
+    read.
+
+    The unreadable rows are carried rather than dropped for the same reason
+    `Roster.malformed` is: an application that cannot be parsed is a person who
+    asked and would otherwise vanish silently from the queue. The console shows
+    the count, so a malformed record is visible as a number rather than as an
+    absence nobody can see.
+    """
+
+    __slots__ = ("applications", "unreadable", "truncated")
+
+    def __init__(self, applications, unreadable=0, truncated=False):
+        self.applications = list(applications)
+        self.unreadable = unreadable
+        # True when the cursor was still running when the page cap was hit, so
+        # the list is a prefix rather than the whole of it.
+        self.truncated = truncated
+
+    def __len__(self):
+        return len(self.applications)
+
+    def __iter__(self):
+        return iter(self.applications)
+
+
 # --- The registry, as something Corliss talks to ---------------------------
 #
 # `MembershipRegistry` is HappyView from this side: the service that holds the
@@ -893,8 +986,17 @@ class RegistryError(Exception):
 
 
 SYNC_MEMBERS_NSID = "network.sharedcomputer.membership.syncMembers"
+LIST_REQUESTS_NSID = "network.sharedcomputer.membership.listRequests"
 
 REGISTRY_TIMEOUT = 30
+
+# What one page of applications asks for, and how many pages are worth
+# following. The Lua caps `limit` at 100 itself, so asking for more is asking
+# for 100. The page cap is a guard against a cursor that never clears rather
+# than a real expectation: at 500 applications the console needs a different
+# design anyway, and the list says when it stopped early.
+APPLICATIONS_PAGE_SIZE = 100
+APPLICATIONS_MAX_PAGES = 5
 
 
 class MembershipRegistry:
@@ -946,22 +1048,13 @@ class MembershipRegistry:
         """
         return bool(self.url and self.token)
 
-    def fetch_events(self):
-        """Every grant and revocation in the registry space, push-shaped.
+    def _query(self, nsid, params=None):
+        """Call one XRPC *query* on the registry and return its JSON object.
 
-        The registry returns `{rkey, authorDid, record}` — the space metadata
-        wrapped around the record, with no `did` and no `event`. Both are
-        recoverable without guessing: `event` is which array the entry arrived
-        in, and `did` is the leading half of the rkey. Filling them in here is
-        what lets the push and the read share one parser, which is the only
-        reason there is no second schema to drift from the lexicon.
+        Every read Corliss makes of HappyView goes through here, so the two
+        things that make reaching it at an internal address work — the `Host`
+        header and the client key — are written once rather than per caller.
         """
-        if not self.is_configured:
-            raise RegistryError(
-                "registry is not configured: MEMBERSHIP_REGISTRY_URL and "
-                "MEMBERSHIP_REGISTRY_TOKEN must both be set"
-            )
-
         # Sent when we have one, omitted when we don't — see `is_configured`.
         # Harmless either way, and not something the call depends on.
         headers = {"x-client-key": self.client_key} if self.client_key else {}
@@ -977,20 +1070,9 @@ class MembershipRegistry:
             headers["Host"] = self.host
 
         try:
-            # GET with the token as a query parameter, not a POST body, because
-            # `syncMembers` has to be an XRPC *query*: HappyView refuses every
-            # procedure call with "XRPC procedures require DPoP authentication"
-            # before the script ever runs, and a service holding only a shared
-            # token cannot produce a DPoP proof. Queries have no such gate.
-            #
-            # So the token is in the URL, and therefore in access logs. That is
-            # why `MEMBERSHIP_REGISTRY_URL` should be the registry's *internal*
-            # address: the request never reaches an edge or CDN, and the only
-            # log it lands in belongs to a host whose root is already the trust
-            # boundary.
             response = requests.get(
-                f"{self.url}/xrpc/{SYNC_MEMBERS_NSID}",
-                params={"token": self.token},
+                f"{self.url}/xrpc/{nsid}",
+                params=params or {},
                 headers=headers,
                 timeout=REGISTRY_TIMEOUT,
             )
@@ -1011,6 +1093,36 @@ class MembershipRegistry:
             raise RegistryError("registry response was not JSON") from exc
         if not isinstance(payload, dict):
             raise RegistryError("registry response was not a JSON object")
+        return payload
+
+    def fetch_events(self):
+        """Every grant and revocation in the registry space, push-shaped.
+
+        The registry returns `{rkey, authorDid, record}` — the space metadata
+        wrapped around the record, with no `did` and no `event`. Both are
+        recoverable without guessing: `event` is which array the entry arrived
+        in, and `did` is the leading half of the rkey. Filling them in here is
+        what lets the push and the read share one parser, which is the only
+        reason there is no second schema to drift from the lexicon.
+        """
+        if not self.is_configured:
+            raise RegistryError(
+                "registry is not configured: MEMBERSHIP_REGISTRY_URL and "
+                "MEMBERSHIP_REGISTRY_TOKEN must both be set"
+            )
+
+        # The token travels as a query parameter, not a POST body, because
+        # `syncMembers` has to be an XRPC *query*: HappyView refuses every
+        # procedure call with "XRPC procedures require DPoP authentication"
+        # before the script ever runs, and a service holding only a shared
+        # token cannot produce a DPoP proof. Queries have no such gate.
+        #
+        # So the token is in the URL, and therefore in access logs. That is why
+        # `MEMBERSHIP_REGISTRY_URL` should be the registry's *internal*
+        # address: the request never reaches an edge or CDN, and the only log
+        # it lands in belongs to a host whose root is already the trust
+        # boundary.
+        payload = self._query(SYNC_MEMBERS_NSID, {"token": self.token})
 
         events = []
         for key, event in (("grants", GRANT), ("revocations", REVOKE)):
@@ -1020,6 +1132,82 @@ class MembershipRegistry:
             for entry in entries:
                 events.append(self._to_envelope(entry, event))
         return events
+
+    def fetch_applications(self):
+        """Everyone who has asked to join, newest first. An `ApplicationList`.
+
+        Reads the index, which is correct **only** for this collection — see
+        the "Applications" section above for why that is not a hole in the
+        never-read-grants-from-the-index rule.
+
+        Needs the URL, and deliberately not `is_configured`: that also demands
+        `MEMBERSHIP_REGISTRY_TOKEN`, which buys nothing here. `listRequests` is
+        a query over records that are public in their authors' own repos, so it
+        takes no credential at all — verified against production. Tying this
+        panel to the reconcile token would hide the queue on a deployment that
+        simply has not been given a token it does not need.
+        """
+        if not self.url:
+            raise RegistryError(
+                "registry is not configured: MEMBERSHIP_REGISTRY_URL must be set"
+            )
+
+        applications, unreadable, cursor, truncated = [], 0, None, False
+        for _ in range(APPLICATIONS_MAX_PAGES):
+            params = {"limit": APPLICATIONS_PAGE_SIZE}
+            if cursor:
+                params["cursor"] = cursor
+            payload = self._query(LIST_REQUESTS_NSID, params)
+
+            entries = payload.get("requests")
+            if not isinstance(entries, list):
+                raise RegistryError("registry response has no 'requests' array")
+
+            for entry in entries:
+                application = self._to_application(entry)
+                if application is None:
+                    # Counted, never dropped quietly: a record we cannot read
+                    # is a person who asked and would otherwise be invisible.
+                    unreadable += 1
+                else:
+                    applications.append(application)
+
+            cursor = payload.get("cursor")
+            if not isinstance(cursor, str) or not cursor:
+                break
+        else:
+            # The loop ran out of pages with a cursor still in hand. Say so
+            # rather than presenting a prefix as the whole queue.
+            truncated = True
+
+        return ApplicationList(applications, unreadable, truncated)
+
+    @staticmethod
+    def _to_application(entry):
+        """One indexed `membership.request` row, or None if it cannot be read.
+
+        The index returns the record's fields flat, with the `uri` alongside —
+        so the applicant's DID is the repo half of that uri and nothing else.
+        A row without a readable uri names nobody, which is the one field with
+        no sensible fallback; `createdAt` and `note` each degrade to blank.
+        """
+        if not isinstance(entry, dict):
+            return None
+        try:
+            did = did_from_uri(entry.get("uri"))
+        except PushError:
+            return None
+
+        try:
+            created_at = _parse_timestamp(entry.get("createdAt"), "createdAt")
+        except PushError:
+            # A missing or malformed date is not worth losing the applicant
+            # over: the console renders an em-dash and the row keeps its place
+            # in the order the registry returned it.
+            created_at = None
+
+        note = entry.get("note")
+        return Application(did, created_at, note if isinstance(note, str) else "")
 
     @staticmethod
     def _to_envelope(entry, event):

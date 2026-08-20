@@ -11,8 +11,10 @@ ATProto client (people):
 - `api`: the member's own API keys — issue, list, revoke, and usage, read live
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
-- `manage`: the cluster console — members, admins, and reconciliation. Gated on
-  the atproto roster, not on any Django flag, so it survives a rebuild.
+- `manage`: the cluster console — applications, members, admins, and
+  reconciliation. Gated on the atproto roster, not on any Django flag, so it
+  survives a rebuild. Read-only about applications: approving one is a write to
+  the registry space, which needs the approving admin's own HappyView session.
 - `logout`: ends this device's Corliss session. Local-session-only for now (no
   upstream ATProto/OIDC RP-initiated logout) — a relying party like Open WebUI
   ending its own session doesn't end this one, so a member who wants a real
@@ -556,7 +558,8 @@ def systems(request):
 
 @require_http_methods(["GET", "POST"])
 def manage(request):
-    """The cluster console: who is a member, who is an admin, and reconcile.
+    """The cluster console: who has asked, who is a member, who is an admin,
+    and reconcile.
 
     Gated on `is_cluster_admin` — a live read of the public roster — and
     deliberately **not** on `is_superuser`. That distinction is what keeps this
@@ -568,6 +571,11 @@ def manage(request):
     POST runs reconciliation, through the same `MembershipRegistry.reconcile`
     the management command calls. One code path, so a click and a scheduled run
     can never mean different things.
+
+    Three sources on one page, and the differences between them are the point:
+    applications are read live from the registry's index and confer nothing;
+    members are this deployment's cache and can be wrong; admins are a live
+    read of a public record and cannot go stale. See `_applications`.
     """
     if not request.user.is_authenticated:
         request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
@@ -617,14 +625,19 @@ def manage(request):
     # the top and revoked history sinks below it.
     members = list(MembershipCache.objects.order_by("-active", "did"))
 
-    # One resolution pass over every DID on the page — members, whoever granted
-    # them, and the admins — so the lookups are shared rather than repeated per
-    # table. Display only: see `membership.handles_for`.
+    applications = _applications(registry, members)
+
+    # One resolution pass over every DID on the page — applicants, members,
+    # whoever granted them, and the admins — so the lookups are shared rather
+    # than repeated per table. Display only: see `membership.handles_for`.
     handles = membership.handles_for(
-        [m.did for m in members]
+        [row["did"] for row in applications["rows"]]
+        + [m.did for m in members]
         + [m.author_did for m in members]
         + [a.did for a in admins]
     )
+    for row in applications["rows"]:
+        row["handle"] = handles.get(row["did"], row["did"])
     for member in members:
         member.handle = handles.get(member.did, member.did)
         member.author_handle = handles.get(member.author_did, member.author_did)
@@ -643,6 +656,7 @@ def manage(request):
         request,
         "manage.html",
         {
+            "applications": applications,
             "members": members,
             "admins": admins,
             "roster_error": roster_error,
@@ -651,6 +665,82 @@ def manage(request):
             "reconcile_error": reconcile_error,
         },
     )
+
+
+# States an application can be in, as far as this cluster can tell. The
+# question "has this been dealt with" is answered by the cache and never by the
+# application record, which knows nothing about what happened to it — the
+# applicant writes it and it stays exactly as written whether they were
+# approved, refused, or never looked at.
+APPLICATION_PENDING = "pending"
+APPLICATION_MEMBER = "member"
+APPLICATION_REVOKED = "revoked"
+
+# Pending first: the queue is a to-do list, and the rows needing a decision are
+# the reason to open the page. Within a state, newest first — the order the
+# registry already returns them in.
+_APPLICATION_ORDER = {
+    APPLICATION_PENDING: 0,
+    APPLICATION_MEMBER: 1,
+    APPLICATION_REVOKED: 1,
+}
+
+
+def _applications(registry, members):
+    """The application queue for `/manage/`, cross-referenced with the cache.
+
+    Returns a context dict rather than a list, because two facts about the
+    *read* have to reach the template alongside the rows: how many records
+    could not be parsed, and whether the list was cut short. Both would
+    otherwise show up as rows that simply are not there.
+
+    A failed read renders as a failure. Never as an empty queue — same posture
+    as the roster above, and for the same reason: "nobody has applied" and "we
+    could not find out" are different facts and the page must not conflate
+    them.
+
+    The state of each application comes from `MembershipCache`, which is
+    already loaded for the table below — no extra query, and no second opinion
+    about who is a member.
+    """
+    try:
+        listing = registry.fetch_applications()
+    except membership.RegistryError as exc:
+        return {
+            "rows": [],
+            "pending": 0,
+            "unreadable": 0,
+            "truncated": False,
+            "error": str(exc),
+        }
+
+    cached = {m.did: m for m in members}
+    rows = []
+    for application in listing:
+        row = cached.get(application.did)
+        if row is None:
+            state = APPLICATION_PENDING
+        elif row.active:
+            state = APPLICATION_MEMBER
+        else:
+            state = APPLICATION_REVOKED
+        rows.append(
+            {
+                "did": application.did,
+                "created_at": application.created_at,
+                "note": application.note,
+                "state": state,
+            }
+        )
+
+    rows.sort(key=lambda r: _APPLICATION_ORDER[r["state"]])
+    return {
+        "rows": rows,
+        "pending": sum(1 for r in rows if r["state"] == APPLICATION_PENDING),
+        "unreadable": listing.unreadable,
+        "truncated": listing.truncated,
+        "error": None,
+    }
 
 
 def logout(request):

@@ -192,6 +192,12 @@ SCN_SERVICE_DID = env("SCN_SERVICE_DID", default="")
 # registry side; if it ever gains a write path it becomes equivalent to admin
 # authority over membership.
 #
+# URL alone also serves the console's **applications** panel, which calls
+# `listRequests` — a query over records that are already public in their
+# authors' own PDSes, so it takes no credential and is never sent the token.
+# That is why the two are checked separately: a deployment with a URL and no
+# token can still show who has asked.
+#
 # CLIENT_KEY is **optional** — sent when set. Verified against production
 # 2026-08-18: HappyView dispatches to a Lua script with no session and no client
 # key, so it adds nothing the token does not carry. Requiring it would tie the
