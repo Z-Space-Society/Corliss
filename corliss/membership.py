@@ -961,6 +961,163 @@ class ApplicationList:
         return iter(self.applications)
 
 
+# --- Applying, and reading your own application back -----------------------
+#
+# The two halves above read *other people's* applications out of the index, for
+# an admin. These read and write the caller's own, straight from and to their
+# PDS, and the difference is not stylistic:
+#
+# - **The index lags the write.** An applicant who is shown their own state
+#   from `listRequests` watches the button do nothing for however long the
+#   firehose takes. Their PDS answers the instant the write lands, so that is
+#   where their own state comes from — always.
+# - **The write goes to their repo and nowhere else.** Corliss holds their PDS
+#   tokens, so it writes the record directly; it does not need a HappyView
+#   session, and there is no path here that could write into the registry
+#   space. A non-member could not write there in any case.
+#
+# And the constraint that outranks both: **applying confers nothing.** Nothing
+# below touches `MembershipCache`, and a record here is never evidence of
+# membership. It says "I would like in", and only a grant answers it.
+
+REQUEST_COLLECTION = "network.sharedcomputer.membership.request"
+REQUEST_RKEY = "self"  # the lexicon pins it: "key": "literal:self"
+
+# The note's limits, from the lexicon: maxGraphemes 300, maxLength 1000 (UTF-8
+# bytes). Graphemes are counted as code points here — never fewer than
+# graphemes, so the check is conservative in the safe direction and needs no
+# grapheme-segmentation dependency for a field this size.
+NOTE_MAX_CHARS = 300
+NOTE_MAX_BYTES = 1000
+
+_APPLICATION_CACHE_PREFIX = "corliss:application:"
+# Short, because the state changes under a member's feet the moment an admin
+# approves them and the nav renders it on every page. Long enough that browsing
+# does not become one PDS round trip per click.
+APPLICATION_CACHE_TTL = 120
+APPLICATION_FAILURE_TTL = 30
+
+# What `my_application` caches to mean "asked, and there is no record" — a
+# sentinel rather than `None`, since `cache.get` uses `None` for a miss.
+_NO_APPLICATION = "none"
+
+
+class ApplicationError(Exception):
+    """The application could not be written, or the note was unacceptable.
+
+    One class for both because they reach the member the same way: as a
+    sentence on the home page explaining why the button did not work.
+    """
+
+
+def _application_cache_key(did):
+    return _APPLICATION_CACHE_PREFIX + did
+
+
+def validate_note(note):
+    """The note, trimmed — or raise `ApplicationError` saying what is wrong.
+
+    Checked here rather than left to the PDS because the PDS's refusal is a
+    lexicon validation error the member cannot act on, and because the note is
+    **public**: a member who is told the limit before writing is less likely to
+    put something in it they would rather not publish.
+    """
+    note = (note or "").strip()
+    if len(note) > NOTE_MAX_CHARS:
+        raise ApplicationError(
+            f"That note is {len(note)} characters; the limit is "
+            f"{NOTE_MAX_CHARS}."
+        )
+    if len(note.encode("utf-8")) > NOTE_MAX_BYTES:
+        raise ApplicationError("That note is too long.")
+    return note
+
+
+def my_application(did, *, refresh=False):
+    """This DID's own application, read from their PDS. `None` if none.
+
+    Cached the way `fetch_roster` is, and for the same reason: the nav asks on
+    every render (`User.has_pending_application`) and the answer changes rarely.
+    The record dict is what goes in the cache, not a parsed object, so a cache
+    that outlives a parser change cannot hide it.
+
+    Raises `ApplicationError` when the PDS could not be reached. That is a third
+    answer, distinct from "has applied" and "has not", and callers that render a
+    state to a member must not collapse it into either — telling someone they
+    have not applied because their PDS blinked would invite a second record over
+    the first.
+    """
+    key = _application_cache_key(did)
+    if not refresh:
+        cached = cache.get(key)
+        if cached is not None:
+            return None if cached == _NO_APPLICATION else cached
+
+    try:
+        record = atproto.find_record(did, REQUEST_COLLECTION, REQUEST_RKEY)
+    except atproto.OAuthError as exc:
+        raise ApplicationError(str(exc)) from exc
+
+    cache.set(key, record if record is not None else _NO_APPLICATION,
+              APPLICATION_CACHE_TTL)
+    return record
+
+
+def application_created_at(record):
+    """`createdAt` off an application record as a datetime, or None.
+
+    None rather than a raise, and for the same reason `_to_application` shrugs
+    at a bad date: a record with an unreadable timestamp is still an
+    application, and losing it over a formatting detail would be losing a
+    person who asked.
+    """
+    try:
+        return _parse_timestamp(record.get("createdAt"), "createdAt")
+    except (AttributeError, PushError):
+        return None
+
+
+def submit_application(user, note=""):
+    """Write this member's application into their own PDS. Returns the record.
+
+    Idempotent by construction: rkey `self` means `putRecord` upserts, so a
+    double-click writes the same record twice rather than creating two
+    applications. The caller decides whether re-applying is offered at all —
+    the home page does not, once it can see one.
+
+    The freshly written record is cached on the way out so the redirect that
+    follows shows "pending" immediately, rather than the member watching an
+    unchanged page for the length of the cache TTL and clicking again.
+    """
+    note = validate_note(note)
+
+    record = {
+        "$type": REQUEST_COLLECTION,
+        "createdAt": datetime.now(dt_timezone.utc).isoformat().replace(
+            "+00:00", "Z"
+        ),
+    }
+    if note:
+        record["note"] = note
+
+    try:
+        atproto.write_record(user, REQUEST_COLLECTION, REQUEST_RKEY, record)
+    except atproto.NoSession as exc:
+        raise ApplicationError(
+            "This account has no connection to a PDS, so there is nothing to "
+            "write an application to."
+        ) from exc
+    except atproto.OAuthError as exc:
+        log.warning("application write failed for %s: %s", user.did, exc)
+        raise ApplicationError(
+            "Your PDS would not accept the application. Signing in again may "
+            "fix it."
+        ) from exc
+
+    cache.set(_application_cache_key(user.did), record, APPLICATION_CACHE_TTL)
+    return record
+
+
 # --- The registry, as something Corliss talks to ---------------------------
 #
 # `MembershipRegistry` is HappyView from this side: the service that holds the

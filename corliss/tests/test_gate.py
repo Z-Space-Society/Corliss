@@ -314,8 +314,14 @@ class HomeIsWhereRefusalsLandTests(NoRosterMixin, TestCase):
         )
 
     def test_a_non_member_gets_the_page_and_the_way_to_ask(self):
+        # `pds_url` is what a real login resolves and what the apply form needs
+        # somewhere to write to; `find_record` is stubbed to "no application
+        # yet" so this stays a page test rather than a network one.
+        self.user.pds_url = "https://pds.example.com"
+        self.user.save(update_fields=["pds_url"])
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("home"))
+        with patch.object(atproto, "find_record", return_value=None):
+            resp = self.client.get(reverse("home"))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "not a member yet")
         self.assertContains(resp, "Apply for membership")

@@ -5,7 +5,8 @@ Two states, one template: signed out gets the intro, signed in gets their
 standing. Neither carries identity or admin links — those live in the nav, on
 every page, so this page cannot drift from them.
 
-`is_member` comes from corliss.views.home.
+`is_member`, `application`, `applied_at`, `application_unknown`, `has_pds` and
+`apply_error` all come from corliss.views.home.
 {% endcomment %}
 
 {% block title %}Home — ZAI{% endblock %}
@@ -88,15 +89,59 @@ every page, so this page cannot drift from them.
           proves who you are; a cluster admin still has to let you in.
         </p>
 
+        {% if apply_error %}
+          {% comment %}
+          Bare `.alert` is the red one — see base.css, where `.alert--notice`
+          above is the variant that drops the alarm. A failed application is an
+          error, so it keeps it.
+          {% endcomment %}
+          <p class="alert" role="alert">{{ apply_error }}</p>
+        {% endif %}
+
         {% comment %}
-        Placeholder. This will eventually write a membership-request record to
-        the member's own PDS, which the registry picks up — that is not built
-        yet, so the button is deliberately inert rather than pointing at a route
-        that does not exist. Must stay a comment *block* — Django's hash-comment
-        syntax is single-line, so a multi-line one renders into the page.
+        Four states, and they are deliberately not collapsed into two. In order:
+        already applied; the PDS could not be asked, so we do not know; this
+        account has no PDS session at all (a dev_login user, which is the only
+        way that happens); and the ordinary case, the form.
+
+        The unknown state matters most. Showing the form to someone whose record
+        we simply failed to read invites a second application over the first, so
+        it says so and offers a reload instead. See corliss.views.home.
         {% endcomment %}
-        <button type="button" class="btn-primary">Apply for membership</button>
-        <p class="hint-text">Requests aren't wired up yet — ask an admin in the meantime.</p>
+        {% if application %}
+          <p class="page-text"><strong>Your application is in.</strong> It was
+          written to your own atproto repo
+          {% if applied_at %}on {{ applied_at|date:"j F Y" }}{% endif %}, and a
+          cluster admin will see it in the console. There is nothing further to
+          do — you'll be let in from there.</p>
+          {% if application.note %}
+            <p class="page-text">You wrote:</p>
+            <blockquote class="quote">{{ application.note }}</blockquote>
+          {% endif %}
+        {% elif application_unknown %}
+          <p class="page-text">We couldn't reach your PDS to check whether
+          you've already applied, so the form is held back rather than risk
+          writing over an application you've already made. Try again in a
+          moment.</p>
+          <p><a class="btn-primary" href="{% url 'home' %}">Check again</a></p>
+        {% elif not has_pds %}
+          <p class="page-text">This account has no connection to a PDS, so
+          there's nothing to write an application to. Sign in with your
+          Atmosphere handle to apply.</p>
+        {% else %}
+          <p class="page-text">Applying writes a short, <strong>public</strong>
+          record to your own atproto repo — anyone can read it, and it stays
+          yours. Keep the note brief, and don't put contact details in it.</p>
+          <form method="post" action="{% url 'apply' %}">
+            {% csrf_token %}
+            <p>
+              <label for="note">A line about yourself (optional, public)</label>
+              <textarea id="note" name="note" rows="3" maxlength="300"
+                        class="input"></textarea>
+            </p>
+            <button type="submit" class="btn-primary">Apply for membership</button>
+          </form>
+        {% endif %}
       </div>
     {% endif %}
   </div>

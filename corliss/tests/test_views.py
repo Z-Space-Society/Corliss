@@ -138,8 +138,15 @@ class HomeViewTests(NoRosterMixin, TestCase):
         self.assertNotContains(resp, 'name="handle"')
 
     def test_non_member_is_told_so_and_offered_the_apply_button(self):
+        # A real non-member has a PDS — it is resolved at login — and no
+        # application yet. Both halves matter: the button is held back without
+        # a PDS to write to, and replaced by the pending state once there is a
+        # record to show.
+        self.user.pds_url = "https://pds.example.com"
+        self.user.save(update_fields=["pds_url"])
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("home"))
+        with patch.object(atproto, "find_record", return_value=None):
+            resp = self.client.get(reverse("home"))
         self.assertContains(resp, "not a member yet")
         self.assertContains(resp, "Apply for membership")
 

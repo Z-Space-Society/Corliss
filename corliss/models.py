@@ -87,12 +87,31 @@ class User(AbstractUser):
     def has_pending_application(self):
         """Has this member asked for membership and not yet been answered?
 
-        PLACEHOLDER — always False. An application will be a record in the
-        member's own PDS that the registry picks up; none of that exists yet, so
-        there is nothing to read. Isolated here so that when it does exist this
-        is the only place that changes, rather than the nav template.
+        Read from **their own PDS**, never from the registry's index: the index
+        lags the write, so an applicant asking about themselves would be told no
+        for as long as the firehose took. `membership.my_application` caches
+        briefly, which is what keeps the nav asking this on every render from
+        costing a round trip per page.
+
+        A PDS that cannot be reached answers False, the way `is_cluster_admin`
+        swallows an unreadable roster: this decides a label, and an unreachable
+        PDS must not 500 a page. Anywhere the distinction matters — the home
+        page, which offers the button — calls `my_application` directly and
+        handles the third answer.
+
+        A blank `pds_url` short-circuits before any of that. It means no login
+        ever resolved a repo for this account (`dev_login` is the only way that
+        happens), so there is nowhere to look and no point resolving a DID that
+        does not exist.
         """
-        return False
+        from corliss import membership
+
+        if not self.pds_url:
+            return False
+        try:
+            return membership.my_application(self.did) is not None
+        except membership.ApplicationError:
+            return False
 
     @cached_property
     def membership_label(self):

@@ -8,6 +8,10 @@ ATProto client (people):
   store tokens server-side, establish the Django session.
 - `home`: the root page — an intro when signed out, your standing when in. The
   one page GATE never covers: it is where refused members land.
+- `apply`: writes a membership application into the member's *own* PDS, which
+  is the only thing a signed-in non-member can do here. It confers nothing:
+  the record asks, and only an admin's grant answers. See
+  `corliss.membership`'s "Applying" section.
 - `api`: the member's own API keys — issue, list, revoke, and usage, read live
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
@@ -50,6 +54,7 @@ from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
+from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -72,6 +77,9 @@ NEW_KEY_SESSION_KEY = "corliss:new_api_key"
 # Where a refusal from LiteLLM waits for the same hop, so the redirect that
 # follows a failed POST can explain itself.
 API_ERROR_SESSION_KEY = "corliss:api_error"
+
+# The same one-hop handoff for a failed membership application.
+APPLY_ERROR_SESSION_KEY = "corliss:apply_error"
 
 # How far back /api/ reports usage. A month is what fits on the page and what
 # a member is actually asking when they look ("am I using a lot?").
@@ -339,13 +347,86 @@ def home(request):
     real lookup against the cache table. Admin is not: it hangs off the user as
     `user.is_cluster_admin` because the nav asks it on every page, not just this
     one.
+
+    For a non-member the page also carries their **application** state, which is
+    three-valued and rendered as three different things: they have applied, they
+    have not, or their PDS could not be asked. The third is not folded into the
+    second — offering the button to someone who already has a record invites a
+    second one over the first — so an unreachable PDS says so and offers a
+    retry. `user.has_pending_application`, which the nav uses, is the flattened
+    two-valued version; this page needs the honest one.
     """
     did = request.user.did if request.user.is_authenticated else None
+    is_member = bool(did) and membership.is_active_member(did)
+
+    # Where this account's repo lives, blank when we have never resolved one —
+    # which is exactly the `dev_login` case, since those accounts complete no
+    # handshake. No PDS means nothing to write an application to and nothing to
+    # read one back from, so the page says that rather than offering a button
+    # whose only possible outcome is an error.
+    has_pds = bool(did) and bool(request.user.pds_url)
+
+    application, application_unknown, applied_at = None, False, None
+    if did and not is_member and has_pds:
+        try:
+            application = membership.my_application(did)
+        except membership.ApplicationError:
+            application_unknown = True
+        if application is not None:
+            # Parsed here so the template can use `|date`. A record whose
+            # `createdAt` is unreadable still counts as an application — the
+            # page just omits the date, the way the console renders an em-dash.
+            applied_at = membership.application_created_at(application)
+
     return render(
         request,
         "home.html",
-        {"is_member": bool(did) and membership.is_active_member(did)},
+        {
+            "is_member": is_member,
+            "application": application,
+            "applied_at": applied_at,
+            "application_unknown": application_unknown,
+            # Popped, not read: a failed apply explains itself exactly once,
+            # and a refresh should not replay it. Same one-hop handoff as
+            # `api`'s NEW_KEY_SESSION_KEY.
+            "apply_error": request.session.pop(APPLY_ERROR_SESSION_KEY, None),
+            "has_pds": has_pds,
+        },
     )
+
+
+@require_http_methods(["POST"])
+def apply(request):
+    """Write the signed-in member's membership application to their own PDS.
+
+    POST only, and Post/Redirect/Get back to `home`: the state this creates is
+    rendered there, and a refresh must not write a second time. The failure
+    message rides one hop in the session for the same reason `api` parks a
+    LiteLLM refusal there.
+
+    **Refuses an existing member.** Not because it would break anything — the
+    record is inert and a member who wrote one would simply have a redundant
+    record — but because the page never offers it to them, so a POST that gets
+    here is not something a member did on purpose.
+
+    Nothing here writes to `MembershipCache`, and nothing here decides
+    membership. An application asks; a grant answers.
+    """
+    if not request.user.is_authenticated:
+        request.session[POST_LOGIN_REDIRECT] = reverse("home")
+        return redirect("login")
+
+    if membership.is_active_member(request.user.did):
+        return redirect("home")
+
+    try:
+        membership.submit_application(
+            request.user, request.POST.get("note", "")
+        )
+    except membership.ApplicationError as exc:
+        request.session[APPLY_ERROR_SESSION_KEY] = str(exc)
+
+    return redirect("home")
 
 
 @require_http_methods(["GET", "POST"])
@@ -788,6 +869,16 @@ def _upsert_member(*, did, handle, pds_url, email="", email_confirmed=False):
 
 
 def _store_tokens(user, token_data, dpop_key, nonce, pending):
+    # `expires_at` is recorded but never consulted: the PDS is the authority on
+    # whether a token is still good, and `atproto.write_record` refreshes on
+    # being told `invalid_token` rather than on a clock we do not own. It is
+    # here so an operator looking at the row can see how old the session is.
+    expires_in = token_data.get("expires_in")
+    expires_at = (
+        timezone.now() + timedelta(seconds=expires_in)
+        if isinstance(expires_in, int)
+        else None
+    )
     AtprotoToken.objects.update_or_create(
         user=user,
         defaults={
@@ -798,6 +889,7 @@ def _store_tokens(user, token_data, dpop_key, nonce, pending):
             "refresh_token": token_data.get("refresh_token", ""),
             "dpop_private_pem": atproto.key_to_pem(dpop_key),
             "dpop_nonce": nonce or "",
+            "expires_at": expires_at,
         },
     )
 

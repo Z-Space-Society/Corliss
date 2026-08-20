@@ -11,8 +11,12 @@ Two path families, deliberately shaped:
 - the OIDC provider surface at the root, because the discovery document must
   sit at `issuer + /.well-known/openid-configuration` and the issuer is the
   bare origin.
-- the registry's membership push under `/membership/`, which is neither: it is
-  called by the SCN registry, not by a person or a relying party.
+- membership under `/membership/`, which is neither of those and holds both
+  ends of the same subject: `events`, which the SCN registry POSTs to when a
+  grant or revocation happens, and `apply`, which a signed-in non-member posts
+  to in order to ask. One is machines telling Corliss who is a member; the
+  other is a person asking to become one, and they share a prefix because they
+  share a noun, not a caller.
 """
 
 from django.conf import settings
@@ -47,6 +51,9 @@ urlpatterns = [
         views.membership_push,
         name="membership_push",
     ),
+    # The member's own end of the same subject: asking to join. Writes to the
+    # applicant's PDS, never to the registry.
+    path("membership/apply", views.apply, name="apply"),
     path("api/", views.api, name="api"),
     # The cluster console. Gated on the atproto admin roster, not on a Django
     # flag — see `views.manage`.

@@ -265,6 +265,7 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | JWKS | `/.well-known/jwks.json` |
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
 | Membership push (from the registry) | `/membership/events` |
+| Apply for membership (signed-in non-members) | `/membership/apply` |
 | Console — applications, members, admins, reconcile (cluster admins) | `/manage/` |
 | Systems — the stack, status stubbed (cluster admins) | `/systems/` |
 | Django admin | `/admin/` |
@@ -322,12 +323,55 @@ bin/push-grant --revoke did:plc:abc…        # revoke
 bin/push-grant --replay did:plc:abc… <rkey> # prove a stale event is a no-op
 ```
 
-### Applications — who has asked
+### Applications — asking, and who has asked
 
-`/manage/` lists everyone who has applied, above the member roll. An
-application is a `membership.request` record with rkey `self` in the
-**applicant's own PDS**, indexed by the registry and read back through its
-`listRequests` query (`MembershipRegistry.fetch_applications`).
+An application is a `membership.request` record with rkey `self` in the
+**applicant's own PDS** — one per account, world-readable, carrying a timestamp
+and an optional short note and nothing else. Both ends of it live here: a
+signed-in non-member writes one from the home page, and `/manage/` lists them
+above the member roll.
+
+#### Applying
+
+The home page's apply form posts to `/membership/apply`, which writes the record
+straight into the member's own repo with `com.atproto.repo.putRecord`
+(`membership.submit_application` → `atproto.write_record`). Corliss already
+holds that member's PDS tokens and DPoP key from login, so it needs no HappyView
+session and no registry procedure to do it — which is the one structural
+difference from how the Manage Console does the same thing.
+
+- **Applying confers nothing, and never touches `MembershipCache`.** The record
+  asks; only an admin's grant in the registry space answers. Nothing on the
+  apply path reads or writes the cache.
+- **The applicant's own state is read from their PDS, not from the index.**
+  `listRequests` lags the write by however long the firehose takes, so an
+  applicant who read their own status from it would click the button and watch
+  nothing change. `membership.my_application` reads the record back with
+  `atproto.find_record` and caches it briefly — that cache is what keeps the
+  nav's `Membership: pending` from costing a round trip per page.
+- **"No record" and "cannot reach your PDS" stay distinct.** A PDS reports a
+  missing record as an HTTP 400 carrying `RecordNotFound`, so the status alone
+  cannot separate them. When the read fails, the page says so and holds the form
+  back rather than inviting a second application over the first.
+- **The scope is narrow on purpose.** Corliss asks for
+  `repo:network.sharedcomputer.membership.request?action=create&action=update&action=delete`
+  — write access to that one collection — rather than `transition:generic`,
+  which would be standing permission to write *any* record type into every
+  member's repo for the sake of one record. See `atproto.SCOPE`.
+- **A stale access token is the ordinary case.** A Django session outlives a PDS
+  access token by a wide margin, so `atproto.write_record` refreshes on being
+  told `invalid_token` and retries once. It refreshes on the PDS's say-so rather
+  than on a clock, and it retries exactly once: a write that fails twice for the
+  same reason will fail a third time.
+- **Withdrawing is not built yet.** The scope above already permits the delete;
+  what is unverified is whether the registry's firehose indexer processes one,
+  and a withdraw button that leaves the row in an admin's queue would be worse
+  than none.
+
+#### The queue
+
+`/manage/` reads applications back through the registry's `listRequests` query
+(`MembershipRegistry.fetch_applications`).
 
 - **This is the one collection Corliss may read from the firehose index**, and
   the exception is not a softening of the rule above it. Grants must come from
