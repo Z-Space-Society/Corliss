@@ -460,7 +460,7 @@ def _get_with_dpop(url, access_token, dpop_key, nonce=None):
 
 def post_json_with_dpop(
     url, payload, access_token, dpop_key, nonce=None, *, headers=None,
-    timeout=TIMEOUT,
+    htu=None, timeout=TIMEOUT,
 ):
     """POST JSON to a DPoP-bound XRPC procedure, with one-shot nonce retry.
 
@@ -477,6 +477,15 @@ def post_json_with_dpop(
     client key and an explicit `Host`. It cannot override the proof or the
     authorization, which are the whole point of the call.
 
+    `htu` overrides what the proof *claims* the request URI is, while the
+    request still goes to `url`. They are the same thing for a PDS and are not
+    for the registry, which Corliss reaches at an internal address while
+    presenting the public `Host` — the server reconstructs the URI from that
+    header and compares it to the proof, so signing the address we dialled earns
+    a 401 `DPoP proof htu mismatch`. Only ever the public name for the same
+    private address; a caller that could point this anywhere would be signing
+    proofs for a server it is not talking to.
+
     Public, unlike its siblings, because `membership.MembershipRegistry` calls
     it: writing to the registry is a DPoP-authenticated POST like any other, and
     a second copy of the nonce dance living over there is exactly the drift this
@@ -485,7 +494,11 @@ def post_json_with_dpop(
 
     def _send(use_nonce):
         proof = make_proof(
-            dpop_key, "POST", url, nonce=use_nonce, access_token=access_token
+            dpop_key,
+            "POST",
+            htu or url,
+            nonce=use_nonce,
+            access_token=access_token,
         )
         return requests.post(
             url,

@@ -1410,6 +1410,29 @@ class MembershipRegistry:
             raise RegistryError(f"registry response to {path} was not an object")
         return body
 
+    def public_url(self, path):
+        """The URL the registry believes it is serving, for `path`.
+
+        **Not where the request goes** — that is `self.url`, the internal
+        address. This is the name a DPoP proof has to claim, and the two differ
+        for exactly the reason `MEMBERSHIP_REGISTRY_HOST` exists at all: the
+        registry routes by virtual host, so Corliss dials a private address and
+        presents the public name, and the registry then reconstructs the request
+        URI from that header. A proof signed for the address we dialled is
+        refused with `DPoP proof htu mismatch` — the same internal-address-with-
+        a-public-name trap that HTTP 421 was, one layer up.
+
+        HTTPS unless the host says otherwise, because the public origin is
+        behind the edge's TLS and that is the origin the registry knows itself
+        by — the SPA reaches it there and its proofs are accepted. A deployment
+        whose registry is genuinely plain HTTP can say so by putting the scheme
+        in the host value.
+        """
+        if not self.host:
+            return f"{self.url}{path}"
+        origin = self.host if "://" in self.host else f"https://{self.host}"
+        return f"{origin.rstrip('/')}{path}"
+
     def _headers(self):
         """The two headers every call to the registry carries.
 
@@ -1464,6 +1487,8 @@ class MembershipRegistry:
                 dpop_key,
                 nonce=token.dpop_nonce or None,
                 headers=self._headers(),
+                # Signed for the public name, sent to the private address.
+                htu=self.public_url(f"/xrpc/{nsid}"),
                 timeout=REGISTRY_TIMEOUT,
             )
         except requests.RequestException as exc:
