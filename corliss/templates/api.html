@@ -1,7 +1,8 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% comment %}
-The member's own API keys.
+The member's own API keys, and enough around them to make a first call.
 
 Three things this page has to get right, all of them about the secret:
 
@@ -13,6 +14,16 @@ Three things this page has to get right, all of them about the secret:
   local copy to disagree.
 - The `token` in the revoke form is the key's HASH, not the key. It identifies
   the key and is useless as a credential — which is why it can sit in a form.
+
+**The Quickstart is how show-once stops being a punishment.** The secret is in
+hand for exactly one render, so that render is the one where the `export` line
+is complete and the whole block is a single working paste. Every later render
+shows the placeholder and offers to fill it in client-side. That is the entire
+answer to "why can't I see my key again": you don't need to, if the moment you
+had it was also the moment you could use it.
+
+Nothing in the code blocks may be marked `|safe`. `new_key`, `example_model`
+and `API_URL` all interpolate into text a member is invited to run.
 
 The page never names LiteLLM. A member is pointed at "the cluster's API"; which
 proxy serves it is ours to change.
@@ -48,7 +59,8 @@ proxy serves it is ours to change.
       {% if new_key %}
         <p class="alert alert--notice" role="status">
           <strong>Copy this now.</strong> It will not be shown again — if you
-          lose it, revoke it and make another.
+          lose it, revoke it and make another. The Quickstart below already has
+          it filled in.
         </p>
         <div class="endpoint">{{ new_key }}</div>
         <p class="hint-text">Treat it like a password. Anything holding it can
@@ -136,6 +148,149 @@ proxy serves it is ours to change.
   </div>
 
   {% if litellm_configured and not keys_error %}
+    {% comment %}
+    Step one is shared and step two is not: all three clients read the key out
+    of the environment, so the `export` is written once above the tabs rather
+    than three times inside them. One place for the secret in the DOM, and the
+    narrative a member reads is "set it once, then any of these works".
+
+    Tabs are hidden radios plus `:checked ~` sibling selectors — no script.
+    They stay keyboard-reachable, and with the stylesheet gone all three panes
+    simply show at once, which is a worse page and not a broken one. The script
+    is spent only on the two things CSS genuinely cannot do: reading the
+    clipboard, and putting a pasted key into the examples.
+    {% endcomment %}
+    <h2 class="section-title">Quickstart</h2>
+    <div class="card">
+      <p class="step-label">1 &middot; Set your key</p>
+      <div class="code-block">
+        <button type="button" class="copy-btn" data-copy="qs-export" hidden>Copy</button>
+        <pre id="qs-export"><code>export SCN_API_KEY=<span data-key-slot>{% if new_key %}{{ new_key }}{% else %}sk-…{% endif %}</span></code></pre>
+      </div>
+      {% if new_key %}
+        <p class="hint-text">That is your new key, in the line above. Run it now
+        — once you leave this page the key is not recoverable.</p>
+      {% else %}
+        <div class="key-fill" data-key-fill hidden>
+          <label class="key-fill__label" for="key-fill-input">Paste your key to fill these examples</label>
+          <input type="text" id="key-fill-input" class="key-fill__input"
+                 autocomplete="off" autocapitalize="off" spellcheck="false"
+                 placeholder="sk-…">
+          <p class="hint-text">It stays in this page and is gone when you
+          reload. Nothing is sent to us — we could not store it if we wanted
+          to, which is why it was only shown once.</p>
+        </div>
+      {% endif %}
+
+      <p class="step-label">2 &middot; Make a call</p>
+      <div class="tabs">
+        {% comment %}
+        Each radio sits immediately before its own label so the active and
+        focused states are a `+` away, and the panes are selected with `:has()`
+        on the container. The radios stay in the tab order — they are moved out
+        of sight, not hidden from the accessibility tree — so the group is
+        arrow-keyed like any other radio group.
+        {% endcomment %}
+        <div class="tabs__bar">
+          <input class="tabs__radio" type="radio" name="qs-lang" id="qs-bash" checked>
+          <label class="tabs__label" for="qs-bash">curl</label>
+          <input class="tabs__radio" type="radio" name="qs-lang" id="qs-python">
+          <label class="tabs__label" for="qs-python">Python</label>
+          <input class="tabs__radio" type="radio" name="qs-lang" id="qs-node">
+          <label class="tabs__label" for="qs-node">Node</label>
+        </div>
+
+        <div class="tabs__panes">
+          <div class="tabs__pane tabs__pane--bash">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="qs-code-bash" hidden>Copy</button>
+              <pre id="qs-code-bash"><code>curl {{ API_URL }}/v1/chat/completions \
+  -H "Authorization: Bearer $SCN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "{{ example_model }}", "messages": [{"role": "user", "content": "Hello!"}]}'</code></pre>
+            </div>
+          </div>
+
+          <div class="tabs__pane tabs__pane--python">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="qs-code-python" hidden>Copy</button>
+              <pre id="qs-code-python"><code>import os
+from openai import OpenAI  # pip install openai
+
+client = OpenAI(
+    base_url="{{ API_URL }}/v1",
+    api_key=os.environ["SCN_API_KEY"],
+)
+
+response = client.chat.completions.create(
+    model="{{ example_model }}",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response.choices[0].message.content)</code></pre>
+            </div>
+          </div>
+
+          <div class="tabs__pane tabs__pane--node">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="qs-code-node" hidden>Copy</button>
+              <pre id="qs-code-node"><code>import OpenAI from "openai";  // npm install openai
+
+const client = new OpenAI({
+  baseURL: "{{ API_URL }}/v1",
+  apiKey: process.env.SCN_API_KEY,
+});
+
+const response = await client.chat.completions.create({
+  model: "{{ example_model }}",
+  messages: [{ role: "user", content: "Hello!" }],
+});
+console.log(response.choices[0].message.content);</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p class="hint-text">Any OpenAI-compatible client works — these three are
+      just the shortest way to prove the key. Streaming, tools and embeddings
+      are all reached the same way.{% if models_error or not models %} Fill in a
+      model name from the list below.{% endif %}</p>
+    </div>
+
+    <h2 class="section-title">Models</h2>
+    <div class="card">
+      {% if models_error %}
+        <p class="hint-text">The model list is unavailable right now.</p>
+      {% elif models %}
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>Type</th>
+                {% if show_context %}<th>Context</th>{% endif %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for model in models %}
+                <tr>
+                  <td class="data-table__did">{{ model.name }}</td>
+                  <td class="data-table__muted">{{ model.type_label }}</td>
+                  {% if show_context %}
+                    <td class="data-table__muted">{{ model.context_label|default:"—" }}</td>
+                  {% endif %}
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="hint-text">Read live from the cluster, and narrowed to what a
+        {{ tier }} key can reach — anything listed here, your key can call.
+        Pass the name as the <code class="inline-code">model</code> field.</p>
+      {% else %}
+        <p class="hint-text">No models are available to your tier right now.</p>
+      {% endif %}
+    </div>
+
     <h2 class="section-title">Usage</h2>
     <div class="card">
       {% if usage_error %}
@@ -182,4 +337,8 @@ proxy serves it is ours to change.
     </div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{% static 'js/api.js' %}" defer></script>
 {% endblock %}

@@ -75,6 +75,12 @@ API_ERROR_SESSION_KEY = "corliss:api_error"
 # a member is actually asking when they look ("am I using a lot?").
 USAGE_WINDOW_DAYS = 30
 
+# Stands in for a model name in /api/'s examples when the catalogue could not be
+# read. Obviously a blank to fill rather than something that looks like it might
+# work — a plausible-but-wrong model name would send someone debugging their
+# curl invocation over a 400 that was ours.
+EXAMPLE_MODEL_FALLBACK = "MODEL-NAME"
+
 
 # --- GATE: is this person allowed in? --------------------------------------
 #
@@ -389,6 +395,16 @@ def api(request):
             # turned the last two integration defects into ten-minute fixes.
             keys_error = str(exc)
 
+    models, models_error = [], None
+    if client.is_configured and not keys_error:
+        try:
+            models = client.models(tier)
+        except litellm.LiteLLMError as exc:
+            # Non-fatal, for the reason usage is below: the quickstart falls
+            # back to a placeholder model name and the table says so. A proxy
+            # that cannot list its models can still be holding working keys.
+            models_error = str(exc)
+
     usage_rows, usage_totals, usage_error = [], None, None
     if client.is_configured and not keys_error:
         try:
@@ -417,6 +433,20 @@ def api(request):
             "new_key": new_key,
             "max_keys": client.max_keys,
             "at_limit": len(keys) >= client.max_keys,
+            "models": models,
+            "models_error": models_error,
+            # Nothing on the cluster declares `max_input_tokens` today, and a
+            # column of nothing but em-dashes reads as broken rather than as
+            # "unknown". Shown when at least one model has an answer, so the
+            # table gains the column the moment an operator sets one.
+            "show_context": any(model.context for model in models),
+            # What the quickstart puts in the `"model"` field. A real name from
+            # the member's own tier makes the block a paste that runs; the
+            # placeholder only shows when there is nothing true to say.
+            "example_model": next(
+                (model.name for model in models if model.is_chat),
+                EXAMPLE_MODEL_FALLBACK,
+            ),
             "usage_rows": usage_rows,
             "usage_totals": usage_totals,
             "usage_error": usage_error,

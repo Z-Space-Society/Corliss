@@ -528,6 +528,14 @@ class ManageViewTests(NoRosterMixin, TestCase):
 
         self.assertContains(resp, ">did:plc:currentadmin</td>")
 
+    # Pinned rather than left to the ambient environment: this asserts the
+    # UNCONFIGURED page, so a developer whose .env carries real registry
+    # settings would otherwise watch it fail on a checkout they had not touched.
+    @override_settings(
+        MEMBERSHIP_REGISTRY_URL="",
+        MEMBERSHIP_REGISTRY_CLIENT_KEY="",
+        MEMBERSHIP_REGISTRY_TOKEN="",
+    )
     def test_the_button_is_disabled_with_a_reason_when_unconfigured(self):
         self._as_cluster_admin()
         self.client.force_login(self.user)
@@ -702,6 +710,10 @@ def _key(token="abc123def456", alias="alice.bsky.social/laptop"):
     )
 
 
+def _model(name, mode="chat", context=131072):
+    return litellm.Model(name=name, mode=mode, context=context)
+
+
 class ApiViewTests(NoRosterMixin, TestCase):
     """`/api/` — the member's keys.
 
@@ -717,6 +729,16 @@ class ApiViewTests(NoRosterMixin, TestCase):
         self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
         _grant()
         self.client.force_login(self.user)
+
+        # `/api/` asks LiteLLM three things and each test here is about at most
+        # one of them. The catalogue is stubbed class-wide because it is the one
+        # nothing below cares about: left unpatched it reaches for the real
+        # proxy, which is a five-second connect timeout on a laptop and a live
+        # call on anything that can route to the cluster. Tests that *are* about
+        # models patch over this.
+        models = patch.object(litellm.LiteLLM, "models", return_value=[])
+        models.start()
+        self.addCleanup(models.stop)
 
     @override_settings(API_URL="https://api.example.com")
     def test_endpoint_is_shown_when_configured(self):
@@ -868,6 +890,87 @@ class ApiViewTests(NoRosterMixin, TestCase):
             (date.fromisoformat(end) - date.fromisoformat(start)).days,
             views.USAGE_WINDOW_DAYS - 1,
         )
+
+    # --- the quickstart and the model list ---------------------------------
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_models_are_listed_for_the_cached_tier(self):
+        # The tier is not a parameter of the request, for the same reason
+        # issuance isn't: it comes from the membership cache or nowhere.
+        with patch.object(
+            litellm.LiteLLM, "models", return_value=[_model("qwen3-coder")]
+        ) as models:
+            with patch.object(litellm.LiteLLM, "keys_for", return_value=[]):
+                with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                    resp = self.client.get(reverse("api"))
+        models.assert_called_once_with("level-2")
+        self.assertContains(resp, "qwen3-coder")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_the_quickstart_names_a_model_the_member_can_actually_call(self):
+        # A runnable paste or it is not worth putting on the page. The model in
+        # the curl body is the first chat model the member's own tier reaches.
+        with patch.object(
+            litellm.LiteLLM,
+            "models",
+            return_value=[_model("nomic-embed-text", mode="embedding"),
+                          _model("qwen3-coder")],
+        ):
+            with patch.object(litellm.LiteLLM, "keys_for", return_value=[]):
+                with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                    resp = self.client.get(reverse("api"))
+        self.assertContains(resp, '"model": "qwen3-coder"')
+        self.assertNotContains(resp, '"model": "nomic-embed-text"')
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_an_empty_catalogue_leaves_a_blank_to_fill_not_a_guess(self):
+        # A plausible-looking model name would send someone debugging a 400
+        # that was ours.
+        with patch.object(litellm.LiteLLM, "keys_for", return_value=[]):
+            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                resp = self.client.get(reverse("api"))
+        self.assertContains(resp, views.EXAMPLE_MODEL_FALLBACK)
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_unreadable_models_do_not_take_the_keys_panel_with_them(self):
+        with patch.object(
+            litellm.LiteLLM, "models",
+            side_effect=litellm.LiteLLMError("models are down"),
+        ):
+            with patch.object(litellm.LiteLLM, "keys_for", return_value=[_key()]):
+                with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                    resp = self.client.get(reverse("api"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "laptop")
+        self.assertContains(resp, "The model list is unavailable right now")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_the_export_line_carries_the_real_key_once_and_then_a_placeholder(self):
+        # The whole answer to "why can't I see my key again": the one render
+        # that has it is the one where the block is a working paste.
+        with patch.object(litellm.LiteLLM, "issue_key", return_value="sk-brand-new"):
+            self.client.post(reverse("api"), {"action": "create", "label": "laptop"})
+
+        with patch.object(litellm.LiteLLM, "keys_for", return_value=[_key()]):
+            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                first = self.client.get(reverse("api"))
+                second = self.client.get(reverse("api"))
+        self.assertContains(first, "export SCN_API_KEY=<span data-key-slot>sk-brand-new")
+        self.assertNotContains(second, "sk-brand-new")
+        self.assertContains(second, "export SCN_API_KEY=<span data-key-slot>sk-")
+
+    @override_settings(**LITELLM_SETTINGS)
+    def test_the_key_filler_is_offered_only_when_there_is_no_fresh_key(self):
+        # Right after creation the examples are already filled, so an input
+        # inviting a paste would be asking for something already done.
+        with patch.object(litellm.LiteLLM, "issue_key", return_value="sk-brand-new"):
+            self.client.post(reverse("api"), {"action": "create", "label": "laptop"})
+        with patch.object(litellm.LiteLLM, "keys_for", return_value=[_key()]):
+            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
+                fresh = self.client.get(reverse("api"))
+                later = self.client.get(reverse("api"))
+        self.assertNotContains(fresh, "data-key-fill")
+        self.assertContains(later, "data-key-fill")
 
 
 class CallbackViewTests(TestCase):

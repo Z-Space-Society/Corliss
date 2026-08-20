@@ -166,6 +166,248 @@ class TeamTests(TestCase):
             self.assertEqual(client().team_id_for("level-3"), "t-new")
 
 
+def model_row(name, mode="chat", context=131072, api_base="http://10.1.1.113:8080/v1"):
+    """One entry as `/model/info` returns it — `litellm_params` and all.
+
+    The `api_base` is here on purpose rather than trimmed out of the fixture:
+    the point of several tests below is that it does *not* come out the other
+    end, and a fixture that never carried it could not show that.
+
+    `mode=None` drops `model_info` entirely, which is what the proxy actually
+    returns for a model nobody annotated — see `CLUSTER_MODELS`.
+    """
+    row = {
+        "model_name": name,
+        "litellm_params": {
+            "model": f"openai/{name}",
+            "api_base": api_base,
+            "api_key": "sk-upstream-secret",
+        },
+        "model_info": {},
+    }
+    if mode is not None:
+        row["model_info"] = {"mode": mode, "max_input_tokens": context}
+    return row
+
+
+# The five models on the cluster, as `/model/info` really answered on
+# 2026-08-20. Kept verbatim rather than tidied because every simplification in
+# the invented fixtures this replaced hid a defect: an unannotated model, a
+# third mode that is neither chat nor embedding, and a context length that is
+# null everywhere. A test that cannot see those is a test that passes while the
+# page is wrong.
+CLUSTER_MODELS = [
+    model_row("nomic-embed-text", mode="embedding", context=None),
+    model_row("GX10/northmini", mode=None),
+    model_row("GX10/gemma-26b", mode=None),
+    model_row("GTX1080/Qwen3.5-4B-notemp", mode="chat", context=None),
+    model_row("GTX1080/parakeet-v2", mode="audio_transcription", context=None),
+]
+
+
+class ModelTests(TestCase):
+    """The catalogue, and the tier it is narrowed to."""
+
+    def setUp(self):
+        cache.clear()
+
+    def _router(self, models, teams=(("level-2", "t-two", []),)):
+        return Router({
+            ("GET", "/model/info"): FakeResponse({"data": models}),
+            ("GET", "/team/list"): FakeResponse({"teams": [
+                {"team_alias": a, "team_id": i, "models": m} for a, i, m in teams
+            ]}),
+        })
+
+    def test_an_unscoped_tier_reaches_every_model(self):
+        # `models: []` is LiteLLM's own spelling of "everything", and it is what
+        # every tier carries today.
+        router = self._router([model_row("qwen3-coder"), model_row("llama-3.3")])
+        with patch("corliss.litellm.requests.request", router):
+            found = client().models("level-2")
+        self.assertEqual([m.name for m in found], ["llama-3.3", "qwen3-coder"])
+
+    def test_a_narrowed_tier_gets_only_what_its_team_lists(self):
+        # The shape this exists for. Nothing narrows a tier yet; when Phase F
+        # does, the page must not advertise a model the key is refused for.
+        router = self._router(
+            [model_row("qwen3-coder"), model_row("llama-3.3")],
+            teams=(("level-0", "t-zero", ["llama-3.3"]),),
+        )
+        with patch("corliss.litellm.requests.request", router):
+            found = client().models("level-0")
+        self.assertEqual([m.name for m in found], ["llama-3.3"])
+
+    def test_a_wildcard_team_list_means_everything(self):
+        for wildcard in ("*", "all-proxy-models", "all-team-models"):
+            with self.subTest(wildcard=wildcard):
+                cache.clear()
+                router = self._router(
+                    [model_row("qwen3-coder"), model_row("llama-3.3")],
+                    teams=(("level-2", "t-two", [wildcard]),),
+                )
+                with patch("corliss.litellm.requests.request", router):
+                    found = client().models("level-2")
+                self.assertEqual(len(found), 2)
+
+    def test_a_tier_with_no_team_gets_nothing_rather_than_everything(self):
+        # Fails closed, the same direction `team_id_for` does. Such a member
+        # cannot be issued a key at all, so listing models would advertise
+        # access that does not exist.
+        router = self._router([model_row("qwen3-coder")])
+        with patch("corliss.litellm.requests.request", router):
+            self.assertEqual(client().models("level-9"), [])
+
+    def test_a_blank_tier_reaches_no_models_and_no_network(self):
+        router = Router({})
+        with patch("corliss.litellm.requests.request", router):
+            self.assertEqual(client().models(""), [])
+        self.assertEqual(router.calls, [])
+
+    def test_one_model_on_two_backends_is_one_row(self):
+        # `/model/info` returns an entry per deployment. A member addresses the
+        # model by name either way and does not care how many serve it.
+        router = self._router([
+            model_row("qwen3-coder", api_base="http://10.1.1.113:8080/v1"),
+            model_row("qwen3-coder", api_base="http://10.1.1.114:8080/v1"),
+        ])
+        with patch("corliss.litellm.requests.request", router):
+            found = client().models("level-2")
+        self.assertEqual([m.name for m in found], ["qwen3-coder"])
+
+    def test_the_upstream_address_and_key_never_leave_this_module(self):
+        # `litellm_params` carries the internal address of an inference node and
+        # an external provider's own key. A Model is built field by field so
+        # there is nothing for a template to reach.
+        router = self._router([model_row("qwen3-coder")])
+        with patch("corliss.litellm.requests.request", router):
+            found = client().models("level-2")
+        rendered = repr([(m.name, m.mode, m.context) for m in found])
+        self.assertNotIn("10.1.1.113", rendered)
+        self.assertNotIn("sk-upstream-secret", rendered)
+        self.assertFalse(hasattr(found[0], "litellm_params"))
+
+    def test_chat_models_sort_before_the_embedder(self):
+        # The embedder is infrastructure that happens to be visible; someone
+        # reading this page came looking for something to send messages to.
+        router = self._router([
+            model_row("nomic-embed-text", mode="embedding"),
+            model_row("qwen3-coder"),
+        ])
+        with patch("corliss.litellm.requests.request", router):
+            found = client().models("level-2")
+        self.assertEqual([m.name for m in found], ["qwen3-coder", "nomic-embed-text"])
+
+    def test_a_model_declaring_no_mode_is_treated_as_chat(self):
+        # Both GX10 models on the cluster carry an empty `model_info`, and both
+        # are things to talk to.
+        router = self._router([{"model_name": "mystery"}])
+        with patch("corliss.litellm.requests.request", router):
+            found = client().models("level-2")
+        self.assertTrue(found[0].is_chat)
+        self.assertEqual(found[0].type_label, "chat")
+        self.assertEqual(found[0].context_label, "")
+
+    # --- against what the proxy actually returns ---------------------------
+
+    def test_a_transcription_model_is_not_offered_as_something_to_chat_with(self):
+        # `GTX1080/parakeet-v2` is ASR. Classed as chat it would head the sorted
+        # list and become the quickstart's example model, and every member
+        # pasting that block would get a 400 from a model that cannot chat.
+        router = self._router(CLUSTER_MODELS)
+        with patch("corliss.litellm.requests.request", router):
+            found = {m.name: m for m in client().models("level-2")}
+        parakeet = found["GTX1080/parakeet-v2"]
+        self.assertFalse(parakeet.is_chat)
+        self.assertEqual(parakeet.type_label, "audio transcription")
+
+    def test_the_cluster_catalogue_sorts_chat_first_then_the_rest(self):
+        router = self._router(CLUSTER_MODELS)
+        with patch("corliss.litellm.requests.request", router):
+            found = client().models("level-2")
+        self.assertEqual([m.name for m in found], [
+            "GTX1080/Qwen3.5-4B-notemp",
+            "GX10/gemma-26b",
+            "GX10/northmini",
+            "GTX1080/parakeet-v2",
+            "nomic-embed-text",
+        ])
+
+    def test_nothing_on_the_cluster_declares_a_context_length(self):
+        # The state that makes /api/ drop the Context column. Not an assertion
+        # that it should stay that way — it is here so that when an operator
+        # sets `max_input_tokens`, this test fails and says the column is back.
+        router = self._router(CLUSTER_MODELS)
+        with patch("corliss.litellm.requests.request", router):
+            found = client().models("level-2")
+        self.assertEqual([m.context_label for m in found], [""] * 5)
+
+    def test_an_unreadable_catalogue_raises_rather_than_reporting_none(self):
+        # "No models" and "could not ask" are different facts and the view
+        # renders them differently.
+        router = Router({
+            ("GET", "/team/list"): FakeResponse(
+                {"teams": [{"team_alias": "level-2", "team_id": "t-two", "models": []}]}
+            ),
+            ("GET", "/model/info"): FakeResponse("nonsense", status_code=500),
+        })
+        with patch("corliss.litellm.requests.request", router):
+            with self.assertRaises(litellm.LiteLLMError):
+                client().models("level-2")
+
+    def test_the_catalogue_is_asked_for_once_across_two_calls(self):
+        router = self._router([model_row("qwen3-coder")])
+        with patch("corliss.litellm.requests.request", router):
+            instance = client()
+            instance.models("level-2")
+            instance.models("level-2")
+        info = [c for c in router.calls if c[1] == "/model/info"]
+        self.assertEqual(len(info), 1)
+
+    def test_context_is_rounded_to_something_a_column_can_be_compared_in(self):
+        cases = {0: "", 8192: "8k", 131072: "131k", 262144: "262k", 2000000: "2M"}
+        for context, expected in cases.items():
+            with self.subTest(context=context):
+                model = litellm.Model(name="m", context=context)
+                self.assertEqual(model.context_label, expected)
+
+
+class TeamIndexTests(TestCase):
+    """`teams()` still answers `{alias: id}` now it is derived, not fetched."""
+
+    def setUp(self):
+        cache.clear()
+
+    def test_the_alias_map_survives_carrying_the_model_lists(self):
+        router = Router({("GET", "/team/list"): FakeResponse({"teams": [
+            {"team_alias": "level-1", "team_id": "t-one", "models": ["llama-3.3"]},
+            {"team_alias": "level-2", "team_id": "t-two", "models": []},
+        ]})})
+        with patch("corliss.litellm.requests.request", router):
+            self.assertEqual(
+                client().teams(), {"level-1": "t-one", "level-2": "t-two"}
+            )
+
+    def test_a_team_with_no_models_field_is_not_a_crash(self):
+        # LiteLLM has answered without it. An absent list and an empty one mean
+        # the same thing here, so neither may raise.
+        router = Router({("GET", "/team/list"): FakeResponse(
+            {"teams": [{"team_alias": "level-2", "team_id": "t-two"}]}
+        )})
+        with patch("corliss.litellm.requests.request", router):
+            self.assertEqual(client().team_id_for("level-2"), "t-two")
+
+    def test_both_shapes_come_from_a_single_fetch(self):
+        router = Router({("GET", "/team/list"): FakeResponse({"teams": [
+            {"team_alias": "level-2", "team_id": "t-two", "models": []},
+        ]})})
+        with patch("corliss.litellm.requests.request", router):
+            instance = client()
+            instance.teams()
+            instance.team_id_for("level-2")
+        self.assertEqual(len(router.calls), 1)
+
+
 class KeyListingTests(TestCase):
     def test_another_members_key_is_filtered_out_of_the_response(self):
         # Belt and braces over the user_id query parameter. If a LiteLLM

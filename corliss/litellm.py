@@ -55,12 +55,42 @@ class LiteLLMError(Exception):
 # 30s the registry gets for an operator-triggered reconcile.
 LITELLM_TIMEOUT = 5
 
-# Alias→id for the tier teams. They change only when Ansible runs, but a stale
+# The tier teams, by alias. They change only when Ansible runs, but a stale
 # *miss* is worse than a stale hit here: a miss refuses issuance (see
 # `team_id_for`), so this is short enough that a freshly-created team becomes
 # usable without a restart.
-_TEAM_CACHE_KEY = "corliss:litellm:teams"
+#
+# `:v2` because the cached value used to be `{alias: id}` and is now
+# `{alias: {"id":…, "models":[…]}}`. A process holding the old shape would make
+# `team_id_for` raise on a dict it cannot subscript, and LocMemCache outlives a
+# code reload under the dev server. Bumping the key costs one cold fetch.
+_TEAM_CACHE_KEY = "corliss:litellm:teams:v2"
 TEAM_CACHE_TTL = 300
+
+# The proxy's model catalogue, unscoped. Cached for the same reason and at the
+# same TTL as the teams: it is read on every render of `/api/`, changes only
+# when an operator adds a model, and a few minutes of staleness costs a member
+# nothing worse than a model missing from a table for one page load.
+_MODEL_CACHE_KEY = "corliss:litellm:models"
+MODEL_CACHE_TTL = 300
+
+# Modes a member can send `/v1/chat/completions` at. An **allowlist**, because
+# the proxy serves more than chat and the failure directions are not symmetric:
+# calling an unknown mode chat puts a model in the quickstart that answers a
+# 400, while calling a chat model unknown only leaves it out of the example.
+#
+# Blank counts as chat because it is what LiteLLM stores when nobody said —
+# `GX10/northmini` and `GX10/gemma-26b` both carry an empty `model_info` on the
+# cluster (checked against the proxy, 2026-08-20) and both are chat models. The
+# named modes that are NOT chat are real and in use: the same query returned
+# `embedding` for nomic-embed-text and `audio_transcription` for parakeet.
+_CHAT_MODES = ("", "chat", "completion")
+
+# What a team's `models` list says when it means "everything on the proxy".
+# An empty list is LiteLLM's own spelling of it — which is why `team_id_for`
+# treats a *missing* team as dangerous rather than permissive — and the two
+# wildcards are what the admin UI writes when someone picks "all models" there.
+_ALL_MODELS = ("*", "all-proxy-models", "all-team-models")
 
 # A key's label, as typed by a member. Ported from `issue_key.lua`: printable,
 # starts alphanumeric, and short enough to read in a table. It ends up inside
@@ -117,6 +147,60 @@ class ApiKey:
             return "(unnamed)"
         head, sep, tail = self.alias.partition("/")
         return tail if sep else head
+
+
+class Model:
+    """One model the proxy serves, as `/api/` renders it.
+
+    **Deliberately not a passthrough of LiteLLM's entry.** `/model/info`
+    answers with `litellm_params` attached, which carries the deployment's
+    `api_base` — an internal `10.1.1.x` address — and, for an external
+    provider, that provider's own key. None of that is a member's business and
+    all of it would be one careless `{{ model.params }}` away from a template.
+    So the fields are copied out by name and the rest is dropped at the door,
+    the same posture `_call` takes with the URL in an error string.
+    """
+
+    __slots__ = ("name", "mode", "context")
+
+    def __init__(self, *, name, mode="", context=0):
+        self.name = name
+        # LiteLLM's own word — "chat", "embedding", "audio_transcription" — or
+        # blank when the entry does not say. See `_CHAT_MODES` for why blank is
+        # read as chat and why the test is an allowlist rather than "not an
+        # embedding".
+        self.mode = mode
+        self.context = context
+
+    @property
+    def is_chat(self):
+        return self.mode in _CHAT_MODES
+
+    @property
+    def type_label(self):
+        """The mode as a member reads it, not as LiteLLM stores it.
+
+        Only the underscores go: inventing friendlier names for modes this
+        module does not enumerate would mean guessing at whatever an operator
+        adds next, and "audio transcription" is already the plain reading.
+        """
+        return (self.mode or "chat").replace("_", " ")
+
+    @property
+    def context_label(self):
+        """`262144` → `262k`. Blank when the model does not declare one.
+
+        Rounded, not exact: nobody sizing a prompt needs the last 144 tokens,
+        and a column of `262144`/`131072` is read as noise where `262k`/`131k`
+        is read as a comparison.
+        """
+        if not self.context:
+            return ""
+        if self.context >= 1_000_000:
+            return f"{self.context / 1_000_000:.1f}M".replace(".0M", "M")
+        if self.context >= 1000:
+            return f"{self.context // 1000}k"
+        return str(self.context)
 
 
 class LiteLLM:
@@ -211,14 +295,19 @@ class LiteLLM:
 
     # --- teams: the tier map -----------------------------------------------
 
-    def teams(self, *, refresh=False):
-        """Every team, as `{team_alias: team_id}`.
+    def _team_index(self, *, refresh=False):
+        """Every team, as `{team_alias: {"id": …, "models": [...]}}`.
 
         Teams are created by the `litellm` role in zai-ops, one per tier slug,
         and resolved here by alias rather than by an id baked into config —
         an id is generated at creation time and would have to be carried out of
         Ansible by hand, which is the class of manual step the cluster's prime
         directive exists to delete.
+
+        The `models` list comes free in the same response, and it *is* the
+        tier's model-access list — `litellm_tiers[*].models` in the role,
+        mirrored onto the team. Keeping it here is what lets `/api/` show a
+        member the models their tier can reach without a second round trip.
         """
         if not refresh:
             cached = cache.get(_TEAM_CACHE_KEY)
@@ -233,10 +322,30 @@ class LiteLLM:
                 continue
             alias, team_id = entry.get("team_alias"), entry.get("team_id")
             if alias and team_id:
-                found[alias] = team_id
+                models = entry.get("models")
+                found[alias] = {
+                    "id": team_id,
+                    # Plain lists of plain strings, not whatever LiteLLM sent:
+                    # this goes into a cache that a real backend would have to
+                    # serialise, the same constraint `membership` notes about
+                    # caching the record rather than the object.
+                    "models": [m for m in (models or []) if isinstance(m, str)],
+                }
 
         cache.set(_TEAM_CACHE_KEY, found, TEAM_CACHE_TTL)
         return found
+
+    def teams(self, *, refresh=False):
+        """Every team, as `{team_alias: team_id}`.
+
+        The shape everything but `models` wants. Derived rather than fetched,
+        so there is still exactly one `/team/list` call and one cache entry
+        behind both this and `_team_index`.
+        """
+        return {
+            alias: team["id"]
+            for alias, team in self._team_index(refresh=refresh).items()
+        }
 
     def team_id_for(self, tier):
         """The team a tier maps to. Raises when the tier has no team.
@@ -266,6 +375,98 @@ class LiteLLM:
                 "an administrator needs to create it before keys can be issued"
             )
         return team_id
+
+    # --- models ------------------------------------------------------------
+
+    def catalogue(self, *, refresh=False):
+        """Every model the proxy serves, unscoped. Chat first, then embedding.
+
+        Read from `/model/info` rather than `/v1/models` because the latter
+        answers with bare ids: no mode, no context length, so no way to tell a
+        member which of these they can hold a conversation with.
+
+        The proxy's model list is not in git — `config.yaml` carries only the
+        floor embedder and everything else is added at runtime and persisted in
+        Postgres (`STORE_MODEL_IN_DB`). Asking the proxy is therefore not a
+        convenience, it is the only way to know.
+        """
+        if not refresh:
+            cached = cache.get(_MODEL_CACHE_KEY)
+            if cached is not None:
+                return [Model(**entry) for entry in cached]
+
+        payload = self._call("GET", "/model/info")
+        entries = payload.get("data") if isinstance(payload, dict) else payload
+        if not isinstance(entries, list):
+            raise LiteLLMError("the API service answered with something unreadable")
+
+        # Keyed by name, because `/model/info` returns one entry per
+        # *deployment*: a model served by two inference nodes appears twice and
+        # a member does not care, since they address it by the one name either
+        # way. First entry wins; a later deployment of the same name differing
+        # in declared context is an operator's inconsistency, not a choice to
+        # surface here.
+        found = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("model_name")
+            if not isinstance(name, str) or not name or name in found:
+                continue
+            # `model_info` only. `litellm_params` is dropped here and this is
+            # the only place it could have leaked — see `Model`.
+            info = entry.get("model_info") or {}
+            if not isinstance(info, dict):
+                info = {}
+            context = info.get("max_input_tokens") or info.get("max_tokens") or 0
+            found[name] = {
+                "name": name,
+                "mode": info.get("mode") if isinstance(info.get("mode"), str) else "",
+                "context": context if isinstance(context, int) else 0,
+            }
+
+        models = [Model(**entry) for entry in found.values()]
+        # Chat first: a member reading this page is almost always looking for
+        # something to send messages to, and the embedder and the transcriber
+        # are infrastructure that happens to be visible.
+        models.sort(key=lambda m: (not m.is_chat, m.name))
+
+        cache.set(
+            _MODEL_CACHE_KEY,
+            [{"name": m.name, "mode": m.mode, "context": m.context} for m in models],
+            MODEL_CACHE_TTL,
+        )
+        return models
+
+    def models(self, tier):
+        """The models a key on this tier can actually reach.
+
+        **Scoped, and fails closed the way `team_id_for` does.** A tier with no
+        team — or no tier at all — gets an empty list rather than the whole
+        catalogue: such a member cannot be issued a key in the first place
+        (`issue_key` refuses a blank tier), so listing models for them would
+        advertise access that does not exist.
+
+        Above that floor the scoping is LiteLLM's own: a team's `models` list
+        is what its keys may address, and an empty one means everything. Every
+        tier is empty today, so this returns the full catalogue — but it is the
+        shape that stays correct when tiers are narrowed, and it means the page
+        can never name a model the member's key would be refused for.
+        """
+        if not tier:
+            return []
+        team = self._team_index().get(tier)
+        if team is None:
+            team = self._team_index(refresh=True).get(tier)
+        if team is None:
+            return []
+
+        catalogue = self.catalogue()
+        allowed = team["models"]
+        if not allowed or any(entry in _ALL_MODELS for entry in allowed):
+            return catalogue
+        permitted = set(allowed)
+        return [model for model in catalogue if model.name in permitted]
 
     # --- users -------------------------------------------------------------
 

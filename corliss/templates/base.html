@@ -138,5 +138,13 @@
       <span class="footer__copy">&copy; 2026 <a href="{{ PUBLIC_BASE_URL }}" class="footer__link">sharedcomputer.network</a> by <a href="https://z-space.ca" target="_blank" rel="noopener" class="footer__link">Z-Space</a></span>
     </footer>
   </div>
+
+  {% comment %}
+  Empty on every page but /api/, and that is the intended state. This app is
+  server-rendered and stays that way: the nav dropdowns above are CSS because
+  they can be, and a page that wants script has to ask for it here rather than
+  getting it by default. See `static/js/api.js` for what earned the exception.
+  {% endcomment %}
+  {% block scripts %}{% endblock %}
 </body>
 </html>
