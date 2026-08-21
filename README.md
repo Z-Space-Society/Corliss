@@ -713,9 +713,9 @@ each secret exactly once.
 
 This is the half of the deploy plan's Phase E that moves LiteLLM provisioning
 out of the registry. It was HappyView Lua until the registry was stripped of its
-gateway integration (scn-ops `ad9b424`, "Phase E0"), which was right — a registry
-that provisions nothing needs no credential that can act on anyone's behalf — and
-left nothing provisioning LiteLLM until this.
+gateway integration (member-registry `ad9b424`, "Phase E0"), which was right —
+a registry that provisions nothing needs no credential that can act on anyone's
+behalf — and left nothing provisioning LiteLLM until this.
 
 ### Settings
 

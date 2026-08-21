@@ -55,9 +55,9 @@ TIMEOUT = 10
 # request — is defined as "write (create/update/delete) any repository record
 # type", i.e. standing permission for Corliss to write anything at all into
 # every member's repo, in exchange for the one record it actually needs. The
-# scn-ops SPA has asked for exactly this granular form in production against
-# stock Bluesky PDS software, which is what the applications now in the registry
-# index were written with.
+# member-registry SPA has asked for exactly this granular form in production
+# against stock Bluesky PDS software, which is what the applications now in the
+# registry index were written with.
 #
 # `action=delete` is requested although nothing deletes yet: withdrawing an
 # application will, and a scope added later would mean a second consent round

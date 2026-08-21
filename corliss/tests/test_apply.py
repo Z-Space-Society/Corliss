@@ -627,8 +627,8 @@ class ScopeTests(TestCase):
     def test_it_does_not_ask_for_blanket_repo_write(self):
         # `transition:generic` is "write any repository record type" — standing
         # permission to write anything at all into every member's repo, for the
-        # sake of one record. The granular scope above is what scn-ops has asked
-        # for in production.
+        # sake of one record. The granular scope above is what member-registry
+        # has asked for in production.
         self.assertNotIn("transition:generic", atproto.SCOPE)
 
     def test_email_is_still_asked_for(self):

@@ -1151,10 +1151,10 @@ LIST_REQUESTS_NSID = "network.sharedcomputer.membership.listRequests"
 APPROVE_MEMBER_NSID = "network.sharedcomputer.admin.approveMember"
 REVOKE_MEMBER_NSID = "network.sharedcomputer.admin.revokeMember"
 
-# The tier vocabulary, mirroring `scn-ops/src/tiers.ts` and the TIERS table in
-# `lua/approve_member.lua`. SCN owns these slugs; they are not read from
-# whatever enforces entitlements, which is the point — the registry decides
-# what a tier is, and the enforcer maps from the slug.
+# The tier vocabulary, mirroring `member-registry/src/tiers.ts` and the TIERS
+# table in `lua/approve_member.lua`. SCN owns these slugs; they are not read
+# from whatever enforces entitlements, which is the point — the registry
+# decides what a tier is, and the enforcer maps from the slug.
 #
 # Slugs rather than integers because `level-0` is the free tier and the most
 # common one. The reason is stated upstream in JavaScript terms (`0` is falsy,
@@ -1203,8 +1203,8 @@ APPLICATIONS_MAX_PAGES = 5
 # PKCE verifier binding the provision to the registration, no client secret.
 # Nothing needs one — the pair is single-use and short-lived — and not minting a
 # secret keeps this repo's answer to "what can this key do if it leaks" the same
-# as scn-ops': register a session for someone who has already authorised, which
-# still cannot write anything the roster does not allow.
+# as member-registry's: register a session for someone who has already
+# authorised, which still cannot write anything the roster does not allow.
 
 
 def provision_registry_key(registry, *, pkce_challenge):
