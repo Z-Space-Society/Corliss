@@ -82,10 +82,11 @@ left blank, which simply hides what it feeds. The `LITELLM_*` trio is what makes
 
 The nav's two admin links answer to **two different authorities**, deliberately:
 "Manage Console" to the atproto admin roster (`user.is_cluster_admin`), and
-"Django admin" to Django's own `is_superuser`. A roster edit must not hand
-anyone the Django admin, where the session and OIDC client tables live — see
+"Django admin" to Django's own `is_staff`. A roster edit must not hand anyone
+the Django admin, where the session and OIDC client tables live — see
 [Membership](#membership-who-is-allowed-in). Use `manage.py make_admin` for the
-latter.
+latter; it grants staff only, and `--superuser` — the flag that bypasses every
+permission check — has to be asked for.
 
 ### Why atproto login can't work over localhost
 
@@ -140,7 +141,7 @@ DEV_ADMIN_DIDS=did:dev:you.bsky.social   # alongside DEBUG=true
 Those DIDs answer yes to `is_cluster_admin` and to nothing else: no membership,
 no Django flag, exactly as the real roster grants nothing but itself. Same
 `DEBUG` requirement and the same `manage.py check` failure if it is set without
-one. It does **not** grant the Django admin — that is `is_superuser`, via
+one. It does **not** grant the Django admin — that is `is_staff`, via
 `manage.py make_admin`.
 
 #### Real atproto login locally (a named tunnel)
@@ -247,7 +248,8 @@ than being duplicated here so there is one place for it to be correct.
 ### Admin
 
 ```bash
-manage.py make_admin alice.bsky.social   # promote an ATProto identity (keyed on DID)
+manage.py make_admin alice.bsky.social   # Django staff, keyed on DID (--superuser opts in
+                                         #   to the flag that bypasses every check)
 manage.py ensure_admin                   # idempotent break-glass local admin;
                                          #   reads CORLISS_ADMIN_PASSWORD
 ```
