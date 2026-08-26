@@ -225,8 +225,20 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertContains(resp, MANAGE_URL)
+        self.assertContains(resp, reverse("manage"))
         self.assertNotContains(resp, "Django admin")
+
+    @override_settings(MANAGE_URL=MANAGE_URL)
+    def test_the_manage_console_is_not_in_the_nav_even_when_configured(self):
+        # A configured MANAGE_URL no longer buys a nav entry: /manage/ covers
+        # what that console did, and two entries onto the same job only ask the
+        # reader which one is current. The setting still feeds the fallback link
+        # on /manage/, so it is the *nav* this asserts about, not the setting.
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, MANAGE_URL)
+        self.assertNotContains(resp, "Manage Console")
 
     @override_settings(MANAGE_URL=MANAGE_URL)
     def test_console_link_survives_an_empty_membership_cache(self):
@@ -237,7 +249,7 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertContains(resp, MANAGE_URL)
+        self.assertContains(resp, reverse("manage"))
 
     @override_settings(MANAGE_URL=MANAGE_URL)
     def test_superuser_sees_the_django_admin_without_being_on_the_roster(self):

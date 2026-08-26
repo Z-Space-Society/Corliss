@@ -71,10 +71,11 @@
         because it is served by this app: there is no setting that can leave it
         pointing nowhere.
 
-        Two Manage entries during the migration. `Membership` is the Corliss
-        console that supersedes the SPA; `Manage Console` is the SPA, still
-        holding the write surface (approve, revoke, set tier, roster) until that
-        moves here. The SPA link goes when it does.
+        The Manage Console (the SPA) is deliberately no longer offered here:
+        `/manage/` covers everything it did, roster editing included, so a
+        second entry onto the same job could only ask the reader which one was
+        current. `MANAGE_URL` still renders on `/manage/` itself, as the
+        fallback for an admin whose sign-in picked up no registry session.
         {% endcomment %}
         {% if user.is_cluster_admin or user.is_superuser %}
           <div class="nav__menu">
@@ -83,9 +84,6 @@
             <div class="nav__dropdown nav__dropdown--left">
               {% if user.is_cluster_admin %}
                 <a class="nav__dropdown-item" href="{% url 'manage' %}">Membership</a>
-              {% endif %}
-              {% if user.is_cluster_admin and MANAGE_URL %}
-                <a class="nav__dropdown-item" href="{{ MANAGE_URL }}">Manage Console</a>
               {% endif %}
               {% if user.is_cluster_admin %}
                 <a class="nav__dropdown-item" href="{% url 'systems' %}">Systems</a>

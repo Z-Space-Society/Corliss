@@ -62,11 +62,12 @@ to activate. `uv run python manage.py …` is the explicit equivalent.
 
 Configuration is entirely env-driven — see [`.env.example`](.env.example) for
 the full list. `.env` is git-ignored; **never commit secrets or private keys**.
-`CHAT_URL` drives the nav's "Chat" link, `MANAGE_URL` the "Manage Console" entry
-in its Manage menu (**on its way out** — `/manage/` now covers everything that
-console did, including roster editing; the link and this setting go when the
-`manage_console` role is removed), and `API_URL` both the endpoint shown on
-`/api/` and the
+`CHAT_URL` drives the nav's "Chat" link, `MANAGE_URL` the one remaining link to
+the Manage Console — the fallback offered on `/manage/` to an admin whose
+sign-in picked up no registry session (the nav entry is **gone**: `/manage/`
+covers everything that console did, roster editing included, and the setting
+itself goes when the `manage_console` role is removed) — and `API_URL` both the
+endpoint shown on `/api/` and the
 "LiteLLM Admin" entry in the Manage menu (`API_URL` + `/ui/`, cluster admins
 only — derived rather than configured separately, since a second setting for the
 same origin could only ever disagree with the first). `HAPPYVIEW_URL` and
