@@ -53,7 +53,7 @@ that does not contradict the first invariant above.
 import json
 import logging
 import re
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, timedelta, timezone as dt_timezone
 
 import requests
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -62,6 +62,7 @@ from jwt.exceptions import InvalidKeyError
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
+from django.utils import timezone
 
 from corliss import atproto, litellm, oidc
 from corliss.models import MembershipCache, User
@@ -364,6 +365,11 @@ ROSTER_COLLECTION = "network.sharedcomputer.admin.list"
 ROSTER_RKEY = "self"  # the lexicon pins it: "key": "literal:self"
 
 _ROSTER_CACHE_KEY = "corliss:roster"
+# Cached in place of the record when there is no roster record at all, so the
+# "never bootstrapped" answer is remembered as cheaply as a real one instead of
+# re-reading the PDS on every login. A string rather than a sentinel object
+# because it round-trips through any cache backend.
+_ROSTER_ABSENT = "absent"
 ROSTER_CACHE_TTL = 300
 
 # A failed fetch is cached too, briefly. Without this an unreachable PDS adds
@@ -413,13 +419,18 @@ class Roster:
     question is asked of *all* its entries, not the first one found.
     """
 
-    def __init__(self, entries, malformed=()):
+    def __init__(self, entries, malformed=(), exists=True):
         self.entries = list(entries)
         # DIDs whose entry could not be parsed. Not silently dropped: an
         # unreadable entry is an admin whose authority we cannot evaluate, and
         # reconciliation refuses to run against a roster it only half
         # understands rather than quietly ignoring their grants.
         self.malformed = list(malformed)
+        # False only when the record does not exist yet — a network that has
+        # never had a roster. Distinct from a roster that exists and lists
+        # nobody, which is a deliberate state and fails closed like any other
+        # empty roster. See `is_cluster_admin`.
+        self.exists = exists
 
     @classmethod
     def from_record(cls, record):
@@ -499,6 +510,8 @@ def fetch_roster(*, refresh=False):
     """
     if not refresh:
         cached = cache.get(_ROSTER_CACHE_KEY)
+        if cached == _ROSTER_ABSENT:
+            return Roster([], exists=False)
         if cached is not None:
             return Roster.from_record(cached)
         failure = cache.get(_ROSTER_FAILURE_KEY)
@@ -512,10 +525,19 @@ def fetch_roster(*, refresh=False):
         raise RosterError("SCN_SERVICE_DID is not configured")
 
     try:
-        record = atproto.get_record(service_did, ROSTER_COLLECTION, ROSTER_RKEY)
+        # `find_record`, not `get_record`, because "no roster record yet" and
+        # "the PDS is down" must not answer the same way: the first is a network
+        # nobody has bootstrapped and the second is an outage. A PDS reports
+        # both with a 4xx and only the body tells them apart.
+        record = atproto.find_record(service_did, ROSTER_COLLECTION, ROSTER_RKEY)
     except atproto.OAuthError as exc:
         cache.set(_ROSTER_FAILURE_KEY, str(exc), ROSTER_FAILURE_TTL)
         raise RosterError(str(exc)) from exc
+
+    if record is None:
+        cache.set(_ROSTER_CACHE_KEY, _ROSTER_ABSENT, ROSTER_CACHE_TTL)
+        cache.delete(_ROSTER_FAILURE_KEY)
+        return Roster([], exists=False)
 
     roster = Roster.from_record(record)
     # Cache the record, not the Roster: a plain dict survives any cache backend
@@ -542,9 +564,21 @@ def is_cluster_admin(did):
     if settings.DEBUG_FROM_ENV and did in settings.DEV_ADMIN_DIDS:
         return True
     try:
-        return fetch_roster().is_current_admin(did)
+        roster = fetch_roster()
     except RosterError:
         return False
+    if not roster.exists:
+        # Bootstrap, mirroring the registry's own rule: with no roster record
+        # anywhere, the service account is the sole admin so that the first one
+        # can be written. It owns the repo the roster goes in, so this grants
+        # nothing it could not already do by writing that record by hand — it
+        # only lets it be done through `/manage/` instead.
+        #
+        # **An existing-but-empty roster still fails closed**, which is why this
+        # asks `exists` rather than counting entries. Deliberately emptying the
+        # roster is a decision; never having written one is not.
+        return bool(settings.SCN_SERVICE_DID) and did == settings.SCN_SERVICE_DID
+    return roster.is_current_admin(did)
 
 
 def may_enter(did):
@@ -578,6 +612,398 @@ def may_enter(did):
     that cache is cold — is asked only when the cheap answer is no.
     """
     return bool(did) and (is_active_member(did) or is_cluster_admin(did))
+
+
+# --- Editing the roster ----------------------------------------------------
+#
+# The roster is a record in the **service account's own repo**, and an atproto
+# repo is writable only by its owner — there is no cross-repo grant to hand a
+# person's session. So Corliss brokers: it verifies the actor is a current
+# admin, then spends the service account's own stored session to make the edit.
+# The actor's name goes into the entry (`addedBy` / `removedBy`), which is what
+# keeps the record answerable for who decided what.
+#
+# **Why the roster stays where it is**, rather than moving somewhere Corliss
+# could write it directly: three Lua procedures in member-registry gate every
+# registry write on this record, HappyView cannot read Corliss's database, and
+# grants are verified against who was a current admin *at the grant's time*
+# (`Roster.was_admin_at`). It is the registry's authorization mechanism, which
+# Corliss reads — not Corliss's own notion of admin. Keeping it outside Corliss
+# is also what leaves governance standing if Corliss is ever compromised.
+#
+# **Both halves of "make an admin" happen together.** The roster entry is the
+# authority; `is_staff` is a local mirror of it so that "admin" means one thing
+# in this app rather than two. The roster is written first: if that fails,
+# nothing has changed and the caller gets an error naming the fix, rather than
+# a half-admin who holds a Django flag the registry has never heard of.
+
+ROSTER_MAX_ENTRIES = 500
+
+# When the console starts saying the service session is worth a look. Not an
+# expiry — nothing refuses on it. It exists so a lapse is noticed on a quiet
+# Tuesday rather than while someone is trying to appoint an admin.
+SERVICE_SESSION_STALE_DAYS = 30
+
+
+# "Authenticate", never "sign in": the reader is already signed in as
+# themselves and stays that way, and the wrong word makes an errand sound like
+# being logged out.
+SIGN_IN_AS_SERVICE = (
+    "Use the lock on the console to authenticate the service account — nobody "
+    "needs to be given a password to do it."
+)
+
+
+def _service_token(*, for_registry=False):
+    """The service account's stored session, or a `RosterError` naming the fix.
+
+    No new model and no new setting: the service account is a `User` like any
+    other, and this is the row `views._store_tokens` wrote when it last signed
+    in. What makes it usable for the roster is the scope that login asked for —
+    see `views._scope_for`.
+
+    **Two sessions expire independently, and only one of them is ours.** The
+    stored PDS tokens are Corliss's and refresh themselves on use. The
+    HappyView-registered session is HappyView's copy, and re-registering needs
+    a key HappyView provisions for a fresh login handshake — so refreshing ours
+    cannot revive theirs. `for_registry` asks for the second, which only
+    `set_space_access` needs; the roster write is a plain PDS call and does not.
+
+    Saying which one died is the whole point of the distinction: both failures
+    look identical from the console and only one of them is worth signing in
+    over.
+    """
+    from corliss.models import AtprotoToken
+
+    service_did = settings.SCN_SERVICE_DID
+    if not service_did:
+        raise RosterError("SCN_SERVICE_DID is not configured")
+    token = AtprotoToken.objects.filter(user__did=service_did).first()
+    if token is None or not token.access_token:
+        raise RosterError(
+            f"there is no stored session for the service account. "
+            f"{SIGN_IN_AS_SERVICE}"
+        )
+    if for_registry and not token.can_write_registry:
+        raise RosterError(
+            "the service account's session cannot reach the registry: it has "
+            "PDS tokens but no registry session. " + SIGN_IN_AS_SERVICE
+        )
+    return token
+
+
+def refresh_service_session():
+    """Keep the service session alive. Returns a one-line status for the caller.
+
+    The roster changes perhaps monthly, so without this the session would only
+    ever be exercised at the moment somebody needs it — which is exactly when
+    discovering it has expired is most expensive. Spending it on a schedule
+    turns a lapse into something noticed by a cron job instead.
+
+    Refreshing rotates the refresh token, which is the point: an atproto
+    refresh token that is used stays alive, and one that is not eventually does
+    not. **Only the PDS half.** HappyView's registered copy cannot be renewed
+    from here — see `_service_token` — so this narrows the failure to something
+    a sign-in fixes, it does not remove it.
+
+    Never raises. A failed keep-alive must not fail the reconciliation it rides
+    along with; the console's health line is where a human finds out.
+    """
+    try:
+        token = _service_token()
+    except RosterError as exc:
+        return f"service session: {exc}"
+
+    try:
+        atproto.refresh_session(token)
+    except atproto.OAuthError as exc:
+        log.warning("service session refresh failed: %s", exc)
+        return f"service session: could not refresh ({exc}). {SIGN_IN_AS_SERVICE}"
+    return "service session: refreshed"
+
+
+def service_session_status():
+    """What `/manage/` shows about the session roster edits depend on.
+
+    A dict, never an exception: this renders on a page that must still work
+    when the answer is bad. `stale` is advisory only — nothing refuses on it —
+    because the PDS is the authority on whether a token still works and a clock
+    we do not own is not worth pre-empting.
+    """
+    from corliss.models import AtprotoToken
+
+    service_did = settings.SCN_SERVICE_DID
+    if not service_did:
+        return {"configured": False}
+    # A handle, because this renders on a page and a DID is not something to
+    # show a person. Falls back to the DID only when resolution fails, which is
+    # better than a blank where an account name belongs.
+    handle = handles_for([service_did]).get(service_did, service_did)
+    token = AtprotoToken.objects.filter(user__did=service_did).first()
+    if token is None or not token.access_token:
+        return {
+            "configured": True,
+            "did": service_did,
+            "handle": handle,
+            "present": False,
+        }
+    return {
+        "configured": True,
+        "did": service_did,
+        "handle": handle,
+        "present": True,
+        "can_write_registry": token.can_write_registry,
+        "registry_session_at": token.registry_session_at,
+        "updated_at": token.updated_at,
+        "stale": (
+            token.registry_session_at is None
+            or token.registry_session_at
+            < timezone.now() - timedelta(days=SERVICE_SESSION_STALE_DAYS)
+        ),
+    }
+
+
+def _write_roster(entries):
+    """Persist `entries` as the roster record, as the service account.
+
+    Uses `atproto.write_record`, which writes the *user's own* repo — which is
+    exactly where the roster lives — and refreshes the access token once if the
+    PDS says it is stale. Whole-record replace: the lexicon pins rkey `self`,
+    so there is no partial update and no server-side merge.
+    """
+    token = _service_token()
+    record = {
+        "$type": ROSTER_COLLECTION,
+        "admins": entries,
+        "updatedAt": _now_iso(),
+    }
+    try:
+        atproto.write_record(token.user, ROSTER_COLLECTION, ROSTER_RKEY, record)
+    except atproto.OAuthError as exc:
+        raise RosterError(f"could not write the roster: {exc}") from exc
+    # The record we just wrote is the truth; the cached copy is now a lie, and
+    # `/manage/` re-reads immediately after redirecting.
+    cache.delete(_ROSTER_CACHE_KEY)
+    cache.delete(_ROSTER_FAILURE_KEY)
+
+
+def _now_iso():
+    """Second-resolution UTC, matching what the registry Lua writes."""
+    return datetime.now(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _raw_entries():
+    """The roster record's `admins` array verbatim, for read-modify-write.
+
+    Deliberately **not** `Roster.entries`: that is a parsed value object with
+    the timestamps turned into datetimes and unreadable rows dropped. Writing
+    it back would silently discard entries this version could not parse, which
+    is exactly the data an older or newer writer put there. Round-tripping the
+    raw dicts keeps a field we do not understand from being deleted by us.
+    """
+    service_did = settings.SCN_SERVICE_DID
+    if not service_did:
+        raise RosterError("SCN_SERVICE_DID is not configured")
+    try:
+        record = atproto.find_record(service_did, ROSTER_COLLECTION, ROSTER_RKEY)
+    except atproto.OAuthError as exc:
+        # Unreachable, which is not "no roster" — never let a PDS outage look
+        # like a fresh network and tempt a caller into writing a genesis record
+        # over a real one.
+        raise RosterError(f"could not read the roster: {exc}") from exc
+    if record is None:
+        # Absent, not unreadable — a network failure raises out of
+        # `find_record` instead. This is the fresh-network case.
+        return None
+    admins = record.get("admins")
+    if not isinstance(admins, list):
+        raise RosterError("roster record has no 'admins' array")
+    return [e for e in admins if isinstance(e, dict)]
+
+
+def _is_current(entry):
+    return entry.get("removedAt") is None
+
+
+def _set_staff(did, value):
+    """Mirror roster membership onto the local `is_staff` flag.
+
+    Best-effort and deliberately after the roster write: the roster is the
+    authority, and `views._heal_staff_flag` re-derives this at every login, so
+    a failure here self-corrects rather than needing a rollback.
+
+    Superusers are left alone — Django's admin needs `is_staff` too, so
+    clearing it would lock out an account somebody deliberately escalated.
+    """
+    User.objects.filter(did=did, is_superuser=False).update(is_staff=value)
+
+
+def ensure_user(did, handle=None):
+    """The local row for a DID, created if this is the first we have seen of it.
+
+    Called when a grant is written, so a member has a row — and therefore a
+    readable handle — from the moment they are admitted rather than from their
+    first sign-in. Before this, someone invited and not yet arrived had nothing
+    but a DID to render, which is not something to show a person.
+
+    `MembershipCache` still has no foreign key to `User` and must not grow one:
+    this pre-creates a row, it does not couple the two. `views._upsert_member`
+    refreshes the username from the PDS at first login, so a handle that has
+    changed in the meantime corrects itself.
+    """
+    user, created = User.objects.get_or_create(
+        did=did, defaults={"username": handle or handles_for([did]).get(did, did)}
+    )
+    if created:
+        # ATProto OAuth only — never a password, the same as every other row
+        # this app makes.
+        user.set_unusable_password()
+        user.save(update_fields=["password"])
+    elif handle and user.username != handle:
+        user.username = handle
+        user.save(update_fields=["username"])
+    return user
+
+
+def appoint_admin(actor_did, subject_did):
+    """Make `subject_did` a cluster admin. Returns a note for the caller.
+
+    Both halves, in the order that fails safely: the roster record first, then
+    the local `is_staff` mirror, then registry space write access — which is
+    what actually lets the new admin author a grant, and is reported rather
+    than raised when it fails (see below).
+    """
+    _require_did(subject_did)
+    if not is_active_member(subject_did):
+        # Admins are members. The console only offers the button on member rows,
+        # but the rule lives here so the CLI and any later caller obey it too.
+        # On a fresh network the service account admits the first member and
+        # then appoints them, so this needs no bootstrap exception.
+        raise RosterError(
+            "only a current member can be made an admin — admit them first"
+        )
+    entries = _raw_entries()
+    if entries is None:
+        # Genesis. Nothing has ever been written, and the only actor who can
+        # reach this state is the service account (see `is_cluster_admin`'s
+        # bootstrap clause), so seed it onto its own roster: it must be a
+        # current admin to pass GATE and sign in again after this.
+        entries = [
+            {
+                "did": settings.SCN_SERVICE_DID,
+                "addedAt": _now_iso(),
+                "addedBy": actor_did,
+            }
+        ]
+    if any(e.get("did") == subject_did and _is_current(e) for e in entries):
+        raise RosterError(f"already a current admin: {subject_did}")
+    if len(entries) >= ROSTER_MAX_ENTRIES:
+        # The whole record is rewritten on every edit and a PDS caps record
+        # size. Refusing with a number beats a putRecord failure nobody can read.
+        raise RosterError(
+            f"the roster already holds {len(entries)} entries "
+            f"(limit {ROSTER_MAX_ENTRIES})"
+        )
+
+    # Appended, never merged into a previous term for the same DID: a re-added
+    # admin gets a second entry, so the record still says when each term began
+    # and ended. `Roster.covers` is written to expect exactly that.
+    entries.append(
+        {"did": subject_did, "addedAt": _now_iso(), "addedBy": actor_did}
+    )
+    _write_roster(entries)
+    # Ensured rather than assumed: the console's table reads admin status off
+    # `is_staff`, so a member with no local row would appear not to be an admin
+    # however correct the roster is.
+    ensure_user(subject_did)
+    _set_staff(subject_did, True)
+    return _sync_space_access(subject_did, "write")
+
+
+def dismiss_admin(actor_did, subject_did):
+    """End `subject_did`'s admin authority. Returns a note for the caller.
+
+    **Ends it going forward and no further.** Grants they authored while
+    current stay valid — `Roster.was_admin_at` asks the question at the event's
+    timestamp — and nothing here touches `MembershipCache`. Un-granting a
+    member is always an explicit revocation, never a side effect of a roster
+    edit, or removing one admin would silently de-member everyone they ever
+    approved with nothing in the event log to show for it.
+    """
+    _require_did(subject_did)
+    if subject_did == settings.SCN_SERVICE_DID:
+        # It writes this record. Off the roster it fails GATE, cannot sign in
+        # to refresh the session that performs the write, and the only way back
+        # is editing the repo by hand.
+        raise RosterError(
+            "the service account cannot be removed from the roster: it is what "
+            "writes the roster."
+        )
+    entries = _raw_entries()
+    if entries is None:
+        raise RosterError("no roster record exists yet")
+    current = [e for e in entries if _is_current(e)]
+    if not any(e.get("did") == subject_did for e in current):
+        raise RosterError(f"not a current admin: {subject_did}")
+    if len(current) <= 1:
+        # An existing-but-empty roster fails closed everywhere and the
+        # registry's BOOTSTRAP_ADMIN_DID escape only applies when the record is
+        # *absent*, so this would end every approve and revoke with no way back
+        # except editing the service account's repo by hand.
+        raise RosterError(
+            "refusing to remove the last admin: nobody could approve members, "
+            "and nobody could add an admin back."
+        )
+
+    stamped = _now_iso()
+    for entry in entries:
+        if entry.get("did") == subject_did and _is_current(entry):
+            # Stamped, never deleted. The record is the history of who held
+            # authority and when, and `was_admin_at` needs the departed terms.
+            entry["removedAt"] = stamped
+            entry["removedBy"] = actor_did
+    _write_roster(entries)
+    _set_staff(subject_did, False)
+    return _sync_space_access(subject_did, "none")
+
+
+def _sync_space_access(did, access):
+    """Match registry space write access to the roster. Returns a note or "".
+
+    Space membership is what makes a grant authoritative at the registry, so an
+    admin without it is on the roster and still cannot approve anyone.
+
+    **Reported, never raised.** The roster write already succeeded and is the
+    authority; failing the whole call here would tell the caller nothing
+    happened when something did. Both the Lua and the roster edit are
+    idempotent, so re-running the appointment completes it — which is what the
+    returned note asks the operator to do.
+    """
+    registry = MembershipRegistry.from_settings()
+    try:
+        registry.set_space_access(
+            _service_token(for_registry=True), did, access
+        )
+    except (RegistryError, RosterError) as exc:
+        log.warning("space access sync for %s → %s failed: %s", did, access, exc)
+        if access == "write":
+            return (
+                f"The roster was updated, but registry space access was not "
+                f"({exc}). They are an admin and can reach the console; they "
+                f"cannot approve anyone until this half lands. Run the same "
+                f"action again to finish it."
+            )
+        return (
+            f"The roster was updated, but registry space access was not "
+            f"({exc}). Their authority has ended, but they keep space write "
+            f"access until this half lands. Run the same action again."
+        )
+    return ""
+
+
+def _require_did(did):
+    if not did or not _DID_RE.match(did) or len(did) > MAX_DID_LEN:
+        raise RosterError(f"not a DID: {did!r}")
 
 
 # --- Handles, for display only ---------------------------------------------
@@ -1150,6 +1576,10 @@ SYNC_MEMBERS_NSID = "network.sharedcomputer.membership.syncMembers"
 LIST_REQUESTS_NSID = "network.sharedcomputer.membership.listRequests"
 APPROVE_MEMBER_NSID = "network.sharedcomputer.admin.approveMember"
 REVOKE_MEMBER_NSID = "network.sharedcomputer.admin.revokeMember"
+# Called with the *service* account's session, never an admin's — the space
+# runtime accepts member changes only from the space authority. See
+# `MembershipRegistry.set_space_access`.
+SET_SPACE_ACCESS_NSID = "network.sharedcomputer.admin.setSpaceAccess"
 
 # The tier vocabulary, mirroring `member-registry/src/tiers.ts` and the TIERS
 # table in `lua/approve_member.lua`. SCN owns these slugs; they are not read
@@ -1553,6 +1983,29 @@ class MembershipRegistry:
             payload["reason"] = reason[:REASON_MAX_CHARS]
         return self._procedure(REVOKE_MEMBER_NSID, payload, token=token)
 
+    def set_space_access(self, token, did, access):
+        """Grant or remove registry space write access for an admin.
+
+        Space membership is what makes a grant authoritative — an admin without
+        it is on the roster and still cannot approve anyone — so this is the
+        second half of a roster edit, not an optional extra.
+
+        **`token` must be the service account's.** The space runtime accepts
+        member changes only from the space authority, which is the service DID;
+        an ordinary admin's session is refused however current they are. That is
+        the reverse of `approve`/`revoke`, where the acting admin's own session
+        is exactly what must be used, and the asymmetry is the registry's, not
+        a choice made here.
+
+        Idempotent both ways in the Lua, so retrying a partial roster edit is
+        safe and is the documented recovery.
+        """
+        if access not in ("write", "none"):
+            raise RegistryError(f"not a space access level: {access!r}")
+        return self._procedure(
+            SET_SPACE_ACCESS_NSID, {"did": did, "access": access}, token=token
+        )
+
     def fetch_events(self):
         """Every grant and revocation in the registry space, push-shaped.
 
@@ -1710,6 +2163,15 @@ class MembershipRegistry:
         """
         events = self.fetch_events()
         roster = fetch_roster(refresh=True)
+        if not roster.exists:
+            # `fetch_roster` answers "absent" rather than raising so that the
+            # service account can sign in and write the first one. Here that
+            # answer is useless: with no roster every event is unauthorised, so
+            # reconciling would empty the cache and report success.
+            raise ReconcileError(
+                "there is no admin roster record, so no grant can be attributed "
+                "to a current admin. Add the first admin before reconciling."
+            )
         # Resolves to the module-level function below/above, not this method —
         # the name is shadowed only inside the class body's namespace.
         return reconcile(events, roster, dry_run=dry_run)

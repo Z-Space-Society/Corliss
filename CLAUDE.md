@@ -149,19 +149,90 @@ so widening one cannot widen the other.
   time, so only it can refuse a session established before the gate existed or
   one whose owner has since been revoked.
 
-## Two admin authorities, deliberately separate
+## One admin, and the roster is what says so
 
-- **`is_cluster_admin`** is a live read of the atproto roster record. It governs
-  `/manage/` and `/systems/`.
-- **Django's `is_staff`** governs `/admin/`, where the session and OIDC client
-  tables live.
-- **A roster edit must never hand anyone the Django admin.** `User.is_cluster_admin`
-  never consults `is_staff` or `is_superuser`, and `make_admin` grants staff
-  only — `--superuser`, the flag that bypasses every permission check, has to be
-  asked for explicitly. Keep both halves of that.
+Corliss used to hold these apart — a roster admin and a Django staff member were
+different people by design. They are now one thing, deliberately merged: "who is
+an admin" having two answers was a confusion that cost more than the separation
+bought, and `is_staff` was referenced *nowhere* in this app's own logic. It only
+ever opened Django's `/admin/`.
+
+- **`is_cluster_admin` is the authority**, and it is a live read of the atproto
+  roster record. It governs `/manage/` and `/systems/`, and it is never stored.
+- **`is_staff` is a mirror of it, never a second source.** `membership.appoint_admin`
+  writes both halves; `views._heal_staff_flag` re-derives it at every login, so a
+  half-failed write self-corrects rather than drifting. `User.is_cluster_admin`
+  still never consults `is_staff` — the mirror must not become the authority.
+- **`is_superuser` stays a separate, explicit opt-in.** `is_staff` alone opens the
+  admin index with no model permissions, which is why merging it was affordable;
+  `--superuser` bypasses every permission check and has to be asked for by name.
+  `_heal_staff_flag` skips superusers in both directions, so it can never lock out
+  an account somebody deliberately escalated.
 - **Authority is asked at the event's timestamp** (`Roster.was_admin_at`), never
   "is this DID an admin now". Removing an admin ends their authority going
   forward; it must not un-write what they already approved.
+- **Two refusals guard the roster**, both in `membership.dismiss_admin`: never
+  leave zero current admins (an existing-but-empty roster fails closed everywhere,
+  and the registry's `BOOTSTRAP_ADMIN_DID` escape only covers an *absent* record),
+  and never remove `SCN_SERVICE_DID` (it performs the writes; off the roster it
+  fails GATE and cannot sign back in to be restored).
+
+## Editing the roster needs the service account, and that is not a shortcut
+
+The roster is a record in the service account's own repo, and an atproto repo is
+writable only by its owner — so the acting admin cannot write it, and Corliss
+brokers: it verifies the actor is a current admin, then spends the service
+account's stored session. The actor's DID is recorded in the entry (`addedBy` /
+`removedBy`).
+
+- **This is not a Corliss credential that can author grants**, and the two must
+  not be conflated. The service session writes the *roster*; grants are still
+  authored only by the acting admin's own session. See the rejected list.
+- **Appointing is two writes, and the second needs the registry.** Space write
+  access is what actually lets a new admin approve anyone — `space:put_record`
+  requires it — and only the space authority can grant it. The roster write goes
+  first, so a failure leaves nothing changed rather than a half-admin; a failed
+  space sync is *reported, never raised*, because the roster write already
+  happened and both halves are idempotent.
+- **An inert credential cannot do this and it was not for lack of trying.**
+  HappyView's XRPC routes reject Bearer auth outright (probed against the
+  cluster), the admin API has no space-member routes, and space credentials
+  cannot manage membership. `/oauth/sessions` verifies the tokens it is handed by
+  calling the PDS with a DPoP proof signed by the key it provisioned, so an
+  app-password token cannot register a session at all. The atproto handshake is
+  the only way, and that is settled — do not re-propose a password field.
+- **Authenticating it must never call `auth_login`.** `views.manage_unlock` starts
+  the handshake and `callback`'s `service_link` branch stores the tokens and
+  redirects; the absence of `auth_login` there is the entire mechanism, and it is
+  what keeps an admin signed in as themselves through the round trip. The first
+  cut did call it and swapped the admin's session for the service account's.
+- **The word is "Authenticate", never "sign in".** The reader is already signed
+  in and stays that way; the wrong word makes an errand read as a logout.
+- **A lapse degrades only appointment.** Approve, revoke, login and everything
+  members touch run on the admins' own sessions. Keep it that way.
+  `membership.refresh_service_session` keeps it alive on the reconcile run and
+  the lock on `/manage/` shows its health, so a lapse is found before it is
+  needed.
+
+## The console is one member table
+
+- **Admins are members**, enforced in `membership.appoint_admin`. So there is no
+  separate admins table: admin is a column, and `Make Admin` / `Revoke Admin` sit
+  on the member's own row. The service account holds no grant and therefore never
+  appears — it is infrastructure, not a person.
+- **Only active memberships are listed.** A revoked person is history and the
+  registry is where history lives; re-inviting the same handle readmits them,
+  which is what readmission always was.
+- **A DID is never text.** Handles are what a reader sees, with the DID on the
+  cell's `title`. `membership.ensure_user` records the handle when a grant is
+  written, so a member is named rather than numbered from the moment they are
+  admitted rather than from their first sign-in.
+- **Admin status renders from `is_staff`**, the local mirror, not a roster read
+  per request. The roster stays the authority; `_heal_staff_flag` re-derives the
+  mirror at every login and `appoint_admin` writes both together.
+- **Revoking a member who is an admin cascades, admin first.** That order is the
+  one whose half-done state is safe: a member who is not an admin, rather than a
+  non-member still holding registry write access.
 
 ## Development bypasses
 
@@ -256,6 +327,9 @@ so widening one cannot widen the other.
   vault's ADR-003.
 - **A Corliss credential that can author grants.** It would break
   admin-authored-only, which is what author-based verification at the registry
-  exists to record.
+  exists to record. Still rejected. The service-account session Corliss holds
+  writes the **roster** and calls `setSpaceAccess`; it must never grow a path
+  that writes a grant or a revocation — those stay authored by the admin who
+  decided, on their own session.
 - **atproto's `http://localhost` development client.** Lowest fidelity exactly
   where this app is most likely to break — see the README.

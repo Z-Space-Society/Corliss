@@ -167,7 +167,7 @@ class FetchRosterTests(TestCase):
 
     def test_fetches_from_the_service_dids_repo(self):
         with patch.object(
-            atproto, "get_record", return_value=record(entry(JACOB))
+            atproto, "find_record", return_value=record(entry(JACOB))
         ) as get:
             roster = membership.fetch_roster()
         get.assert_called_once_with(
@@ -177,7 +177,7 @@ class FetchRosterTests(TestCase):
 
     def test_second_call_is_served_from_cache(self):
         with patch.object(
-            atproto, "get_record", return_value=record(entry(JACOB))
+            atproto, "find_record", return_value=record(entry(JACOB))
         ) as get:
             membership.fetch_roster()
             membership.fetch_roster()
@@ -185,7 +185,7 @@ class FetchRosterTests(TestCase):
 
     def test_refresh_bypasses_the_cache(self):
         with patch.object(
-            atproto, "get_record", return_value=record(entry(JACOB))
+            atproto, "find_record", return_value=record(entry(JACOB))
         ) as get:
             membership.fetch_roster()
             membership.fetch_roster(refresh=True)
@@ -193,7 +193,7 @@ class FetchRosterTests(TestCase):
 
     def test_unreachable_repo_raises(self):
         with patch.object(
-            atproto, "get_record", side_effect=atproto.OAuthError("pds down")
+            atproto, "find_record", side_effect=atproto.OAuthError("pds down")
         ):
             with self.assertRaises(membership.RosterError):
                 membership.fetch_roster()
@@ -202,7 +202,7 @@ class FetchRosterTests(TestCase):
     # on every login, since ELEVATE is asked on each one.
     def test_a_failure_is_cached_briefly_rather_than_retried_every_call(self):
         with patch.object(
-            atproto, "get_record", side_effect=atproto.OAuthError("pds down")
+            atproto, "find_record", side_effect=atproto.OAuthError("pds down")
         ) as get:
             for _ in range(3):
                 with self.assertRaises(membership.RosterError):
@@ -211,16 +211,16 @@ class FetchRosterTests(TestCase):
 
     def test_a_success_clears_a_cached_failure(self):
         with patch.object(
-            atproto, "get_record", side_effect=atproto.OAuthError("pds down")
+            atproto, "find_record", side_effect=atproto.OAuthError("pds down")
         ):
             with self.assertRaises(membership.RosterError):
                 membership.fetch_roster()
         with patch.object(
-            atproto, "get_record", return_value=record(entry(JACOB))
+            atproto, "find_record", return_value=record(entry(JACOB))
         ):
             self.assertTrue(membership.fetch_roster(refresh=True).is_current_admin(JACOB))
         # And the cleared failure means no further network call is needed.
-        with patch.object(atproto, "get_record", side_effect=AssertionError):
+        with patch.object(atproto, "find_record", side_effect=AssertionError):
             self.assertTrue(membership.fetch_roster().is_current_admin(JACOB))
 
 
@@ -230,7 +230,7 @@ class IsClusterAdminTests(TestCase):
 
     @override_settings(SCN_SERVICE_DID=SERVICE_DID)
     def test_true_for_a_current_admin(self):
-        with patch.object(atproto, "get_record", return_value=record(entry(JACOB))):
+        with patch.object(atproto, "find_record", return_value=record(entry(JACOB))):
             self.assertTrue(membership.is_cluster_admin(JACOB))
             self.assertFalse(membership.is_cluster_admin(OUTSIDER))
 
@@ -238,7 +238,7 @@ class IsClusterAdminTests(TestCase):
     @override_settings(SCN_SERVICE_DID=SERVICE_DID)
     def test_false_when_the_roster_cannot_be_fetched(self):
         with patch.object(
-            atproto, "get_record", side_effect=atproto.OAuthError("pds down")
+            atproto, "find_record", side_effect=atproto.OAuthError("pds down")
         ):
             self.assertFalse(membership.is_cluster_admin(JACOB))
 
@@ -254,7 +254,7 @@ class IsClusterAdminTests(TestCase):
 
     @override_settings(SCN_SERVICE_DID=SERVICE_DID)
     def test_false_for_an_empty_did_without_fetching(self):
-        with patch.object(atproto, "get_record", side_effect=AssertionError):
+        with patch.object(atproto, "find_record", side_effect=AssertionError):
             self.assertFalse(membership.is_cluster_admin(""))
             self.assertFalse(membership.is_cluster_admin(None))
 

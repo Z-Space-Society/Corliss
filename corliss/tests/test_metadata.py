@@ -26,13 +26,20 @@ class ClientMetadataTests(TestCase):
         self.assertIn("atproto", m["scope"])
         self.assertIn("authorization_code", m["grant_types"])
 
-    def test_declared_scope_matches_requested_scope(self):
-        # Regression guard: the PDS authorization server checks a PAR
-        # request's scope against what the client declares here. These two
-        # drifting apart (transition:email requested but not declared) is
-        # exactly what broke login in production — see git history.
+    def test_every_requestable_scope_is_declared(self):
+        # Regression guard: the PDS authorization server checks a PAR request's
+        # scope against what the client declares here, so a term requested but
+        # not declared fails login with invalid_scope — exactly what broke login
+        # in production once (transition:email requested but not declared).
+        #
+        # This asserted equality while there was one scope to request. There are
+        # now two — members get SCOPE, the service account additionally gets the
+        # roster collection so it can write that record — so the property that
+        # actually holds is containment, in every direction a login can take.
         resp = self.client.get("/auth/client-metadata.json")
-        self.assertEqual(resp.json()["scope"], atproto.SCOPE)
+        declared = set(resp.json()["scope"].split())
+        for scope in (atproto.SCOPE, atproto.SERVICE_SCOPE):
+            self.assertLessEqual(set(scope.split()), declared)
 
     def test_transition_email_is_declared(self):
         # Without this, PAR fails closed with invalid_scope and login never

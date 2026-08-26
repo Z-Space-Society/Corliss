@@ -51,6 +51,7 @@ MEMBER = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
 
 APPROVE = membership.APPROVE_MEMBER_NSID
 REVOKE = membership.REVOKE_MEMBER_NSID
+SET_SPACE_ACCESS = membership.SET_SPACE_ACCESS_NSID
 
 
 class FakeResponse:
@@ -176,6 +177,60 @@ class ProofTests(TokenMixin, TestCase):
         self.assertEqual(proof_from(post.call_args)["nonce"], "server-nonce")
         self.token.refresh_from_db()
         self.assertEqual(self.token.dpop_nonce, "server-nonce")
+
+    def test_set_space_access_signs_for_the_public_host_too(self):
+        """The newest write inherits the same trap. It goes through the same
+        `_procedure`, so this asserts the property has not been special-cased
+        away rather than re-testing the helper."""
+        with patch.object(
+            requests, "post", return_value=FakeResponse({"ok": True, "member": True})
+        ) as post:
+            registry().set_space_access(self.token, MEMBER, "write")
+
+        self.assertEqual(post.call_args.args[0], f"{URL}/xrpc/{SET_SPACE_ACCESS}")
+        self.assertEqual(
+            proof_from(post.call_args)["htu"],
+            f"https://{HOST}/xrpc/{SET_SPACE_ACCESS}",
+        )
+
+
+class SetSpaceAccessTests(TokenMixin, TestCase):
+    """Granting a new admin the space membership that makes their approvals
+    real — the second half of a roster edit.
+
+    Unlike approve and revoke, this one is called with the **service account's**
+    session, never the acting admin's: the space runtime accepts member changes
+    only from the space authority. The asymmetry is the registry's, not a choice
+    made here, and it is why this is a separate wrapper rather than another
+    caller of the same one.
+    """
+
+    def test_it_sends_the_did_and_the_access_level(self):
+        with patch.object(
+            requests, "post", return_value=FakeResponse({"ok": True, "member": True})
+        ) as post:
+            registry().set_space_access(self.token, MEMBER, "write")
+
+        self.assertEqual(
+            post.call_args.kwargs["json"], {"did": MEMBER, "access": "write"}
+        )
+
+    def test_removing_access_sends_none(self):
+        with patch.object(
+            requests, "post", return_value=FakeResponse({"ok": True, "member": False})
+        ) as post:
+            registry().set_space_access(self.token, MEMBER, "none")
+
+        self.assertEqual(post.call_args.kwargs["json"]["access"], "none")
+
+    def test_an_access_level_the_lua_would_reject_never_leaves_here(self):
+        """The Lua refuses it as well, but as an HTTP 500 carrying a Lua
+        string — the same reason the tier check is duplicated in `approve`."""
+        with patch.object(requests, "post") as post:
+            with self.assertRaises(membership.RegistryError):
+                registry().set_space_access(self.token, MEMBER, "readonly")
+
+        post.assert_not_called()
 
 
 class ApproveTests(TokenMixin, TestCase):
@@ -380,7 +435,13 @@ class DecideMembershipViewTests(TokenMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        patcher = patch("corliss.membership.is_cluster_admin", return_value=True)
+        # Only the acting admin, not everyone. A blanket True would make the
+        # *subject* of a revoke look like an admin too, and revoking an admin
+        # cascades into ending their roster authority first — a different code
+        # path from the one these tests are about.
+        patcher = patch(
+            "corliss.membership.is_cluster_admin", side_effect=lambda did: did == ADMIN
+        )
         patcher.start()
         self.addCleanup(patcher.stop)
         # Display only, and a network call for anyone who has never signed in

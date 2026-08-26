@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 
 {% comment %}
-The cluster console. Three tables that come from three completely different
-places, and the difference is the point:
+The cluster console. Two tables from two completely different places, and the
+difference is the point:
 
 - Applications are read live from the registry's *index*, and are written by
   the applicants themselves. They carry no authority whatsoever. Only the ones
@@ -11,20 +11,29 @@ places, and the difference is the point:
   answered ones apart — see `views._applications` for why that question is
   settled by time rather than by the mere existence of a cache row.
 - Members are Corliss's own cache — what this deployment believes. It can be
-  stale, incomplete, or (in the orphan case) wrong.
-- Admins are read live from the registry's public roster record. No cache, no
-  credential, nothing to go stale.
+  stale, incomplete, or (in the orphan case) wrong. Reconciliation is what makes
+  it agree with the registry.
 
-Reconciliation is what makes the second agree with the record.
+**Only current members are listed.** A revoked person is history, and the
+registry is where history lives; readmitting them is the invite field, which
+writes a fresh grant. That is what readmission always was, so nothing is lost by
+not keeping a row for it.
 
-Both tables show handles with the DID on the cell's title. The handle is a
-label — `membership.handles_for` resolves it for reading, and the DID stays the
-thing being displayed *about*, which is why it is one hover away and never
-absent from the page.
+There is no separate admins table. Admin is a column on the member table, read
+from the local `is_staff` mirror, because admins are members — enforced at
+appointment. The service account holds no grant and so never appears here, which
+is deliberate: it is infrastructure, not a person, and listing it would invite
+somebody to try to remove it.
 
-The admins table lists only who holds the role now. Departed terms are in the
-record and are what `Roster.was_admin_at` reads; this table answers the other
-question, "who can decide membership today".
+**A DID is never text.** Handles are what a reader sees; the DID lives on the
+cell's `title` for the rare moment somebody needs it. `membership.handles_for`
+resolves them, and a grant now records the handle when it is written, so a
+member is named rather than numbered from the moment they are admitted.
+
+The lock in the Members heading reports whether the service account has been
+authenticated — the session roster writes spend, and nothing else does. Its word
+is **Authenticate**, never "sign in": the reader stays signed in as themselves
+through the whole round trip, and the wrong word makes it sound otherwise.
 {% endcomment %}
 
 {% block title %}Membership — ZAI{% endblock %}
@@ -176,20 +185,56 @@ question, "who can decide membership today".
   </div>
 
   <h2 class="section-title">Members</h2>
-  <p class="hint-text">Corliss's cache, filled by the registry's push. A revoked
-  member keeps their last tier for audit — read the state, not the tier.</p>
 
   <div class="card">
+    {% comment %}
+    The lock reports whether the service account has been authenticated, which
+    is what roster writes spend. Nothing else on this page needs it, so without
+    it here a lapse would only ever surface at the moment somebody pressed Make
+    Admin. It sits in the card's corner rather than in the heading because the
+    controls it governs are inside the card. "Authenticate", never "sign in" —
+    the reader is signed in as themselves and stays that way through the whole
+    round trip.
+    {% endcomment %}
+    {% if service_session.present and service_session.can_write_registry %}
+      <div class="card__corner">
+        <span class="lock lock--open"
+              title="Admin controls enabled. Service account authenticated{% if service_session.registry_session_at %} {{ service_session.registry_session_at|date:"j M" }}{% endif %}.">🔓</span>
+      </div>
+    {% elif service_session.configured %}
+      <div class="card__corner">
+        <form method="post" action="{% url 'manage_unlock' %}" class="lock-form">
+          {% csrf_token %}
+          <button type="submit" class="lock lock--closed"
+                  title="Admin controls are locked. Authenticate {{ service_session.handle }} to enable them — you stay signed in as yourself.">🔒</button>
+        </form>
+      </div>
+    {% endif %}
+
+    {% if roster_error %}
+      {% comment %}
+      Rarely reachable and worth keeping anyway: an unreadable roster makes
+      `is_cluster_admin` fail closed, so in production it usually 404s this page
+      before anyone sees this. When it *is* reachable — a cached yes, a roster
+      that broke since — "could not find out" and "there are no admins" are
+      different facts and the page must not quietly show the second.
+      {% endcomment %}
+      <p class="alert" role="alert">
+        <strong>The admin roster could not be read.</strong> {{ roster_error }}
+        Admin status below comes from Corliss's own mirror and may be stale.
+      </p>
+    {% endif %}
+
     {% if members %}
       <div class="table-scroll">
         <table class="data-table">
           <thead>
             <tr>
               <th>Member</th>
-              <th>State</th>
               <th>Tier</th>
               <th>Last event</th>
               <th>Granted by</th>
+              <th>Admin</th>
               <th>Change</th>
             </tr>
           </thead>
@@ -197,16 +242,17 @@ question, "who can decide membership today".
             {% for m in members %}
               <tr>
                 <td class="data-table__handle" title="{{ m.did }}">{{ m.handle }}</td>
-                <td>
-                  {% if m.active %}
-                    <span class="pill pill--active">active</span>
-                  {% else %}
-                    <span class="pill">revoked</span>
-                  {% endif %}
-                </td>
                 <td>{{ m.tier|default:"—" }}</td>
                 <td class="data-table__muted">{{ m.last_event_at|date:"Y-m-d H:i" }}</td>
                 <td class="data-table__handle data-table__muted" title="{{ m.author_did }}">{{ m.author_handle }}</td>
+                <td>
+                  {% if m.is_admin %}
+                    <span class="pill pill--active"
+                          title="{% if m.admin_since %}Admin since {{ m.admin_since|date:"Y-m-d" }}{% endif %}">Admin</span>
+                  {% else %}
+                    <span class="data-table__muted">—</span>
+                  {% endif %}
+                </td>
                 <td>
                   {% comment %}
                   Both controls write a record; neither edits one. Setting a
@@ -225,21 +271,41 @@ question, "who can decide membership today".
                       <input type="hidden" name="action" value="approve">
                       <input type="hidden" name="did" value="{{ m.did }}">
                       {% include "_tier_select.html" with selected=m.tier %}
-                      <button type="submit" class="btn-row">
-                        {% if m.active %}Set tier{% else %}Readmit{% endif %}
+                      <button type="submit" class="btn-row">Set Tier</button>
+                    </form>
+                    <form method="post" class="row-form"
+                          onsubmit="return confirm('Revoke {{ m.handle|escapejs }}? They lose access now.{% if m.is_admin %} They are an admin, so their admin authority is ended first.{% endif %} The grant stays on record — this writes a revocation after it.');">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="revoke">
+                      <input type="hidden" name="did" value="{{ m.did }}">
+                      <button type="submit" class="btn-row btn-row--danger">Revoke</button>
+                    </form>
+                  {% endif %}
+                  {% comment %}
+                  Gated on the lock rather than on `can_decide`: those two
+                  controls spend the admin's own registry session, and this one
+                  spends the service account's — different credentials, so a
+                  different condition. Rendered disabled rather than hidden so
+                  the reason is readable instead of the button being mysteriously
+                  absent.
+                  {% endcomment %}
+                  {% if service_session.present and service_session.can_write_registry %}
+                    <form method="post" class="row-form"
+                          onsubmit="return confirm('{% if m.is_admin %}Revoke admin for {{ m.handle|escapejs }}? They stay a member. Members they approved stay members.{% else %}Make {{ m.handle|escapejs }} an admin? They can approve members, edit this list, and reach Django\'s admin.{% endif %}');">
+                      {% csrf_token %}
+                      <input type="hidden" name="action"
+                             value="{% if m.is_admin %}remove_admin{% else %}add_admin{% endif %}">
+                      <input type="hidden" name="subject" value="{{ m.did }}">
+                      <button type="submit"
+                              class="btn-row{% if m.is_admin %} btn-row--danger{% endif %}">
+                        {% if m.is_admin %}Revoke Admin{% else %}Make Admin{% endif %}
                       </button>
                     </form>
-                    {% if m.active %}
-                      <form method="post" class="row-form"
-                            onsubmit="return confirm('Revoke {{ m.handle|escapejs }}? They lose access now. The grant stays on record — this writes a revocation after it.');">
-                        {% csrf_token %}
-                        <input type="hidden" name="action" value="revoke">
-                        <input type="hidden" name="did" value="{{ m.did }}">
-                        <button type="submit" class="btn-row btn-row--danger">Revoke</button>
-                      </form>
-                    {% endif %}
                   {% else %}
-                    <span class="hint-inline">—</span>
+                    <button type="button" class="btn-row" disabled
+                            title="Authenticate the service account with the lock above to change admins.">
+                      {% if m.is_admin %}Revoke Admin{% else %}Make Admin{% endif %}
+                    </button>
                   {% endif %}
                 </td>
               </tr>
@@ -254,47 +320,19 @@ question, "who can decide membership today".
         against the registry is what tells the two apart.
       </p>
     {% endif %}
-  </div>
 
-  <h2 class="section-title">Admins</h2>
-  <p class="hint-text">Who holds cluster admin right now, read live from the
-  registry's public roster. Not stored here, and not a Django permission —
-  removing an admin ends their authority going forward without invalidating the
-  grants they already wrote, which is why departed terms are left in the record
-  rather than shown here.</p>
-
-  <div class="card">
-    {% if roster_error %}
-      <p class="alert" role="alert">
-        <strong>The roster could not be read.</strong> {{ roster_error }}
-      </p>
-      <p class="hint-text">This is not "there are no admins" — it is a failure to
-      find out. Reconciliation refuses to run against a roster it cannot read.</p>
-    {% elif admins %}
-      <div class="table-scroll">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Admin</th>
-              <th>Admin since</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for a in admins %}
-              <tr>
-                <td class="data-table__handle" title="{{ a.did }}">{{ a.handle }}</td>
-                <td class="data-table__muted">{{ a.added_at|date:"Y-m-d H:i" }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    {% else %}
-      <p class="alert alert--notice" role="status">
-        <strong>Nobody holds cluster admin.</strong> Either the roster is
-        empty, or every term on it has ended.
-      </p>
-    {% endif %}
+    {% comment %}
+    Below the list, behind a rule: inviting adds to what is above it, and an
+    empty cache is the one case where this is the only control in the card.
+    {% endcomment %}
+    <form method="post" class="row-form row-form--add">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="approve">
+      <input type="text" name="handle" class="text-input"
+             placeholder="handle to invite" aria-label="Handle to invite" required>
+      {% include "_tier_select.html" with selected=default_tier %}
+      <button type="submit" class="btn-row">Invite</button>
+    </form>
   </div>
 
   <h2 class="section-title">Reconcile</h2>

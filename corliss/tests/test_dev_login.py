@@ -69,6 +69,19 @@ class DevLoginTests(TestCase):
             User.objects.filter(did="did:dev:alice.bsky.social").exists()
         )
 
+    def test_handle_case_folds_to_one_member(self):
+        """Handles are case-insensitive; the DIDs derived from them are not.
+
+        Two spellings must not become two members, of which only one matches
+        DEV_ADMIN_DIDS. See the note in the README's dev sign-in section.
+        """
+        for handle in ("Alice.BSky.Social", "alice.bsky.social"):
+            self.client.post(reverse("dev_login"), {"handle": handle})
+        self.assertEqual(User.objects.count(), 1)
+        self.assertTrue(
+            User.objects.filter(did="did:dev:alice.bsky.social").exists()
+        )
+
     def test_get_is_rejected(self):
         """POST-only: a bare link must not be able to sign anyone in."""
         resp = self.client.get(reverse("dev_login"))

@@ -6,6 +6,7 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from corliss import atproto, litellm, views
 from corliss.models import AtprotoToken, MembershipCache
@@ -14,6 +15,8 @@ from corliss.views import SESSION_PREFIX
 User = get_user_model()
 
 DID = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
+# Someone other than the signed-in user, for the roster-edit tests below.
+STRANGER = "did:plc:2cxgdrgtsmrbqnjkwyplmp43"
 
 
 def _seed_pending(test_client, state, *, did=DID, handle="alice.bsky.social"):
@@ -91,11 +94,11 @@ def _at(text):
     return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
-def _grant(did=DID, *, tier="level-2"):
+def _grant(did=DID, *, tier="level-2", active=True):
     """A membership grant as the registry's push would have left it."""
     MembershipCache.objects.create(
         did=did,
-        active=True,
+        active=active,
         tier=tier,
         last_rkey=f"{did}:3lqxaaaaaaaaa",
         last_event_at="2026-01-01T00:00:00Z",
@@ -506,8 +509,11 @@ class ManageViewTests(NoRosterMixin, TestCase):
         # further down, in the member table, which is the whole point of not
         # repeating them here.
         html = " ".join(resp.content.decode().split())
-        # Split on the heading, not the bare word — "Membership" contains it.
-        queue = html.split('<h2 class="section-title">Members</h2>')[0]
+        # Sliced between section headings rather than on their text: the Members
+        # heading now carries the service-session lock inside it, so anything
+        # matching its wording is one markup change from silently selecting the
+        # whole page and asserting nothing.
+        queue = html.split('<h2 class="section-title"')[1]
         self.assertIn("did:plc:applicant", queue)
         # Both were answered before their application on file, so neither is
         # waiting — including the revoked one, whose decision was "no longer".
@@ -614,91 +620,55 @@ class ManageViewTests(NoRosterMixin, TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "cache is empty")
 
-    def test_only_admins_holding_the_role_now_are_listed(self):
-        """The table answers "who can decide membership today".
-
-        A departed admin's grants stay valid — `Roster.was_admin_at` is what
-        reads that history — but they are not who an operator is looking for
-        here, and a column of ended terms buries the people who are.
-        """
-        from corliss import membership
-
-        current = membership.AdminEntry(
-            "did:plc:currentadmin", _at("2026-01-01T00:00:00Z")
-        )
-        departed = membership.AdminEntry(
-            "did:plc:formeradmin",
-            _at("2026-01-01T00:00:00Z"),
-            _at("2026-06-01T00:00:00Z"),
-        )
-        self._as_cluster_admin()
-        self.client.force_login(self.user)
-
-        with self._roster(current, departed):
-            resp = self.client.get(reverse("manage"))
-
-        self.assertContains(resp, "did:plc:currentadmin")
-        self.assertNotContains(resp, "did:plc:formeradmin")
-
-    def test_a_readmitted_admin_appears_once_at_their_current_term(self):
-        from corliss import membership
-
-        first = membership.AdminEntry(
-            "did:plc:returner",
-            _at("2026-01-01T00:00:00Z"),
-            _at("2026-03-01T00:00:00Z"),
-        )
-        again = membership.AdminEntry("did:plc:returner", _at("2026-07-01T00:00:00Z"))
-        self._as_cluster_admin()
-        self.client.force_login(self.user)
-
-        with self._roster(first, again):
-            resp = self.client.get(reverse("manage"))
-
-        # One row, not one per term — the cell's title carries the DID once.
-        html = resp.content.decode()
-        self.assertEqual(html.count('title="did:plc:returner"'), 1)
-        self.assertContains(resp, "2026-07-01")
-        self.assertNotContains(resp, "2026-01-01 00:00")
-
-    def test_members_and_admins_are_shown_by_handle_where_one_is_known(self):
-        """Handles are what a person reads; the DID stays on the cell's title.
-
-        Resolved from the `User` row for anyone who has signed in, so the
-        common case costs no network at all.
-        """
-        from corliss import membership
-
+    def test_the_admin_column_marks_current_admins_only(self):
+        """Admin is a column on the member table now, read from the local
+        `is_staff` mirror. A departed admin's grants stay valid —
+        `Roster.was_admin_at` reads that history — but they are not an admin
+        today, and the column answers only today's question."""
         _grant()
-        User.objects.create_user(
-            username="admin.bsky.social", did="did:plc:currentadmin"
-        )
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        _grant(STRANGER)
+        User.objects.create_user(username="bob.bsky.social", did=STRANGER)
         self._as_cluster_admin()
         self.client.force_login(self.user)
 
-        with self._roster(
-            membership.AdminEntry("did:plc:currentadmin", _at("2026-01-01T00:00:00Z"))
-        ):
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        html = resp.content.decode()
+        self.assertEqual(html.count(">Admin</span>"), 1)
+
+    def test_only_active_members_are_listed(self):
+        """A revoked person is history, and the registry is where history
+        lives. Re-inviting the same handle readmits them, which is what
+        readmission always was."""
+        _grant()
+        _grant(STRANGER, active=False)
+        User.objects.create_user(username="bob.bsky.social", did=STRANGER)
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, "alice.bsky.social")
+        self.assertNotContains(resp, "bob.bsky.social")
+
+    def test_members_are_shown_by_handle_with_the_did_on_the_title(self):
+        """Handles are what a person reads; a DID is never text. Resolved from
+        the `User` row for anyone who has signed in, so the common case costs
+        no network at all."""
+        _grant()
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
             resp = self.client.get(reverse("manage"))
 
         self.assertContains(resp, ">alice.bsky.social</td>")
-        self.assertContains(resp, ">admin.bsky.social</td>")
-        # The DID is not dropped — it is the title on the cell that replaced it.
+        # Not dropped — it is the title on the cell that replaced it.
         self.assertContains(resp, f'title="{DID}"')
-
-    def test_a_did_that_resolves_to_no_handle_renders_as_the_did(self):
-        """A failed lookup is not an error: the DID is still the true answer."""
-        from corliss import membership
-
-        self._as_cluster_admin()
-        self.client.force_login(self.user)
-
-        with self._roster(
-            membership.AdminEntry("did:plc:currentadmin", _at("2026-01-01T00:00:00Z"))
-        ):
-            resp = self.client.get(reverse("manage"))
-
-        self.assertContains(resp, ">did:plc:currentadmin</td>")
 
     # Pinned rather than left to the ambient environment: this asserts the
     # UNCONFIGURED page, so a developer whose .env carries real registry
@@ -833,6 +803,187 @@ class ManageViewTests(NoRosterMixin, TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "could not be read")
         self.assertContains(resp, "PDS down")
+        # And says what the page is falling back to, rather than presenting the
+        # mirror as though it were the roster.
+        self.assertContains(resp, "may be stale")
+
+    # --- Editing the roster from the console ------------------------------
+    #
+    # The handler is Post/Redirect/Get for a reason the approve path does not
+    # have: a roster edit is a read-modify-write, so a re-posted form appends a
+    # *second* entry for the same person rather than being absorbed by
+    # latest-event-wins.
+
+    def _post_roster(self, action, subject):
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        patcher = patch.object(membership, "appoint_admin", return_value="")
+        appoint = patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher2 = patch.object(membership, "dismiss_admin", return_value="")
+        dismiss = patcher2.start()
+        self.addCleanup(patcher2.stop)
+        resp = self.client.post(
+            reverse("manage"), {"action": action, "subject": subject}
+        )
+        return resp, appoint, dismiss
+
+    def test_making_an_admin_redirects_rather_than_rendering(self):
+        resp, appoint, _ = self._post_roster("add_admin", STRANGER)
+
+        self.assertRedirects(resp, reverse("manage"), fetch_redirect_response=False)
+        appoint.assert_called_once_with(DID, STRANGER)
+
+    def test_removing_an_admin_redirects_rather_than_rendering(self):
+        resp, _, dismiss = self._post_roster("remove_admin", STRANGER)
+
+        self.assertRedirects(resp, reverse("manage"), fetch_redirect_response=False)
+        dismiss.assert_called_once_with(DID, STRANGER)
+
+    def test_a_refusal_reaches_the_next_page_as_an_error(self):
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with patch.object(
+            membership,
+            "appoint_admin",
+            side_effect=membership.RosterError("already a current admin"),
+        ):
+            self.client.post(
+                reverse("manage"), {"action": "add_admin", "subject": STRANGER}
+            )
+            with self._roster():
+                resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, "already a current admin")
+
+    def test_a_partial_success_says_so_rather_than_claiming_success(self):
+        """The roster write landed and the space-access half did not. Reporting
+        only "done" would leave an admin who cannot approve anyone and an
+        operator with no idea why."""
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with patch.object(
+            membership,
+            "appoint_admin",
+            return_value="registry space access was not granted",
+        ):
+            self.client.post(
+                reverse("manage"), {"action": "add_admin", "subject": STRANGER}
+            )
+            with self._roster():
+                resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, "registry space access was not granted")
+
+    def test_naming_nobody_is_refused_without_a_write(self):
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with patch.object(membership, "appoint_admin") as appoint:
+            self.client.post(reverse("manage"), {"action": "add_admin", "subject": " "})
+
+        appoint.assert_not_called()
+
+    def test_a_non_admin_cannot_post_a_roster_edit(self):
+        """The page 404s for them, and so must the action — a form is not the
+        access control."""
+        from corliss import membership
+
+        self.client.force_login(self.user)
+
+        with patch.object(membership, "appoint_admin") as appoint:
+            resp = self.client.post(
+                reverse("manage"), {"action": "add_admin", "subject": STRANGER}
+            )
+
+        self.assertEqual(resp.status_code, 404)
+        appoint.assert_not_called()
+
+    def test_a_handle_is_resolved_before_the_roster_is_touched(self):
+        """Admins are named by handle in the console, and granting admin must
+        not trust the third-party resolver to say which DID that is."""
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with patch.object(
+            atproto, "resolve_handle_for_admin", return_value=STRANGER
+        ) as resolve:
+            with patch.object(membership, "appoint_admin", return_value="") as appoint:
+                self.client.post(
+                    reverse("manage"),
+                    {"action": "add_admin", "subject": "boris.bsky.social"},
+                )
+
+        resolve.assert_called_once_with("boris.bsky.social")
+        appoint.assert_called_once_with(DID, STRANGER)
+
+    def test_an_unresolvable_handle_is_an_error_not_a_crash(self):
+        from corliss import membership
+
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with patch.object(
+            atproto,
+            "resolve_handle_for_admin",
+            side_effect=atproto.OAuthError("no such handle"),
+        ):
+            with patch.object(membership, "appoint_admin") as appoint:
+                self.client.post(
+                    reverse("manage"),
+                    {"action": "add_admin", "subject": "nope.invalid"},
+                )
+            with self._roster():
+                resp = self.client.get(reverse("manage"))
+
+        appoint.assert_not_called()
+        self.assertContains(resp, "no such handle")
+
+    @override_settings(SCN_SERVICE_DID="did:plc:n4mzxx6z4ehnswc7znswtfr2")
+    def test_a_missing_service_session_is_visible_before_it_is_needed(self):
+        """It is spent by nothing else, so a lapse would otherwise surface at
+        the moment somebody tries to appoint an admin."""
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        # The lock is offered, closed, and says what it is for. "Authenticate",
+        # never "sign in" — the admin stays signed in as themselves throughout.
+        self.assertContains(resp, "lock--closed")
+        self.assertContains(resp, "Authenticate")
+        self.assertNotContains(resp, "lock--open")
+
+    @override_settings(SCN_SERVICE_DID="")
+    def test_an_unconfigured_deployment_says_so_rather_than_looking_broken(self):
+        """No `SCN_SERVICE_DID` is a deployment that never wired the registry
+        up — a different fix from a lapsed session, so a different message.
+
+        Overridden explicitly because the suite inherits the developer's own
+        `.env`, where this is set."""
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        # No service account configured means no lock at all: there is nothing
+        # to authenticate, and a control that cannot work should not be offered.
+        self.assertNotContains(resp, "lock--closed")
+        self.assertNotContains(resp, "lock--open")
 
 
 class AccountMenuTests(NoRosterMixin, TestCase):
@@ -1252,3 +1403,275 @@ class CallbackViewTests(TestCase):
         )
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(User.objects.filter(did=DID).exists())
+
+
+SERVICE_DID = "did:plc:n4mzxx6z4ehnswc7znswtfr2"
+
+
+@override_settings(SCN_SERVICE_DID=SERVICE_DID)
+class ServiceUnlockTests(NoRosterMixin, TestCase):
+    """Authenticating the service account, from the console's side.
+
+    **The regression this exists for is the `auth_login` that must not run.**
+    The roster lives in the service account's repo and only that account can
+    write it, so Corliss needs a session for it — but establishing one is an
+    errand an admin runs while signed in as themselves. The first cut called
+    `auth_login` on the way back and replaced their session with the service
+    account's, which is unusable: you would appoint an admin and find yourself
+    logged in as the network.
+
+    It is also not a password field. HappyView verifies the tokens handed to
+    `/oauth/sessions` against the DPoP key it provisioned, so an app password
+    could never produce a session that calls `setSpaceAccess` — see
+    `docs`/CLAUDE.md. The password is typed at the PDS and never reaches here.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+
+    def _as_cluster_admin(self):
+        patcher = patch("corliss.membership.is_cluster_admin", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _complete(self, returned_did, *, state="svc1"):
+        """Run the callback for a service-link flow that returned `did`."""
+        _seed_pending(
+            self.client, state, did=SERVICE_DID, handle="sharedcomputer.network"
+        )
+        session = self.client.session
+        session[SESSION_PREFIX + state]["service_link"] = True
+        session.save()
+        with patch.object(
+            atproto,
+            "exchange_code",
+            return_value=(
+                {"sub": returned_did, "access_token": "AT", "refresh_token": "RT"},
+                "n2",
+            ),
+        ):
+            with patch.object(
+                atproto, "fetch_session_email", return_value=("", False)
+            ):
+                return self.client.get(
+                    reverse("callback"),
+                    {
+                        "state": state,
+                        "code": "code",
+                        "iss": "https://auth.example",
+                    },
+                )
+
+    def test_a_non_admin_cannot_start_it(self):
+        self.client.force_login(self.user)
+        resp = self.client.post(reverse("manage_unlock"))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_it_is_not_startable_by_a_link(self):
+        """POST-only: it begins an authorization redirect, and a GET would let
+        any page on the internet start one on an admin's behalf."""
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("manage_unlock"))
+        self.assertEqual(resp.status_code, 405)
+
+    def test_completing_it_leaves_you_signed_in_as_yourself(self):
+        """The whole point. Before this, authenticating the service account
+        swapped the admin's own session for it."""
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        resp = self._complete(SERVICE_DID)
+
+        self.assertRedirects(
+            resp, reverse("manage"), fetch_redirect_response=False
+        )
+        self.assertEqual(self.client.session["_auth_user_id"], str(self.user.pk))
+
+    def test_it_stores_the_session_against_the_service_account(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        self._complete(SERVICE_DID)
+
+        token = AtprotoToken.objects.get(user__did=SERVICE_DID)
+        self.assertEqual(token.access_token, "AT")
+
+    def test_authenticating_the_wrong_account_stores_nothing(self):
+        """The flow is started by an admin, but which account comes back is
+        decided at the PDS's own login screen — so "somebody else signed in"
+        is a real outcome, not a hypothetical.
+
+        Caught by `callback`'s existing DID-mismatch guard, which compares the
+        token's `sub` against the DID the flow was started for and refuses
+        outright. The `service_link` branch re-checks against the setting as
+        well; that second check is unreachable while the two agree, and is kept
+        because what it protects — a service session pointing at a repo nobody
+        reads, and every roster write vanishing into it — is silent when it goes
+        wrong.
+        """
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        resp = self._complete(DID)
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(
+            AtprotoToken.objects.filter(user__did=SERVICE_DID).exists()
+        )
+        # And the admin is still themselves, not half-swapped into something.
+        self.assertEqual(self.client.session["_auth_user_id"], str(self.user.pk))
+
+    def test_an_ordinary_login_still_signs_you_in(self):
+        """The branch must be reached only by the marker — a regression here
+        would break every member's login, silently."""
+        _seed_pending(self.client, "plain")
+        with patch.object(
+            atproto,
+            "exchange_code",
+            return_value=(
+                {"sub": DID, "access_token": "AT", "refresh_token": "RT"},
+                "n2",
+            ),
+        ):
+            with patch.object(
+                atproto, "fetch_session_email", return_value=("", False)
+            ):
+                self.client.get(
+                    reverse("callback"),
+                    {"state": "plain", "code": "c", "iss": "https://auth.example"},
+                )
+
+        self.assertIn("_auth_user_id", self.client.session)
+
+
+@override_settings(SCN_SERVICE_DID=SERVICE_DID)
+class InviteAndCascadeTests(NoRosterMixin, TestCase):
+    """Inviting by handle, and revoking someone who is also an admin.
+
+    Inviting exists so a member has a readable name from the moment they are
+    granted. Before it, someone admitted before their first sign-in had nothing
+    to render but a DID, which is not something to show a person.
+
+    Revoking cascades because admins are members: leaving a revoked non-member
+    holding roster authority would break the rule the console enforces at
+    appointment. Admin goes first — that is the order whose half-done state is
+    safe.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+        self.token = AtprotoToken.objects.create(
+            user=self.user,
+            pds_url="https://pds.example.com",
+            issuer="https://auth.example",
+            token_endpoint="https://auth.example/token",
+            access_token="AT",
+            dpop_private_pem=atproto.key_to_pem(atproto.generate_key()),
+            registry_session_at=timezone.now(),
+        )
+        patcher = patch(
+            "corliss.membership.is_cluster_admin", side_effect=lambda d: d == DID
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        handles = patch.object(atproto, "fetch_did_document",
+                               side_effect=atproto.OAuthError("no net"))
+        handles.start()
+        self.addCleanup(handles.stop)
+        apps = patch.object(
+            views.membership.MembershipRegistry,
+            "fetch_applications",
+            return_value=views.membership.ApplicationList([], 0, False),
+        )
+        apps.start()
+        self.addCleanup(apps.stop)
+        self.client.force_login(self.user)
+
+    def test_inviting_resolves_the_handle_and_records_it(self):
+        with patch.object(
+            atproto, "resolve_handle_for_admin", return_value=STRANGER
+        ) as resolve:
+            with patch.object(views.membership.MembershipRegistry, "approve"):
+                self.client.post(
+                    reverse("manage"),
+                    {"action": "approve", "handle": "bmann.ca", "tier": "level-2"},
+                )
+
+        resolve.assert_called_once_with("bmann.ca")
+        # Named, not numbered, from the moment they are admitted.
+        self.assertEqual(User.objects.get(did=STRANGER).username, "bmann.ca")
+
+    def test_an_unresolvable_handle_grants_nothing(self):
+        with patch.object(
+            atproto,
+            "resolve_handle_for_admin",
+            side_effect=atproto.OAuthError("no such handle"),
+        ):
+            with patch.object(
+                views.membership.MembershipRegistry, "approve"
+            ) as approve:
+                self.client.post(
+                    reverse("manage"),
+                    {"action": "approve", "handle": "nope.invalid", "tier": "level-2"},
+                )
+
+        approve.assert_not_called()
+        self.assertFalse(User.objects.filter(did=STRANGER).exists())
+
+    def test_revoking_a_plain_member_does_not_touch_the_roster(self):
+        with patch.object(views.membership, "dismiss_admin") as dismiss:
+            with patch.object(views.membership.MembershipRegistry, "revoke"):
+                self.client.post(
+                    reverse("manage"), {"action": "revoke", "did": STRANGER}
+                )
+
+        dismiss.assert_not_called()
+
+    def test_revoking_an_admin_ends_their_authority_first(self):
+        calls = []
+        with patch.object(
+            views.membership,
+            "is_cluster_admin",
+            side_effect=lambda d: d in (DID, STRANGER),
+        ):
+            with patch.object(
+                views.membership,
+                "dismiss_admin",
+                side_effect=lambda a, s: calls.append("admin") or "",
+            ):
+                with patch.object(
+                    views.membership.MembershipRegistry,
+                    "revoke",
+                    side_effect=lambda *a, **k: calls.append("member"),
+                ):
+                    self.client.post(
+                        reverse("manage"), {"action": "revoke", "did": STRANGER}
+                    )
+
+        self.assertEqual(calls, ["admin", "member"])
+
+    def test_a_failed_admin_removal_stops_the_revocation(self):
+        """The safe direction. The reverse would leave a non-member still
+        holding registry write access — the thing the revoke was for."""
+        with patch.object(
+            views.membership,
+            "is_cluster_admin",
+            side_effect=lambda d: d in (DID, STRANGER),
+        ):
+            with patch.object(
+                views.membership,
+                "dismiss_admin",
+                side_effect=views.membership.RosterError("locked"),
+            ):
+                with patch.object(
+                    views.membership.MembershipRegistry, "revoke"
+                ) as revoke:
+                    self.client.post(
+                        reverse("manage"), {"action": "revoke", "did": STRANGER}
+                    )
+
+        revoke.assert_not_called()
+        self.assertIn("locked", self.client.session[views.MANAGE_ERROR_SESSION_KEY])

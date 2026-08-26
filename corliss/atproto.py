@@ -72,6 +72,20 @@ SCOPE = (
     "?action=create&action=update&action=delete"
 )
 
+# The admin roster record, which lives in the service account's own repo. Only
+# that account is ever asked for this, in `views._scope_for` — the roster is a
+# single record in a single repo, so requesting it of a member would be asking
+# permission to write something that would never be read.
+#
+# Kept as a *superset* of SCOPE rather than a separate term because the PDS
+# checks a PAR request's scope against the whole string this client publishes:
+# both values must appear in `client_metadata()`, and a request may narrow but
+# never exceed what is declared there.
+ROSTER_COLLECTION_SCOPE = (
+    "repo:network.sharedcomputer.admin.list?action=create&action=update"
+)
+SERVICE_SCOPE = f"{SCOPE} {ROSTER_COLLECTION_SCOPE}"
+
 
 class OAuthError(Exception):
     """Any failure resolving identity or talking to the PDS/auth server."""
@@ -142,7 +156,13 @@ def client_metadata() -> dict:
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "redirect_uris": [redirect_uri()],
-        "scope": SCOPE,
+        # The **maximum** this client may ask for, not what any one login asks.
+        # A PAR request may narrow it and almost always does: only the service
+        # account is sent the roster term (see `views._scope_for`), and every
+        # member's request is `SCOPE` alone. Declaring the union here is what
+        # makes that narrowing legal — request a term absent from this string
+        # and PAR fails with invalid_scope.
+        "scope": SERVICE_SCOPE,
         "token_endpoint_auth_method": "private_key_jwt",
         "token_endpoint_auth_signing_alg": "ES256",
         "jwks_uri": jwks_uri(),
@@ -537,14 +557,21 @@ def fetch_session_email(pds_url, access_token, *, dpop_key, nonce=None):
 # --- PAR + token exchange -------------------------------------------------
 
 def pushed_authorization_request(
-    meta, *, dpop_key, state, code_challenge, login_hint
+    meta, *, dpop_key, state, code_challenge, login_hint, scope=None
 ):
-    """Push the authorization request; return (request_uri, dpop_nonce)."""
+    """Push the authorization request; return (request_uri, dpop_nonce).
+
+    `scope` defaults to `SCOPE`, which is what every member's login sends. The
+    caller passes a value only to *narrow or extend within* what
+    `client_metadata()` publishes — today one case, the service account picking
+    up `SERVICE_SCOPE` so it can write the roster record. An unpublished term
+    fails here with `invalid_scope` rather than silently at write time.
+    """
     data = {
         "client_id": client_id(),
         "response_type": "code",
         "redirect_uri": redirect_uri(),
-        "scope": SCOPE,
+        "scope": scope or SCOPE,
         "state": state,
         "code_challenge": code_challenge,
         "code_challenge_method": "S256",
@@ -733,6 +760,19 @@ def write_record(user, collection, rkey, record):
         # A 2xx with an unreadable body still wrote the record. Say so rather
         # than turning a success into a failure the member would retry.
         return {}
+
+
+def refresh_session(token):
+    """Refresh a stored session on purpose, rather than on being told to.
+
+    The public door onto `_refresh` for the one caller that has to act *before*
+    a failure: `membership.refresh_service_session`, keeping the service
+    account's session alive between roster edits that happen monthly. Everywhere
+    else refreshes reactively, on the PDS answering `invalid_token`, which is
+    the better default — the note in `_refresh` about not pre-empting a clock we
+    do not own still stands for every other path.
+    """
+    return _refresh(token, key_from_pem(token.dpop_private_pem))
 
 
 def _refresh(token, dpop_key):

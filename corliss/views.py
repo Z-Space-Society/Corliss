@@ -53,6 +53,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
+from django.db.models import OuterRef, Subquery
 from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
@@ -194,6 +195,7 @@ def login(request):
             state=state,
             code_challenge=challenge,
             login_hint=handle,
+            scope=_scope_for(did),
         )
     except atproto.OAuthError as exc:
         return render(request, "login.html", {"error": str(exc)})
@@ -215,6 +217,99 @@ def login(request):
         **registry,
     }
     return redirect(atproto.authorization_url(meta, request_uri))
+
+
+@require_http_methods(["POST"])
+def manage_unlock(request):
+    """Authenticate the service account, without disturbing your own session.
+
+    The roster lives in the service account's repo and only that account can
+    write it, so Corliss needs a session for it — and the only way to get one is
+    the atproto handshake, because HappyView verifies the tokens it is handed
+    against the DPoP key it provisioned (an app password produces a Bearer token
+    that fails that check, and so could never call `setSpaceAccess`).
+
+    What this is *not* is a sign-in. You stay signed in as yourself for the whole
+    round trip; the password is typed at your PDS, never here. See `callback`'s
+    `service_link` branch, where the absence of `auth_login` is the entire
+    mechanism.
+
+    POST-only: it starts an authorization redirect, which is a state change, and
+    a GET would let any page on the internet start one by linking to it.
+    """
+    if not request.user.is_authenticated:
+        request.session[POST_LOGIN_REDIRECT] = reverse("manage")
+        return redirect("login")
+    if not request.user.is_cluster_admin:
+        raise Http404
+
+    service_did = settings.SCN_SERVICE_DID
+    if not service_did:
+        request.session[MANAGE_ERROR_SESSION_KEY] = (
+            "SCN_SERVICE_DID is not set, so there is no service account to "
+            "authenticate."
+        )
+        return redirect("manage")
+
+    try:
+        doc = atproto.fetch_did_document(service_did)
+        # The handle is the login hint the PDS shows on its consent screen, and
+        # it is what every message about this says out loud — a DID would be
+        # unreadable in exactly the place someone needs to recognise an account.
+        handle = atproto.handle_from_doc(doc) or service_did
+        pds_url = atproto.pds_endpoint_from_doc(doc)
+        meta = atproto.discover_auth_server(pds_url)
+        dpop_key, registry = _dpop_key_for(service_did)
+        verifier, challenge = atproto.pkce_pair()
+        state = secrets.token_urlsafe(32)
+        request_uri, nonce = atproto.pushed_authorization_request(
+            meta,
+            dpop_key=dpop_key,
+            state=state,
+            code_challenge=challenge,
+            login_hint=handle,
+            scope=_scope_for(service_did),
+        )
+    except atproto.OAuthError as exc:
+        request.session[MANAGE_ERROR_SESSION_KEY] = (
+            f"Could not reach the service account's PDS: {exc}"
+        )
+        return redirect("manage")
+
+    request.session[SESSION_PREFIX + state] = {
+        "code_verifier": verifier,
+        "dpop_pem": atproto.key_to_pem(dpop_key),
+        "dpop_nonce": nonce,
+        "issuer": meta["issuer"],
+        "token_endpoint": meta["token_endpoint"],
+        "did": service_did,
+        "pds_url": pds_url,
+        "handle": handle,
+        # The marker `callback` branches on. Everything else about this flow is
+        # an ordinary login.
+        "service_link": True,
+        **registry,
+    }
+    return redirect(atproto.authorization_url(meta, request_uri))
+
+
+def _scope_for(did):
+    """The atproto scope this login should request.
+
+    One account gets more than everyone else: the service account, whose repo
+    holds the admin roster record. It is the only repo that record is ever read
+    from, so asking any member for permission to write it would be asking for
+    access to something nobody would look at.
+
+    Decided from the *unverified* DID the handle resolved to, which is safe for
+    the same reason `_dpop_key_for` is: the worst a spoofed handle achieves is a
+    consent screen naming a scope its owner then declines, and the PDS would
+    refuse the write regardless — `putRecord` only ever touches the
+    authenticated account's own repo.
+    """
+    if did and did == settings.SCN_SERVICE_DID:
+        return atproto.SERVICE_SCOPE
+    return atproto.SCOPE
 
 
 def _dpop_key_for(did):
@@ -329,6 +424,28 @@ def callback(request):
     _store_tokens(user, token_data, dpop_key, nonce, pending)
     _register_registry_session(user, token_data, pending)
 
+    if pending.get("service_link"):
+        # **The whole point of this branch is the `auth_login` that is not
+        # here.** Authenticating the service account is an errand an admin runs
+        # while signed in as themselves; replacing their session with the
+        # service account's is what made the first cut of this unusable.
+        #
+        # Checked again against the setting rather than trusted from the pending
+        # state: the flow is started by a signed-in admin, but the account that
+        # comes back is chosen at the PDS's own login screen, so completing it as
+        # somebody else would otherwise install the wrong service session and
+        # every roster write would silently go to the wrong repo.
+        if did != settings.SCN_SERVICE_DID:
+            request.session[MANAGE_ERROR_SESSION_KEY] = (
+                f"That authenticated {pending['handle']}, which is not the "
+                f"service account. Admin controls are still locked."
+            )
+        else:
+            request.session[MANAGE_NOTICE_SESSION_KEY] = (
+                "Admin controls are unlocked."
+            )
+        return redirect("manage")
+
     auth_login(
         request, user, backend="django.contrib.auth.backends.ModelBackend"
     )
@@ -359,7 +476,11 @@ def dev_login(request):
     if not (settings.DEBUG and settings.DEV_LOGIN_ENABLED):
         raise Http404("dev login is not enabled")
 
-    handle = request.POST.get("handle", "").strip().lstrip("@")
+    # Lowercased because handles are case-insensitive but DIDs are not: without
+    # it `Jacob.example` and `jacob.example` mint two `did:dev:` DIDs, so one
+    # person gets two member rows and only one spelling matches DEV_ADMIN_DIDS.
+    # A real login can't drift this way — resolution returns one canonical DID.
+    handle = request.POST.get("handle", "").strip().lstrip("@").lower()
     if not handle:
         return render(request, "login.html", {"error": "Enter a handle."})
 
@@ -735,6 +856,11 @@ def manage(request):
             # second one. Harmless by design — latest-event-wins — but an
             # audit log should record decisions, not browser reloads.
             return _decide_membership(request, registry, action)
+        if action in ("add_admin", "remove_admin"):
+            # PRG for the same reason, and one more: the roster is a
+            # read-modify-write, so a re-post would append a second entry for
+            # the same person rather than being absorbed by latest-event-wins.
+            return _edit_roster(request, action)
         try:
             # No dry-run switch here any more: the button is the recovery
             # action, and a preview beside it mostly invited clicking the wrong
@@ -767,11 +893,32 @@ def manage(request):
         # would read as a fact; this reads as the failure it is.
         admins, roster_error = [], str(exc)
 
-    # Active first, so the roll a reader is checking against the registry is at
-    # the top and revoked history sinks below it.
-    members = list(MembershipCache.objects.order_by("-active", "did"))
+    # **Active memberships only.** A revoked member is history, and the registry
+    # is where history lives — a table of people who are not members, with a
+    # column to say so, was two facts fighting for one row. Readmitting is the
+    # invite field: it takes any handle and writes a fresh grant, which is what
+    # readmission always was.
+    #
+    # `is_staff` is annotated from the `User` row by DID rather than resolved
+    # from the roster per render. It is a mirror, kept true at every login by
+    # `_heal_staff_flag` and written alongside the roster by `appoint_admin`, and
+    # reading it here costs one join instead of a network read.
+    members = list(
+        MembershipCache.objects.filter(active=True)
+        .annotate(
+            is_admin=Subquery(
+                User.objects.filter(did=OuterRef("did")).values("is_staff")[:1]
+            )
+        )
+        .order_by("did")
+    )
 
-    applications = _applications(registry, members)
+    # Applications are matched against every member, not only the active ones —
+    # an application from somebody previously revoked has still been decided
+    # once, and the queue should not offer it as though it were new.
+    applications = _applications(
+        registry, list(MembershipCache.objects.all())
+    )
 
     # One resolution pass over every DID on the page — applicants, members,
     # whoever granted them, and the admins — so the lookups are shared rather
@@ -787,16 +934,13 @@ def manage(request):
     for member in members:
         member.handle = handles.get(member.did, member.did)
         member.author_handle = handles.get(member.author_did, member.author_did)
-    # Dicts rather than the `AdminEntry` objects: the entry is a value read
-    # from the record and has no room (or business) holding a display label.
-    admins = [
-        {
-            "did": a.did,
-            "handle": handles.get(a.did, a.did),
-            "added_at": a.added_at,
-        }
-        for a in admins
-    ]
+    # When each current admin's term began, keyed by DID, so the members table
+    # can say "Admin since" without a second roster pass. The service account is
+    # in here and simply never matches a member row — it holds no grant, which
+    # is why it does not appear on this page at all.
+    admin_since = {a.did: a.added_at for a in admins}
+    for member in members:
+        member.admin_since = admin_since.get(member.did)
 
     return render(
         request,
@@ -804,7 +948,6 @@ def manage(request):
         {
             "applications": applications,
             "members": members,
-            "admins": admins,
             "roster_error": roster_error,
             "registry_configured": registry.is_configured,
             "report": report,
@@ -815,6 +958,10 @@ def manage(request):
             # accept — and there is no blank option anywhere, because a grant
             # with no tier is a fail-open bug rather than a harmless default.
             "can_decide": _can_decide(request.user),
+            # Roster edits spend this, and nothing else does — so a lapse is
+            # invisible until somebody tries to appoint an admin. Shown here so
+            # it is found before then.
+            "service_session": membership.service_session_status(),
             "tiers": membership.TIERS,
             "default_tier": membership.DEFAULT_TIER,
             "manage_notice": request.session.pop(
@@ -859,6 +1006,20 @@ def _decide_membership(request, registry, action):
     lag this click by a round trip.
     """
     did = request.POST.get("did", "").strip()
+    handle_hint = request.POST.get("handle", "").strip().lstrip("@")
+
+    # Inviting: the console names someone by handle who has never applied, so
+    # there is no DID on the page to post back. Resolved with the strict
+    # two-method form — admitting someone should not trust the third-party
+    # resolver — and the row is created here so the member has a readable name
+    # from the moment they are granted rather than from their first sign-in.
+    if not did and handle_hint:
+        try:
+            did = atproto.resolve_handle_for_admin(handle_hint)
+        except atproto.OAuthError as exc:
+            request.session[MANAGE_ERROR_SESSION_KEY] = str(exc)
+            return redirect("manage")
+
     if not did:
         request.session[MANAGE_ERROR_SESSION_KEY] = "No member was named."
         return redirect("manage")
@@ -871,21 +1032,98 @@ def _decide_membership(request, registry, action):
         )
         return redirect("manage")
 
-    handle = membership.handles_for([did]).get(did, did)
+    handle = handle_hint or membership.handles_for([did]).get(did, did)
     try:
         if action == "approve":
             tier = request.POST.get("tier", "")
             registry.approve(token, did, tier)
+            membership.ensure_user(did, handle_hint or None)
             request.session[MANAGE_NOTICE_SESSION_KEY] = (
                 f"{handle} is a member at {tier}."
             )
         else:
+            # **Admin first, then membership.** They cascade because an admin
+            # who is not a member would break the rule the console enforces at
+            # appointment — and this order is the one whose half-done state is
+            # safe: a member who is not an admin, rather than a non-member who
+            # still holds authority over the registry.
+            note = ""
+            if membership.is_cluster_admin(did):
+                note = membership.dismiss_admin(request.user.did, did)
             registry.revoke(token, did, request.POST.get("reason", ""))
             request.session[MANAGE_NOTICE_SESSION_KEY] = (
-                f"{handle}'s membership is revoked."
+                f"{handle}'s membership is revoked. {note}".strip()
+                if note
+                else f"{handle}'s membership is revoked."
             )
-    except membership.RegistryError as exc:
+    except (membership.RegistryError, membership.RosterError) as exc:
+        # `RosterError` reaches here only from the cascade above — a revoke that
+        # could not first end their admin authority. Refusing the whole thing is
+        # correct: revoking the membership anyway would leave them holding the
+        # registry write access this was supposed to take away.
         log.warning("membership %s of %s failed: %s", action, did, exc)
+        request.session[MANAGE_ERROR_SESSION_KEY] = str(exc)
+
+    return redirect("manage")
+
+
+def _edit_roster(request, action):
+    """Add or remove a cluster admin, on behalf of the signed-in admin.
+
+    **The actor is authorized here, but the edit is not made as them.** The
+    roster lives in the service account's repo and atproto has no cross-repo
+    write, so Corliss verifies the caller is a current admin and then spends the
+    service account's own session — recording who asked in the entry. See
+    `membership.appoint_admin`.
+
+    Deliberately *not* gated on `can_write_registry`, unlike approve and revoke:
+    that flag is about holding a HappyView session, and the roster is a PDS
+    record. An admin whose registry session failed to provision can still edit
+    the roster; only the space-access half of the change needs the registry, and
+    that half is reported rather than raised.
+
+    Accepts a handle or a DID, because the person adding an admin is reading a
+    handle. Resolution is the strict two-method form — never the third-party
+    resolver, since granting admin should not trust it.
+    """
+    subject = request.POST.get("subject", "").strip().lstrip("@")
+    if not subject:
+        request.session[MANAGE_ERROR_SESSION_KEY] = "No one was named."
+        return redirect("manage")
+
+    if subject.startswith("did:"):
+        did = subject
+    else:
+        try:
+            did = atproto.resolve_handle_for_admin(subject)
+        except atproto.OAuthError as exc:
+            request.session[MANAGE_ERROR_SESSION_KEY] = str(exc)
+            return redirect("manage")
+
+    # Re-asked at action time rather than trusted from the page render: the
+    # roster is live, and the admin who loaded this page may have been removed
+    # while it sat open.
+    if not membership.is_cluster_admin(request.user.did):
+        raise Http404
+
+    handle = membership.handles_for([did]).get(did, did)
+    try:
+        if action == "add_admin":
+            note = membership.appoint_admin(request.user.did, did)
+            message = f"{handle} is a cluster admin."
+        else:
+            note = membership.dismiss_admin(request.user.did, did)
+            message = (
+                f"{handle} is no longer a cluster admin. Members they approved "
+                f"stay members."
+            )
+        # A partial success says so in full rather than being flattened into
+        # either "done" or "failed" — the operator has one more step to run.
+        request.session[MANAGE_NOTICE_SESSION_KEY] = (
+            f"{message} {note}".strip() if note else message
+        )
+    except (membership.RosterError, membership.RegistryError) as exc:
+        log.warning("roster %s of %s failed: %s", action, did, exc)
         request.session[MANAGE_ERROR_SESSION_KEY] = str(exc)
 
     return redirect("manage")
@@ -1018,6 +1256,7 @@ def _upsert_member(*, did, handle, pds_url, email="", email_confirmed=False):
             "pds_url": pds_url,
             "email": email,
             "email_confirmed": email_confirmed,
+            "is_staff": membership.is_cluster_admin(did),
         },
     )
     if not created:
@@ -1028,7 +1267,33 @@ def _upsert_member(*, did, handle, pds_url, email="", email_confirmed=False):
         user.save(
             update_fields=["username", "pds_url", "email", "email_confirmed"]
         )
+        _heal_staff_flag(user)
     return user
+
+
+def _heal_staff_flag(user):
+    """Re-derive `is_staff` from the roster, which is the authority.
+
+    `membership.appoint_admin` writes both halves together, so this normally
+    finds nothing to do. It exists for when they come apart: the roster write
+    succeeded and the local flag update did not, an admin was removed while
+    signed in, or the row predates the two being one operation. Doing it at
+    login means the local mirror is never more than one sign-in stale.
+
+    **Superusers are skipped in both directions.** Django's admin needs
+    `is_staff` as well as `is_superuser`, so clearing it here would lock out an
+    account somebody deliberately escalated — a surprise worse than a stale
+    flag. `--superuser` is opt-in and stays opt-out of this.
+
+    Never touches the break-glass row: `did:local:admin` signs in through
+    `/admin/login/` and never reaches this path.
+    """
+    if user.is_superuser:
+        return
+    should_be = membership.is_cluster_admin(user.did)
+    if user.is_staff != should_be:
+        user.is_staff = should_be
+        user.save(update_fields=["is_staff"])
 
 
 def _store_tokens(user, token_data, dpop_key, nonce, pending):

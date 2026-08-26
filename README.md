@@ -63,7 +63,10 @@ to activate. `uv run python manage.py …` is the explicit equivalent.
 Configuration is entirely env-driven — see [`.env.example`](.env.example) for
 the full list. `.env` is git-ignored; **never commit secrets or private keys**.
 `CHAT_URL` drives the nav's "Chat" link, `MANAGE_URL` the "Manage Console" entry
-in its Manage menu, and `API_URL` both the endpoint shown on `/api/` and the
+in its Manage menu (**on its way out** — `/manage/` now covers everything that
+console did, including roster editing; the link and this setting go when the
+`manage_console` role is removed), and `API_URL` both the endpoint shown on
+`/api/` and the
 "LiteLLM Admin" entry in the Manage menu (`API_URL` + `/ui/`, cluster admins
 only — derived rather than configured separately, since a second setting for the
 same origin could only ever disagree with the first). `HAPPYVIEW_URL` and
@@ -80,13 +83,16 @@ left blank, which simply hides what it feeds. The `LITELLM_*` trio is what makes
 `/api/` able to issue keys rather than only describe them — see
 [API keys](#api-keys--api).
 
-The nav's two admin links answer to **two different authorities**, deliberately:
-"Manage Console" to the atproto admin roster (`user.is_cluster_admin`), and
-"Django admin" to Django's own `is_staff`. A roster edit must not hand anyone
-the Django admin, where the session and OIDC client tables live — see
-[Membership](docs/membership.md). Use `manage.py make_admin` for the
-latter; it grants staff only, and `--superuser` — the flag that bypasses every
-permission check — has to be asked for.
+The nav's admin links answer to **one authority**: the atproto admin roster
+(`user.is_cluster_admin`). Making someone an admin writes the roster entry *and*
+sets Django's `is_staff`, from one operation — `manage.py make_admin`, or the
+button on `/manage/`. The roster is the authority and `is_staff` is a mirror of
+it, re-derived at every login so the two cannot drift.
+
+`is_superuser` is **not** part of that. It bypasses every permission check, so
+`--superuser` has to be asked for by name; plain `is_staff` opens the admin index
+with no model permissions at all, which is what made merging it affordable. See
+[Membership](docs/membership.md).
 
 ### Why atproto login can't work over localhost
 
@@ -121,6 +127,13 @@ type. Members it creates are keyed on `did:dev:<handle>` — `did:dev` is not a
 registered DID method, so these rows can never collide with a real atproto DID
 and are obvious as fakes in the admin.
 
+- **The handle you type is lowercased first, because handles are
+  case-insensitive and DIDs are not.** Without that, `Jacob.example` and
+  `jacob.example` mint two different `did:dev:` DIDs and therefore two member
+  rows for one person, of which only one spelling matches `DEV_ADMIN_DIDS`. A
+  real login cannot drift this way: resolving a handle returns one canonical
+  DID however the handle was spelled.
+
 **This is a complete authentication bypass** — it verifies nothing. Three
 guards keep it local: it is off by default, the route is only registered when
 `DEBUG` and `DEV_LOGIN_ENABLED` are both true (and the view re-checks), and
@@ -138,11 +151,14 @@ there is no way to be an admin at all — locally or anywhere.
 DEV_ADMIN_DIDS=did:dev:you.bsky.social   # alongside DEBUG=true
 ```
 
+Write the handle part in lowercase — the comparison is an exact string match,
+as DID comparison must be, and the dev sign-in mints lowercase.
+
 Those DIDs answer yes to `is_cluster_admin` and to nothing else: no membership,
-no Django flag, exactly as the real roster grants nothing but itself. Same
-`DEBUG` requirement and the same `manage.py check` failure if it is set without
-one. It does **not** grant the Django admin — that is `is_staff`, via
-`manage.py make_admin`.
+and no grant. Same `DEBUG` requirement and the same `manage.py check` failure if
+it is set without one. Note it is a *read* override, not a roster write — it
+makes the check answer yes without a record existing, so it does not go through
+`appoint_admin` and sets no `is_staff`.
 
 #### Real atproto login locally (a named tunnel)
 
@@ -248,8 +264,10 @@ than being duplicated here so there is one place for it to be correct.
 ### Admin
 
 ```bash
-manage.py make_admin alice.bsky.social   # Django staff, keyed on DID (--superuser opts in
-                                         #   to the flag that bypasses every check)
+manage.py make_admin alice.bsky.social   # cluster admin: roster entry + is_staff.
+                                         #   --remove reverses it; --superuser opts in
+                                         #   to the flag that bypasses every check.
+                                         #   Needs the service account's session.
 manage.py ensure_admin                   # idempotent break-glass local admin;
                                          #   reads CORLISS_ADMIN_PASSWORD
 ```
@@ -268,7 +286,8 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
 | Membership push (from the registry) | `/membership/events` |
 | Apply for membership (signed-in non-members) | `/membership/apply` |
-| Console — decide applications, members, admins, reconcile (cluster admins) | `/manage/` |
+| Console — applications, members, admins, invite, reconcile (cluster admins) | `/manage/` |
+| Authenticate the service account so roster edits can be made (POST, cluster admins; returns through `/auth/callback`) | `/manage/unlock` |
 | Systems — the stack, status stubbed (cluster admins) | `/systems/` |
 | Django admin | `/admin/` |
 
@@ -426,10 +445,10 @@ every member locked out, and press the button that fills it. The recovery action
 sits behind the one door that does not depend on the thing being recovered.
 
 The two tables come from different places, and the difference is the point:
-members are Corliss's own cache (can be stale, incomplete, or orphaned); admins
-are read live from the registry's public roster record (nothing to go stale). A
-roster that cannot be read renders as a failure, not an empty table — "could not
-find out" and "there are no admins" are different facts.
+applications are read live from the registry's index and are written by the
+applicants themselves; members are Corliss's own cache, which can be stale,
+incomplete, or orphaned. Reconciliation is what makes the second agree with the
+registry.
 
 `MembershipCache` is also visible in the Django admin, **read-only** — no add,
 no change, no delete, not even for a superuser. The table is a cached
@@ -437,19 +456,50 @@ computation over the registry's events, so an edit there is either reverted by
 the next push or, until then, a membership no record backs. Removing an orphan
 stays a deliberate act, taken with the console's orphan report in hand.
 
-The admin table lists only the terms in force **now**, one row per DID. Departed
-terms are not shown and not lost: they stay in the record, where
-`Roster.was_admin_at` reads them when a past grant's authority is being judged.
-The tables show handles, resolved from the `User` row where the member has
-signed in and from the DID document otherwise (`membership.handles_for`), with
-the DID on each cell's `title`. That resolution is **display only** — handles are
-mutable, so nothing may key, compare, or store what comes out of it, and a
-lookup that fails renders the DID rather than an error.
+**One table, current members only.** A revoked person is history and the registry
+is where history lives; re-inviting the same handle readmits them, which is what
+readmission always was. Members are shown by handle with the DID on the cell's
+`title` — a DID is never text. `membership.ensure_user` records the handle when a
+grant is written, so a member is named from the moment they are admitted rather
+than from their first sign-in. That resolution is **display only**: handles are
+mutable, so nothing may key, compare, or store what comes out of it.
 
-This page supersedes the separate SPA admin console. Deciding — approve, revoke,
-set tier — happens here; **roster editing** is the one write surface still left
-there. All of them are *writes* to the registry space and must keep requiring a
-current-admin caller, so `MEMBERSHIP_REGISTRY_TOKEN` must never gain write scope.
+There is no separate admins table. **Admins are members**, enforced when one is
+appointed, so admin is a column and `Make Admin` / `Revoke Admin` sit on the
+member's own row. The column renders from Django's `is_staff` — a local mirror
+re-derived at every login — while the registry's roster record stays the
+authority. The service account holds no grant and so never appears here: it is
+infrastructure, not a person. Revoking a member who is an admin ends their admin
+authority first, then their membership; that order is the one whose half-done
+state is safe.
+
+This page **replaces** the separate SPA admin console — approve, revoke, set
+tier, invite, and roster editing all happen here. Approve, revoke and set tier
+are writes to the registry space and keep requiring a current-admin caller, so
+`MEMBERSHIP_REGISTRY_TOKEN` must never gain write scope.
+
+Roster editing works differently, because it has to. The roster is a record in
+the service account's own repo and an atproto repo is writable only by its owner,
+so the acting admin cannot write it: Corliss checks that *you* are a current
+admin, then makes the write with the service account's session, recording you as
+`addedBy` / `removedBy`. **You never sign in as it and nobody is handed a
+password.** The lock in the Members card's corner runs an ordinary atproto handshake —
+you authenticate at the service account's own PDS and land back on `/manage/`
+still signed in as yourself. An app password would not do: HappyView verifies the
+tokens handed to `/oauth/sessions` against the DPoP key it provisioned, so a
+Bearer token can never produce a session able to grant registry space access —
+and without that half, a new admin is on the list and cannot approve anyone.
+
+Appointing is two writes. The roster write goes first, so a failure changes
+nothing; the space-access half is reported rather than raised, and re-running the
+same action finishes it. Both halves are idempotent. A lapsed service session
+degrades **only** roster editing — approve, revoke, login and every member-facing
+page run on the admins' own sessions — and the lock shows its health so a lapse
+is found before somebody needs it.
+
+Two edits are refused outright: removing the last current admin, and removing the
+service account. The first would end every approve and revoke with no way back;
+the second removes the identity that performs these writes.
 
 ## Wiring up a relying party (Open WebUI shown)
 

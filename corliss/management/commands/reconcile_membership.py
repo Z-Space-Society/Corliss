@@ -43,6 +43,12 @@ class Command(BaseCommand):
 
         if dry_run:
             self.stdout.write(self.style.WARNING("dry run — nothing was written"))
+        else:
+            # Rides along with the scheduled run rather than having its own
+            # timer: the service session is only otherwise exercised when
+            # somebody appoints an admin, which is exactly when discovering it
+            # has lapsed costs the most. Never fails the reconcile.
+            self.stdout.write(membership.refresh_service_session())
 
         self.stdout.write(
             f"applied {len(report.applied)}, unchanged {len(report.unchanged)}, "

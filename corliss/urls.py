@@ -58,6 +58,11 @@ urlpatterns = [
     # The cluster console. Gated on the atproto admin roster, not on a Django
     # flag — see `views.manage`.
     path("manage/", views.manage, name="manage"),
+    # Authenticates the *service account* so roster writes can be made. Comes
+    # back through the ordinary `callback` route, which is why there is no second
+    # redirect URI here — a new one would mint a different atproto client and
+    # re-consent every member.
+    path("manage/unlock", views.manage_unlock, name="manage_unlock"),
     # The stack, for cluster admins. A stub today — see `views.systems`.
     path("systems/", views.systems, name="systems"),
     path("", views.home, name="home"),

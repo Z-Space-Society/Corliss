@@ -35,7 +35,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from corliss import atproto, membership
+from corliss import atproto, membership, views
 from corliss.models import AtprotoToken, MembershipCache, User
 
 DID = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
@@ -635,7 +635,30 @@ class ScopeTests(TestCase):
         # Dropping this would silently empty `User.email` on the next login.
         self.assertIn("transition:email", atproto.SCOPE)
 
-    def test_the_published_metadata_declares_exactly_what_par_requests(self):
-        # PAR fails with invalid_scope if these two ever disagree, and nothing
-        # in the client raises first.
-        self.assertEqual(atproto.client_metadata()["scope"], atproto.SCOPE)
+    def test_the_published_metadata_declares_everything_par_can_request(self):
+        # PAR fails with invalid_scope on a term the metadata omits, and nothing
+        # in the client raises first. Declared is the *maximum*; a request may
+        # narrow it, and every member's does.
+        declared = set(atproto.client_metadata()["scope"].split())
+        self.assertLessEqual(set(atproto.SCOPE.split()), declared)
+        self.assertLessEqual(set(atproto.SERVICE_SCOPE.split()), declared)
+
+    def test_a_member_is_never_asked_for_the_admin_roster(self):
+        # The roster is one record in one repo — the service account's. Asking
+        # a member to grant write access to a collection in *their* repo that
+        # nothing will ever read is a consent screen that costs trust and buys
+        # nothing, so the wider scope is requested for that one account only.
+        self.assertNotIn("admin.list", atproto.SCOPE)
+        self.assertIn("admin.list", atproto.SERVICE_SCOPE)
+
+    @override_settings(SCN_SERVICE_DID="did:plc:service")
+    def test_only_the_service_account_is_sent_the_wider_scope(self):
+        self.assertEqual(views._scope_for("did:plc:service"), atproto.SERVICE_SCOPE)
+        self.assertEqual(views._scope_for("did:plc:someone"), atproto.SCOPE)
+
+    @override_settings(SCN_SERVICE_DID="")
+    def test_an_unconfigured_service_did_widens_nothing(self):
+        # Otherwise a blank setting would match a blank DID and hand the wider
+        # scope to a login that resolved to nothing.
+        self.assertEqual(views._scope_for(""), atproto.SCOPE)
+        self.assertEqual(views._scope_for(None), atproto.SCOPE)
