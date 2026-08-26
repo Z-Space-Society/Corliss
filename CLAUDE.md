@@ -230,6 +230,15 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
 - **Only active memberships are listed.** A revoked person is history and the
   registry is where history lives; re-inviting the same handle readmits them,
   which is what readmission always was.
+- **Declining an application is a revocation, and needs nothing new at the
+  registry.** Membership is latest-event-wins over grants and revocations, so a
+  revocation with no grant before it *is* "not a member". It survives reconcile
+  because it is an admin-authored event, which is what keeps the applicant out
+  of the queue after a rebuild. It stamps a reason so the log does not read as
+  the revocation of a membership that never existed, and it **refuses when the
+  subject is a current member** — the queue can hold one ("asked again"), and
+  there Decline would silently revoke a sitting member and dismiss them as an
+  admin. Revoking a member is a decision taken on their own row.
 - **A DID is never text.** Handles are what a reader sees, with the DID on the
   cell's `title`. `membership.ensure_user` records the handle when a grant is
   written, so a member is named rather than numbered from the moment they are

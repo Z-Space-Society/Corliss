@@ -850,7 +850,7 @@ def manage(request):
 
     if request.method == "POST":
         action = request.POST.get("action", "reconcile")
-        if action in ("approve", "revoke"):
+        if action in ("approve", "revoke", "decline"):
             # Post/Redirect/Get, unlike reconcile below: these append a record
             # to the registry, and a refresh that re-posted would append a
             # second one. Harmless by design — latest-event-wins — but an
@@ -984,9 +984,26 @@ def _can_decide(user):
     return token is not None and token.can_write_registry
 
 
+# What a declined application's revocation records as its reason, so the log
+# can tell the two apart. See `_decide_membership`.
+DECLINE_REASON = "Application declined."
+
+
 def _decide_membership(request, registry, action):
-    """Approve or revoke, authored by the signed-in admin. Redirects to
-    `/manage/`.
+    """Approve, revoke, or decline, authored by the signed-in admin. Redirects
+    to `/manage/`.
+
+    **Declining is a revocation, and that is not a workaround.** The registry
+    holds grants and revocations and derives membership as latest-event-wins,
+    so "not a member" is exactly what a revocation with no grant before it
+    resolves to — the Lua asks only that the caller is a current admin and that
+    the DID is well formed, and `apply_event` already handles a revoke landing
+    on no cache row, because that is what reconciling a rebuilt cluster does for
+    everyone ever revoked. Nothing new is written to the registry for this.
+
+    What the shape costs is that the log reads "revoked" for someone who was
+    never granted, which an auditor can infer but should not have to. So a
+    decline stamps `DECLINE_REASON` on the record: the event says what it was.
 
     **The authority here is the registry's, not this function's.** The Lua
     re-reads the admin roster on every write and refuses a caller who is not on
@@ -1033,6 +1050,22 @@ def _decide_membership(request, registry, action):
         return redirect("manage")
 
     handle = handle_hint or membership.handles_for([did]).get(did, did)
+
+    # **Decline answers an application; it never ends a live membership.** The
+    # queue can hold a current member — someone who applied again after being
+    # admitted keeps their row, flagged "asked again" — and on that row the
+    # button would otherwise revoke a sitting member, cascading through
+    # `dismiss_admin` if they were an admin. That is a large and silent thing
+    # for a control that says "decline". Revoking a member is a decision taken
+    # on their own row, where the confirmation says so.
+    if action == "decline":
+        if MembershipCache.objects.filter(did=did, active=True).exists():
+            request.session[MANAGE_ERROR_SESSION_KEY] = (
+                f"{handle} is already a member, so there is no application to "
+                "decline. Revoke them from the members table instead."
+            )
+            return redirect("manage")
+
     try:
         if action == "approve":
             tier = request.POST.get("tier", "")
@@ -1040,6 +1073,15 @@ def _decide_membership(request, registry, action):
             membership.ensure_user(did, handle_hint or None)
             request.session[MANAGE_NOTICE_SESSION_KEY] = (
                 f"{handle} is a member at {tier}."
+            )
+        elif action == "decline":
+            # No admin cascade: the guard above has already established there
+            # is no live membership here, so there is nothing to end. The
+            # reason is what keeps this legible in the log — a bare revocation
+            # for a DID that was never granted is the same record either way.
+            registry.revoke(token, did, DECLINE_REASON)
+            request.session[MANAGE_NOTICE_SESSION_KEY] = (
+                f"{handle}'s application is declined. They can apply again."
             )
         else:
             # **Admin first, then membership.** They cascade because an admin

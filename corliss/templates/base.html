@@ -4,6 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}SCN{% endblock %}</title>
+  {% comment %}
+  The brand mark, twice. The SVG is what every current browser picks and the
+  only one that stays sharp on a HiDPI tab strip; the .ico carries 16/32/48px
+  rasters for the ones that ignore SVG icons, and is listed second because a
+  browser that understands both takes the last one it can use.
+  {% endcomment %}
+  <link rel="icon" href="{% static 'favicon.ico' %}" sizes="48x48">
+  <link rel="icon" href="{% static 'favicon.svg' %}" type="image/svg+xml">
   <link rel="stylesheet" href="{% static 'css/base.css' %}">
 </head>
 <body>

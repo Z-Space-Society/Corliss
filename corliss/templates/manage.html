@@ -369,6 +369,29 @@ makes it sound otherwise.
                       {% include "_tier_select.html" with selected=default_tier %}
                       <button type="submit" class="btn-row">Approve</button>
                     </form>
+                    {% comment %}
+                    The other half of a decision. Without it the only way to
+                    answer "no" was to leave the row sitting in the queue
+                    forever, which reads as nobody having looked at it.
+
+                    It writes a revocation — with no grant before it, that is
+                    what "not a member" already is under latest-event-wins, so
+                    there is no new record type and nothing to deploy at the
+                    registry. `views._decide_membership` says why, and stamps a
+                    reason so the log does not read as a revocation of a
+                    membership that never existed.
+
+                    The confirmation says they can apply again, because they
+                    can: a fresh application post-dates this decision and comes
+                    back to this queue flagged "asked again".
+                    {% endcomment %}
+                    <form method="post" class="row-form"
+                          onsubmit="return confirm('Decline {{ row.handle|escapejs }}? They are not admitted, and the decision goes on the record. They can apply again.');">
+                      {% csrf_token %}
+                      <input type="hidden" name="action" value="decline">
+                      <input type="hidden" name="did" value="{{ row.did }}">
+                      <button type="submit" class="btn-row btn-row--danger">Decline</button>
+                    </form>
                   {% else %}
                     <span class="hint-inline">no registry session</span>
                   {% endif %}

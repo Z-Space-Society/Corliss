@@ -479,6 +479,63 @@ class DecideMembershipViewTests(TokenMixin, TestCase):
         self.assertEqual(revoke.call_args.args[1:], (MEMBER, "left the network"))
         self.assertIn("revoked", self.client.session[MANAGE_NOTICE_SESSION_KEY])
 
+    def test_declining_writes_a_revocation_that_says_it_was_a_decline(self):
+        """Answering "no" to an application. With no grant before it, a
+        revocation is already exactly what "not a member" resolves to under
+        latest-event-wins — so there is no new record type and nothing to
+        deploy at the registry.
+
+        The reason is what keeps the log honest: the record would otherwise
+        read as a revocation of a membership that never existed, which an
+        auditor can infer from the absence of a grant but should not have to.
+        """
+        with patch.object(membership.MembershipRegistry, "revoke") as revoke:
+            resp = self.post(action="decline", did=MEMBER)
+
+        self.assertRedirects(resp, reverse("manage"), fetch_redirect_response=False)
+        self.assertEqual(revoke.call_args.args[1:], (MEMBER, "Application declined."))
+        notice = self.client.session[MANAGE_NOTICE_SESSION_KEY]
+        self.assertIn("application is declined", notice)
+        # They are not shut out: a fresh application post-dates this and comes
+        # back to the queue flagged "asked again".
+        self.assertIn("can apply again", notice)
+
+    def test_declining_refuses_to_end_a_live_membership(self):
+        """The queue can hold a current member — someone who applied again
+        after being admitted keeps their row, flagged "asked again". On that
+        row Decline would otherwise revoke a sitting member, and cascade
+        through `dismiss_admin` if they were an admin. That is a large and
+        silent thing for a control that says "decline"; revoking a member is a
+        decision taken on their own row, where the confirmation says so."""
+        MembershipCache.objects.create(
+            did=MEMBER,
+            active=True,
+            tier="level-2",
+            last_rkey=f"{MEMBER}:3lqxaaaaaaaaa",
+            last_event_at=timezone.now(),
+            author_did=ADMIN,
+        )
+
+        with patch.object(membership.MembershipRegistry, "revoke") as revoke:
+            resp = self.post(action="decline", did=MEMBER)
+
+        self.assertRedirects(resp, reverse("manage"), fetch_redirect_response=False)
+        revoke.assert_not_called()
+        error = self.client.session[MANAGE_ERROR_SESSION_KEY]
+        self.assertIn("already a member", error)
+        # Says what to do instead, rather than only refusing.
+        self.assertIn("Revoke them from the members table", error)
+
+    def test_a_declined_applicant_is_not_dismissed_as_an_admin(self):
+        """The guard above is what makes this true, and it is worth asserting
+        on its own: the revoke path cascades into ending roster authority, and
+        a decline must never reach that."""
+        with patch.object(membership, "dismiss_admin") as dismiss:
+            with patch.object(membership.MembershipRegistry, "revoke"):
+                self.post(action="decline", did=ADMIN)
+
+        dismiss.assert_not_called()
+
     def test_the_admins_own_session_is_what_authors_the_write(self):
         """There is deliberately no Corliss credential that could do this. The
         token handed to the registry is this admin's own row."""

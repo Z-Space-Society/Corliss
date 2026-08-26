@@ -324,6 +324,30 @@ class OrphanTests(TestCase):
         self.assertEqual(report.orphans, [])
         self.assertTrue(report.is_complete)
 
+    def test_a_declined_application_survives_a_reconcile(self):
+        """A decline writes a revocation with **no grant before it**, which is
+        an unusual shape for this log and the one that would quietly undo the
+        decision if reconcile only accounted for grants.
+
+        It does not: the revocation is an admin-authored event, so the DID is
+        accounted for rather than orphaned, and it is that DID's winning event,
+        so the row comes back revoked. That matters beyond tidiness — the
+        application queue reads "already decided" off this row, so a rebuild
+        that dropped it would put every declined applicant back in the queue as
+        though nobody had ever looked at them.
+        """
+        report = membership.reconcile([revoke(tid=TID_1)], roster(entry(JACOB)))
+
+        self.assertEqual(report.applied, [MEMBER])
+        self.assertEqual(report.orphans, [])
+        self.assertEqual(report.unresolved, [])
+        self.assertTrue(report.is_complete)
+
+        row = MembershipCache.objects.get(did=MEMBER)
+        self.assertFalse(row.active)
+        # No tier was ever granted, and reconcile does not invent one.
+        self.assertEqual(row.tier, "")
+
 
 class ReportTests(TestCase):
     """What the report claims, and what a caller may conclude from it."""

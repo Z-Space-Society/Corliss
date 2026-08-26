@@ -451,6 +451,29 @@ applicants themselves; members are Corliss's own cache, which can be stale,
 incomplete, or orphaned. Reconciliation is what makes the second agree with the
 registry.
 
+**Declining is a revocation, and that is not a workaround.** The registry holds
+grants and revocations and derives membership as latest-event-wins, so a
+revocation with no grant before it resolves to exactly "not a member" — the Lua
+asks only that the caller is a current admin and the DID is well formed, and
+`apply_event` already handles a revoke landing on no cache row, because that is
+what reconciling a rebuilt cluster does for everyone ever revoked. Nothing new is
+written to the registry for this, and the decision survives a reconcile: the
+revocation is an admin-authored event, so the DID is accounted for rather than
+orphaned. That last part is load-bearing — the queue reads "already decided" off
+that cache row, so a rebuild that dropped it would put every declined applicant
+back in the queue as though nobody had looked at them.
+
+Two things the shape costs, both answered rather than lived with. The log would
+otherwise read "revoked" for someone who was never granted, so a decline stamps
+`Application declined.` as the record's reason. And **Decline refuses to end a
+live membership**: the queue can hold a current member — someone who applied
+again after being admitted keeps their row, flagged "asked again" — and there the
+button would revoke a sitting member and cascade through `dismiss_admin` if they
+were an admin. That is a large and silent thing for a control that says
+"decline", so it refuses and says to use Revoke on the member's own row instead.
+A declined applicant is never shut out: a fresh application post-dates the
+decision and returns to the queue.
+
 An applicant's handle links out to their profile on `bsky.app`, in a new tab —
 deciding on a stranger means looking them up, and the detour should not cost the
 queue. **The URL is built from the DID**, which is the rule everywhere else
