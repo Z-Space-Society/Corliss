@@ -226,7 +226,7 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
         self.assertContains(resp, reverse("manage"))
-        self.assertNotContains(resp, "Django admin")
+        self.assertNotContains(resp, ">Django<")
 
     @override_settings(MANAGE_URL=MANAGE_URL)
     def test_the_manage_console_is_not_in_the_nav_even_when_configured(self):
@@ -279,7 +279,7 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
         self.assertContains(resp, "https://api.example.com/ui/")
-        self.assertContains(resp, "LiteLLM Admin")
+        self.assertContains(resp, ">LiteLLM<")
 
     @override_settings(API_URL="https://api.example.com/")
     def test_a_trailing_slash_on_api_url_does_not_double_up(self):
@@ -297,14 +297,14 @@ class NavMenuTests(NoRosterMixin, TestCase):
         _grant()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertNotContains(resp, "LiteLLM Admin")
+        self.assertNotContains(resp, ">LiteLLM<")
 
     @override_settings(API_URL="")
     def test_no_api_url_drops_the_link_rather_than_pointing_at_slash_ui(self):
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertNotContains(resp, "LiteLLM Admin")
+        self.assertNotContains(resp, ">LiteLLM<")
         self.assertNotContains(resp, '"/ui/"')
 
     @override_settings(HAPPYVIEW_URL="https://view.example.com")
@@ -313,14 +313,14 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
         self.assertContains(resp, "https://view.example.com")
-        self.assertContains(resp, "HappyView Admin")
+        self.assertContains(resp, ">HappyView<")
 
     @override_settings(PROXMOX_URL="https://pve.example.lan:8006")
     def test_cluster_admin_sees_the_proxmox_link_when_there_is_one(self):
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertContains(resp, "Proxmox Admin")
+        self.assertContains(resp, ">Proxmox<")
 
     @override_settings(PROXMOX_URL="", HAPPYVIEW_URL="")
     def test_unconfigured_service_consoles_are_absent_not_empty_hrefs(self):
@@ -329,8 +329,8 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertNotContains(resp, "Proxmox Admin")
-        self.assertNotContains(resp, "HappyView Admin")
+        self.assertNotContains(resp, ">Proxmox<")
+        self.assertNotContains(resp, ">HappyView<")
 
     def test_cluster_admin_sees_systems(self):
         self._as_cluster_admin()

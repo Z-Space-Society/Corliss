@@ -95,6 +95,7 @@
               {% endif %}
               {% if user.is_cluster_admin %}
                 <a class="nav__dropdown-item" href="{% url 'systems' %}">Systems</a>
+                <div class="nav__dropdown-rule"></div>
               {% endif %}
               {% comment %}
               The three service consoles below are OTHER systems' admin UIs, not
@@ -104,18 +105,23 @@
               open a login, not a session: they are offered to cluster admins
               because that is who would hold those credentials, not because
               clicking one grants anything.
+
+              All four below open in a new tab: each is an errand taken *from*
+              the console — checking a key, a VM, a model row — and the reader
+              is expected back. `rel="noopener"` because a tab opened this way
+              can otherwise reach back through `window.opener`.
               {% endcomment %}
               {% if user.is_cluster_admin and API_ADMIN_URL %}
-                <a class="nav__dropdown-item" href="{{ API_ADMIN_URL }}">LiteLLM Admin</a>
+                <a class="nav__dropdown-item" href="{{ API_ADMIN_URL }}" target="_blank" rel="noopener">LiteLLM</a>
               {% endif %}
               {% if user.is_cluster_admin and HAPPYVIEW_URL %}
-                <a class="nav__dropdown-item" href="{{ HAPPYVIEW_URL }}">HappyView Admin</a>
+                <a class="nav__dropdown-item" href="{{ HAPPYVIEW_URL }}" target="_blank" rel="noopener">HappyView</a>
               {% endif %}
               {% if user.is_cluster_admin and PROXMOX_URL %}
-                <a class="nav__dropdown-item" href="{{ PROXMOX_URL }}">Proxmox Admin</a>
+                <a class="nav__dropdown-item" href="{{ PROXMOX_URL }}" target="_blank" rel="noopener">Proxmox</a>
               {% endif %}
               {% if user.is_superuser %}
-                <a class="nav__dropdown-item" href="{% url 'admin:index' %}">Django admin</a>
+                <a class="nav__dropdown-item" href="{% url 'admin:index' %}" target="_blank" rel="noopener">Django</a>
               {% endif %}
             </div>
           </div>

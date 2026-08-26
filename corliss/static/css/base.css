@@ -264,10 +264,14 @@ a {
   font-size: 12px;
 }
 
+/* --border-hover, not --border: a 1px line reads as a group boundary only if it
+   is a step above the surface it sits on, and the panel's own --border is too
+   close to --surface to survive at that height. The extra vertical margin does
+   half the separating on its own. */
 .nav__dropdown-rule {
   height: 1px;
-  background: var(--border);
-  margin: 4px 0;
+  background: var(--border-hover);
+  margin: 7px 0;
 }
 
 .nav__dropdown-item {

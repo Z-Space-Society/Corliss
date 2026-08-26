@@ -68,7 +68,7 @@ sign-in picked up no registry session (the nav entry is **gone**: `/manage/`
 covers everything that console did, roster editing included, and the setting
 itself goes when the `manage_console` role is removed) — and `API_URL` both the
 endpoint shown on `/api/` and the
-"LiteLLM Admin" entry in the Manage menu (`API_URL` + `/ui/`, cluster admins
+"LiteLLM" entry in the Manage menu (`API_URL` + `/ui/`, cluster admins
 only — derived rather than configured separately, since a second setting for the
 same origin could only ever disagree with the first). `HAPPYVIEW_URL` and
 `PROXMOX_URL` add the other two service consoles to that menu; each is dropped
