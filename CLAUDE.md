@@ -217,16 +217,26 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
 ## The console is one member table
 
 - **Admins are members**, enforced in `membership.appoint_admin`. So there is no
-  separate admins table: admin is a column, and `Make Admin` / `Revoke Admin` sit
-  on the member's own row. The service account holds no grant and therefore never
-  appears — it is infrastructure, not a person.
+  separate admins table: admin is a column, and `Make Admin` / `Revoke Admin` are
+  in the member's own panel. The service account holds no grant and therefore
+  never appears — it is infrastructure, not a person.
+- **The table carries no controls.** Every write a member can be the subject of —
+  tier, revocation, admin — lives in a panel opened by clicking their handle. A
+  `Change` column sets the table's width from its widest control rather than from
+  anything anybody reads, and that is what made this table scroll sideways. The
+  panel opens on `:target` and closes with an ordinary link, **with no script**:
+  this page holds the reconcile button and is how a broken deployment gets fixed,
+  so its controls must not depend on JS loading.
 - **Only active memberships are listed.** A revoked person is history and the
   registry is where history lives; re-inviting the same handle readmits them,
   which is what readmission always was.
 - **A DID is never text.** Handles are what a reader sees, with the DID on the
   cell's `title`. `membership.ensure_user` records the handle when a grant is
   written, so a member is named rather than numbered from the moment they are
-  admitted rather than from their first sign-in.
+  admitted rather than from their first sign-in. The one exception is a member's
+  own panel, which is about exactly one person: there the DID is selectable text,
+  because a `title` cannot be copied and there is no column of them to keep
+  narrow. **Tables stay handles-only** — that is what the rule is protecting.
 - **Admin status renders from `is_staff`**, the local mirror, not a roster read
   per request. The roster stays the authority; `_heal_staff_flag` re-derives the
   mirror at every login and `appoint_admin` writes both together.

@@ -466,13 +466,21 @@ than from their first sign-in. That resolution is **display only**: handles are
 mutable, so nothing may key, compare, or store what comes out of it.
 
 There is no separate admins table. **Admins are members**, enforced when one is
-appointed, so admin is a column and `Make Admin` / `Revoke Admin` sit on the
-member's own row. The column renders from Django's `is_staff` — a local mirror
-re-derived at every login — while the registry's roster record stays the
-authority. The service account holds no grant and so never appears here: it is
-infrastructure, not a person. Revoking a member who is an admin ends their admin
-authority first, then their membership; that order is the one whose half-done
-state is safe.
+appointed, so admin is a column. The column renders from Django's `is_staff` — a
+local mirror re-derived at every login — while the registry's roster record stays
+the authority. The service account holds no grant and so never appears here: it
+is infrastructure, not a person. Revoking a member who is an admin ends their
+admin authority first, then their membership; that order is the one whose
+half-done state is safe.
+
+**The table carries no controls.** Clicking a member's handle opens their own
+panel, and every write they can be the subject of — `Set Tier`, `Revoke`,
+`Make Admin` / `Revoke Admin` — is in it, along with the DID and who granted the
+membership. A `Change` column sets the table's width from its widest control
+rather than from anything anybody reads, which is what used to make this table
+scroll sideways. The panel opens on `:target` and closes with an ordinary link,
+**with no script at all**: this page holds the reconcile button and is how a
+broken deployment gets fixed, so its controls must not depend on JS loading.
 
 This page **replaces** the separate SPA admin console — approve, revoke, set
 tier, invite, and roster editing all happen here. Approve, revoke and set tier

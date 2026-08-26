@@ -521,11 +521,15 @@ class ManageViewTests(NoRosterMixin, TestCase):
         # further down, in the member table, which is the whole point of not
         # repeating them here.
         html = " ".join(resp.content.decode().split())
-        # Sliced between section headings rather than on their text: the Members
-        # heading now carries the service-session lock inside it, so anything
-        # matching its wording is one markup change from silently selecting the
-        # whole page and asserting nothing.
-        queue = html.split('<h2 class="section-title"')[1]
+        # Sliced between section headings and then picked by the heading's own
+        # text, not by position: the sections have been reordered once already,
+        # and an index would have kept passing while asserting about whichever
+        # section happened to be second.
+        queue = next(
+            section
+            for section in html.split('<h2 class="section-title"')
+            if section.startswith(">Applications</h2>")
+        )
         self.assertIn("did:plc:applicant", queue)
         # Both were answered before their application on file, so neither is
         # waiting — including the revoked one, whose decision was "no longer".
@@ -670,7 +674,11 @@ class ManageViewTests(NoRosterMixin, TestCase):
     def test_members_are_shown_by_handle_with_the_did_on_the_title(self):
         """Handles are what a person reads; a DID is never text. Resolved from
         the `User` row for anyone who has signed in, so the common case costs
-        no network at all."""
+        no network at all.
+
+        The member cell is a link into that member's panel, so the handle is the
+        link's text and the DID is the link's title — the cell's, as it was, one
+        element in. What must not appear is a DID in the table itself."""
         _grant()
         self._as_cluster_admin()
         self.client.force_login(self.user)
@@ -678,9 +686,36 @@ class ManageViewTests(NoRosterMixin, TestCase):
         with self._roster():
             resp = self.client.get(reverse("manage"))
 
-        self.assertContains(resp, ">alice.bsky.social</td>")
+        self.assertContains(resp, ">alice.bsky.social</a>")
         # Not dropped — it is the title on the cell that replaced it.
         self.assertContains(resp, f'title="{DID}"')
+
+    def test_the_member_controls_are_in_a_panel_and_not_in_the_table(self):
+        """A `Change` column sets the table's width from its widest control
+        rather than from anything anybody reads, which is what made this table
+        scroll sideways. The writes moved to a panel opened from the handle.
+
+        The panel opens on `:target`, so it needs no script — this page holds
+        the reconcile button and is how a broken deployment gets fixed."""
+        _grant()
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        # The writes render only for an admin holding a registry session, which
+        # is the point of this test: it is asserting *where* they are.
+        with self._roster(), patch.object(views, "_can_decide", return_value=True):
+            resp = self.client.get(reverse("manage"))
+
+        self.assertNotContains(resp, "<th>Change</th>")
+        self.assertNotContains(resp, "<th>Granted by</th>")
+        # The handle is the way in, and what it opens holds the writes.
+        self.assertContains(resp, 'href="#member-1"')
+        self.assertContains(resp, 'id="member-1"')
+        self.assertContains(resp, "Set Tier")
+        self.assertContains(resp, "Revoke")
+        # Closing is an ordinary link to the section above, not a script.
+        self.assertContains(resp, 'id="members"')
+        self.assertContains(resp, 'href="#members"')
 
     # Pinned rather than left to the ambient environment: this asserts the
     # UNCONFIGURED page, so a developer whose .env carries real registry
