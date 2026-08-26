@@ -336,11 +336,24 @@ makes it sound otherwise.
             One form per row rather than one around the table: each carries its
             own DID and its own tier, and a single form would make the browser
             decide which row a submit belonged to.
+
+            The applicant links to their profile, because deciding on a stranger
+            means looking them up and the alternative is retyping a handle into
+            another tab. **Addressed by DID, displayed by handle** — bsky.app
+            takes either, but a handle is mutable and display-only everywhere
+            else in this app, and one that changed since the application was
+            written would land on a 404 or, worse, on whoever holds it now.
+
+            It opens in a new tab: this is a detour taken mid-decision, and the
+            queue should still be there on the way back. No `title`, so the
+            cell's own DID tooltip still answers for the whole cell.
             {% endcomment %}
             {% for row in applications.rows %}
               <tr>
                 <td class="data-table__handle" title="{{ row.did }}">
-                  {{ row.handle }}
+                  <a class="handle-link handle-link--out"
+                     href="https://bsky.app/profile/{{ row.did }}"
+                     target="_blank" rel="noopener">{{ row.handle }}</a>
                   {% if row.reapplied %}
                     <span class="pill" title="Has a membership history and has applied again since it last changed">asked again</span>
                   {% endif %}

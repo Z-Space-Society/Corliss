@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22">
+  <!-- The nav brand mark in base.html, as a file. Same geometry, same blue:
+       #3186e9 is oklch(0.62 0.17 255) resolved to sRGB, because a favicon is
+       decoded outside a CSS context in some consumers and oklch() there is a
+       blank tab icon rather than a fallback colour. -->
+  <rect x="1" y="2" width="20" height="13" rx="2" fill="#3186e9"/>
+  <rect x="8" y="17" width="6" height="2" rx="1" fill="#3186e9"/>
+  <rect x="5" y="19" width="12" height="1.5" rx="0.75" fill="#3186e9"/>
+</svg>

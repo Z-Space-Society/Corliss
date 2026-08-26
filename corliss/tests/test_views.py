@@ -570,6 +570,37 @@ class ManageViewTests(NoRosterMixin, TestCase):
         # someone is a different decision from admitting a stranger.
         self.assertContains(resp, "asked again")
 
+    def test_the_applicant_links_to_their_profile_by_did_not_by_handle(self):
+        """Deciding on a stranger means looking them up, so the handle is a
+        link out to their profile.
+
+        **Addressed by DID.** bsky.app takes either, but a handle is mutable and
+        display-only everywhere else in this app; one that changed since the
+        application was written would land on a 404 or on whoever holds it now.
+        The handle is still what is *displayed* — that half is unchanged."""
+        from corliss import membership
+
+        self._applications([
+            membership.Application("did:plc:applicant", _at("2026-08-01T00:00:00Z")),
+        ])
+        with patch.object(
+            membership,
+            "handles_for",
+            return_value={"did:plc:applicant": "nandi.uk"},
+        ):
+            self._as_cluster_admin()
+            self.client.force_login(self.user)
+
+            with self._roster():
+                resp = self.client.get(reverse("manage"))
+
+        self.assertContains(resp, "https://bsky.app/profile/did:plc:applicant")
+        self.assertNotContains(resp, "https://bsky.app/profile/nandi.uk")
+        # Displayed by handle, as everywhere else.
+        self.assertContains(resp, ">nandi.uk</a>")
+        # A detour taken mid-decision: the queue should still be there after it.
+        self.assertContains(resp, 'target="_blank" rel="noopener"')
+
     def test_an_empty_queue_with_history_does_not_claim_nobody_applied(self):
         from corliss import membership
 

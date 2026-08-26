@@ -451,6 +451,14 @@ applicants themselves; members are Corliss's own cache, which can be stale,
 incomplete, or orphaned. Reconciliation is what makes the second agree with the
 registry.
 
+An applicant's handle links out to their profile on `bsky.app`, in a new tab —
+deciding on a stranger means looking them up, and the detour should not cost the
+queue. **The URL is built from the DID**, which is the rule everywhere else
+stated once more: a handle is display-only, and one that changed between the
+application being written and read would land on a 404 or on whoever holds it
+now. Member handles are *not* links out — clicking one opens that member's
+panel, and the arrow after an applicant's handle is what tells the two apart.
+
 `MembershipCache` is also visible in the Django admin, **read-only** — no add,
 no change, no delete, not even for a superuser. The table is a cached
 computation over the registry's events, so an edit there is either reverted by

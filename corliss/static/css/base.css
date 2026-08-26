@@ -875,6 +875,26 @@ a.btn-primary {
   text-decoration-color: var(--accent);
 }
 
+/* The one handle that leaves the site rather than opening a panel. Without the
+   mark the two are identical, and the tables sit one above the other — so the
+   arrow is the whole difference between "opens their controls" and "opens
+   Bluesky in a new tab". Not in the underline, and not selected with the
+   handle when it is copied. */
+.handle-link--out::after {
+  content: "↗";
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 0.9em;
+  color: var(--text-muted);
+  text-decoration: none;
+  user-select: none;
+}
+
+.handle-link--out:hover::after,
+.handle-link--out:focus-visible::after {
+  color: var(--accent);
+}
+
 /* --- Member modal -------------------------------------------------------- */
 
 /* The controls that used to be a table column. Three forms, a tier select and
