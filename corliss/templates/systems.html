@@ -3,11 +3,12 @@
 {% comment %}
 The stack, for cluster admins.
 
-A stub. It says what this cluster is made of and admits it does not yet know
-whether most of it is running — see `views.STACK` for why "unknown" is rendered
-rather than a guess. The grouping is zai-ops' own CTID tiering: core infra is
-the data foundations, platform is what other services consume, applications are
-what members use.
+What this cluster is made of and whether each part is answering. The states and
+the probes behind them are `corliss.health` — including why a row can read
+"Unknown" (nothing to measure with) and never "Down" for want of a setting.
+
+The grouping is zai-ops' own CTID tiering: core infra is the data foundations,
+platform is what other services consume, applications are what members use.
 {% endcomment %}
 
 {% block title %}Systems — SCN{% endblock %}
@@ -20,11 +21,9 @@ what members use.
   storage and databases at the bottom, the services that sit on them, then what
   members actually use.</p>
 
-  <p class="alert alert--notice" role="status">
-    <strong>Health checks aren't wired up yet.</strong> Everything below reads
-    <em>unknown</em> except the two this page can answer for free — Corliss is
-    serving it, and PostgreSQL answered the query behind it.
-  </p>
+  <p class="page-text page-text--note">Each service is asked directly. Answers
+  are cached for up to {{ cache_ttl }} seconds, so a dot can lag a service that
+  has only just changed state; a reload after that asks again.</p>
 
   {% for group in groups %}
     <h2 class="section-title">{{ group.name }}</h2>
@@ -42,11 +41,12 @@ what members use.
             {% for service in group.services %}
               <tr>
                 <td>{{ service.name }}</td>
-                <td class="data-table__muted">{{ service.purpose }}</td>
+                <td class="data-table__muted">{{ service.purpose }}{% if service.note %}
+                  <span class="status__note">— {{ service.note }}</span>{% endif %}</td>
                 <td>
                   <span class="status">
                     <span class="status__dot status__dot--{{ service.state }}"></span>
-                    {% if service.state == "up" %}Up{% else %}Unknown{% endif %}
+                    {{ service.label }}
                   </span>
                 </td>
               </tr>

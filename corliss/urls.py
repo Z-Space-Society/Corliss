@@ -63,7 +63,7 @@ urlpatterns = [
     # redirect URI here — a new one would mint a different atproto client and
     # re-consent every member.
     path("manage/unlock", views.manage_unlock, name="manage_unlock"),
-    # The stack, for cluster admins. A stub today — see `views.systems`.
+    # The stack and its health, for cluster admins. Probes in `corliss.health`.
     path("systems/", views.systems, name="systems"),
     path("", views.home, name="home"),
 ]

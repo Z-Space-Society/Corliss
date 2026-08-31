@@ -289,7 +289,7 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | Apply for membership (signed-in non-members) | `/membership/apply` |
 | Console — applications, members, admins, invite, reconcile (cluster admins) | `/manage/` |
 | Authenticate the service account so roster edits can be made (POST, cluster admins; returns through `/auth/callback`) | `/manage/unlock` |
-| Systems — the stack, status stubbed (cluster admins) | `/systems/` |
+| Systems — the stack, with live health checks (cluster admins) | `/systems/` |
 | Django admin | `/admin/` |
 
 Discovery and JWKS sit at the root deliberately: an OIDC issuer of
@@ -540,6 +540,134 @@ is found before somebody needs it.
 Two edits are refused outright: removing the last current admin, and removing the
 service account. The first would end every approve and revoke with no way back;
 the second removes the identity that performs these writes.
+
+## Systems — `/systems/`
+
+What the cluster is made of and whether each part is answering, for cluster
+admins. Gated like `/manage/`, and 404 rather than 403 for the same reason: a
+non-admin has no business learning the page exists.
+
+The stack and every probe live in [`corliss/health.py`](corliss/health.py) —
+one module, because this is a relationship with the *cluster* rather than with
+any one service, and nothing else in Corliss has business knowing Garage exists.
+
+| Service | How it is asked |
+| ------- | --------------- |
+| Corliss | Free — this process built the response. |
+| PostgreSQL | `SELECT 1` on the request's own connection. |
+| Redis | `PING` written to a socket. |
+| Garage | `GET /` on the S3 port; **any** HTTP status counts. |
+| Caddy | `GET /healthz` on its `:80` health site. |
+| HappyView | `GET /`, carrying `MEMBERSHIP_REGISTRY_HOST` — see below. |
+| LiteLLM | `GET /health/liveliness`. |
+| Sync relay | `GET /health`. |
+| Open WebUI | `GET /health`. |
+
+Every row is something that can be asked. The list carried a **Manage Console**
+entry until `v0.9.3`, describing static files that had already been deleted
+along with the `manage_console` role — `/manage/` replaced it, which is also why
+`MANAGE_URL` is blank on the cluster. A page whose claim is that it does not
+guess has no business listing what is not there, so a service earns a row here
+only if there is something to probe.
+
+### Three states, and the third one is load-bearing
+
+`up` and `down` are measurements. **`unknown` is the honest answer when there is
+nothing to measure with** — a blank setting, or a probe that raised something
+unanticipated. A missing address must never render `down`: that reports an
+outage in a service nobody asked about. This is the same principle that had the
+page rendering `unknown` for everything while it was a stub, and it did not stop
+mattering when the probes became real.
+
+A probe that *raises* also reads `unknown`, not `down`. Our bug is not their
+outage; the traceback goes to the log, where it is ours to fix.
+
+### Two "up"s are narrower than they look
+
+- **The sync relay's `/health` is liveness only** and deliberately never touches
+  Postgres — asking it to would let a database blip restart the relay out from
+  under live sync connections. `up` means the process is serving, not that its
+  storage works. The page says so on the row.
+- **Garage is asked on its S3 port, not its admin API**, which binds to
+  `127.0.0.1:3903` on the object-store CT and is unreachable from here. An
+  unauthenticated `GET /` on an S3 endpoint answers an XML error, so a 403 from
+  Garage *is* a serving Garage.
+
+### The HappyView `Host` header is sent, but it is not what makes that probe work
+
+Worth writing down because the first cut of this code claimed the opposite, and a
+negative control is what caught it.
+
+HappyView's HTTP 421 "Unknown host" for a bare-IP `Host` is real — it is why
+`MEMBERSHIP_REGISTRY_HOST` exists, and why every reconcile failed before `v0.4.1`
+— but it belongs to the **XRPC routes**, where the registry rebuilds the request
+URI from `Host`. `/` is served by a default handler that redirects whatever it is
+asked as. Measured from the Corliss CT on 2026-08-31, `GET /` answers **303 both
+with the header and without it**.
+
+So the probe sends it for a weaker but sufficient reason: it is how Corliss
+reaches HappyView on every other call, and a probe that dials a service
+differently from the code it is vouching for is measuring something else. It
+costs nothing and the setting already holds the value.
+
+A probe aimed at an XRPC route *would* exercise the virtual-host routing real
+calls depend on, and is deliberately not done — a liveness check has no business
+carrying a credential, and `GET /` is what the `happyview` role's own smoke test
+uses.
+
+**The lesson generalises past this one probe:** the claim came from an invariant
+written down in `CLAUDE.md` rather than from a measurement, and it was wrong about
+where the invariant applied. Running the probe *without* the header is what
+falsified it. When a comment explains why a compensating header, retry or
+workaround is needed, the check is not that the call succeeds with it — it is
+that the call fails without it.
+
+### Why this does not slow the page down
+
+The network-bound probes fan out across a thread pool, so the wall clock is one
+2-second timeout rather than eight, and the result is cached — 30s when
+everything is up, 10s when anything is not. The shorter degraded window is
+deliberate: a stale green dot costs nothing, while a stale red one is the exact
+thing somebody reloading this page is trying to watch change.
+
+The cache is `LocMemCache` (Corliss configures no `CACHES` block), so it is per
+gunicorn worker rather than shared. That is fine and not worth fixing — it means
+each worker probes once per window, a handful of requests a minute against
+services that answer in milliseconds. Do not add Redis for it.
+
+### Settings
+
+| Setting | Meaning |
+| ------- | ------- |
+| `SYNC_RELAY_URL` | The Automerge sync server's **internal** origin (`http://10.1.1.<ctid>:7030`). |
+| `REDIS_URL` | Redis as something to **dial** — not a cache backend. See below. |
+| `GARAGE_S3_URL` | Garage's S3 port (`http://10.1.1.<ctid>:3900`), not its admin API. |
+| `CADDY_HEALTH_URL` | Caddy's health endpoint (`http://10.1.1.<ctid>/healthz`). |
+
+All four are blank-tolerant, and **blank means `unknown`, never `down`**. Local
+development sets none of them and the page is correct with every row grey.
+
+Only these four need settings: HappyView, LiteLLM and Open WebUI are already
+reached by address elsewhere and their probes reuse `MEMBERSHIP_REGISTRY_URL`
+(with `MEMBERSHIP_REGISTRY_HOST`), `LITELLM_URL` and
+`OIDC_BACKCHANNEL_LOGOUT_URI`. A second setting naming the same host is a second
+thing to get wrong.
+
+**Every address is internal, without exception.** Server-side Python cannot
+fetch our own public origin — Cloudflare's Browser Integrity Check answers
+`error code: 1010` — so a probe pointed at a public origin measures Cloudflare
+rather than the service. `API_URL`, `CHAT_URL` and `MANAGE_URL` are hrefs for a
+browser and are never probe targets.
+
+**`REDIS_URL` is a probe target and nothing else.** Corliss holds no Redis
+client and no `redis` dependency; the probe writes `PING` to a socket and reads
+the reply. The cluster sets `requirepass`, so the reply is `-NOAUTH
+Authentication required.` — and *that refusal is the measurement*: only a Redis
+that is up, listening and speaking its own protocol can refuse us that way,
+which is everything the page claims when it says "Up". A client library would
+buy a real credential's worth of complexity to learn what eleven bytes on a
+socket already prove. If Django's cache is ever pointed at Redis, do it
+deliberately; do not quietly adopt this setting for it.
 
 ## Wiring up a relying party (Open WebUI shown)
 

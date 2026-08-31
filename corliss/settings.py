@@ -166,6 +166,49 @@ LITELLM_PROVISIONER_KEY = env("LITELLM_PROVISIONER_KEY", default="")
 # this cap is ours or there is none.
 LITELLM_MAX_KEYS_PER_MEMBER = env.int("LITELLM_MAX_KEYS_PER_MEMBER", default=5)
 
+# --- Health probes (/systems/) ----------------------------------------------
+# Addresses `corliss.health` dials to answer whether the cluster is up. Every
+# one is INTERNAL, for the reason stated above LITELLM_URL and repeated here
+# because it is the mistake this section invites: a probe pointed at a public
+# origin measures Cloudflare, not the service.
+#
+# **All four are blank-tolerant and blank means "unknown", never "down".** A
+# deployment that has not been told where Redis lives has not discovered an
+# outage; it has been asked a question it cannot answer. Local development sets
+# none of them and the page is correct with every row grey.
+#
+# The four services below need settings at all only because Corliss has no other
+# relationship with them. HappyView, LiteLLM and Open WebUI are already reached
+# by address elsewhere in this file and their probes reuse those — a second
+# setting naming the same host is a second thing to get wrong.
+#
+# Read-only liveness endpoints, all of them: none carries a credential and none
+# can change anything. That is what makes handing this list to a page safe.
+
+# The Automerge sync server behind collaborative spaces (its CT, port 7030).
+# Probed at /health, which reports liveness WITHOUT touching Postgres — so "up"
+# here is narrower than it looks and `corliss.health` says so on the page.
+SYNC_RELAY_URL = env("SYNC_RELAY_URL", default="")
+
+# Redis, as something to dial — NOT as a cache backend. Corliss holds no Redis
+# client and no redis dependency; the probe writes `PING` to a socket and reads
+# the reply, which is all it needs. `requirepass` is set on the cluster, so the
+# reply is `-NOAUTH`, and that refusal proves liveness as well as `+PONG` would.
+# If Django's cache is ever pointed at Redis, do it deliberately and say so —
+# do not quietly adopt this setting for it.
+REDIS_URL = env("REDIS_URL", default="")
+
+# Garage's S3 port. Deliberately not its admin API, which binds to 127.0.0.1 on
+# the object-store CT and is unreachable from here. An unauthenticated GET on an
+# S3 endpoint answers an XML error, so the probe counts ANY HTTP status as up: a
+# 403 from Garage is a serving Garage.
+GARAGE_S3_URL = env("GARAGE_S3_URL", default="")
+
+# Caddy's own health site on :80, which answers "ok" whether or not TLS is
+# configured. A full URL rather than an origin, because unlike the others this
+# names an endpoint Caddy publishes rather than the root of a service.
+CADDY_HEALTH_URL = env("CADDY_HEALTH_URL", default="")
+
 # --- Registry membership push ----------------------------------------------
 # Shared bearer token the SCN registry presents when POSTing a grant or
 # revocation to /membership/events. Blank disables the endpoint outright (503)

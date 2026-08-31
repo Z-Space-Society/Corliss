@@ -1,6 +1,7 @@
 from datetime import date, datetime
 from unittest.mock import patch
 
+import requests
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -8,7 +9,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from corliss import atproto, litellm, views
+from corliss import atproto, health, litellm, views
 from corliss.models import AtprotoToken, MembershipCache
 from corliss.views import SESSION_PREFIX
 
@@ -348,13 +349,44 @@ class NavMenuTests(NoRosterMixin, TestCase):
 class SystemsViewTests(NoRosterMixin, TestCase):
     """`/systems/` — the stack, for cluster admins.
 
-    A stub, so what is worth asserting is the gate and the honesty of the
-    status column: it must not claim anything is up that nobody checked.
+    The probes themselves are `test_health`'s business. What is worth asserting
+    here is the gate, and that every state the probes can return survives the
+    render — a status column that only ever renders one of its three states in
+    a test is a status column nobody has actually checked.
     """
 
     def setUp(self):
         super().setUp()
         self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+        # Nothing here may reach the network. The view calls health.check_all,
+        # which without this would dial eight addresses off the developer's own
+        # settings and pay the timeout for each.
+        self._states = {}
+        self._health_patcher = patch("corliss.health.check_all",
+                                     side_effect=self._fake_check)
+        self._health_patcher.start()
+        self.addCleanup(self._health_patcher.stop)
+
+    def _fake_check(self, **kwargs):
+        """The real stack's shape, with states this test chooses."""
+        return [
+            {
+                "name": group,
+                "services": [
+                    {
+                        "name": probe.name,
+                        "purpose": probe.purpose,
+                        "note": probe.note,
+                        "state": self._states.get(probe.name, health.UNKNOWN),
+                        "label": health._LABELS[
+                            self._states.get(probe.name, health.UNKNOWN)
+                        ],
+                    }
+                    for probe in probes
+                ],
+            }
+            for group, probes in health.STACK
+        ]
 
     def _as_cluster_admin(self):
         patcher = patch("corliss.membership.is_cluster_admin", return_value=True)
@@ -366,18 +398,50 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("systems"))
         self.assertEqual(resp.status_code, 200)
-        for service in ("Garage", "PostgreSQL", "Redis", "Caddy",
-                        "HappyView", "LiteLLM", "Corliss", "Open WebUI"):
+        for service in ("Garage", "PostgreSQL", "Redis", "Caddy", "HappyView",
+                        "LiteLLM", "Sync relay", "Corliss", "Open WebUI"):
             self.assertContains(resp, service)
 
-    def test_unchecked_services_say_unknown_rather_than_up(self):
-        # The whole point of the stub. A page that guessed would be worse than
-        # one that admits it has not looked.
+    def test_each_state_renders_its_own_word_and_dot(self):
+        # Colour alone would carry the meaning to nobody using a screen reader,
+        # so the word is the assertion and the dot follows it.
+        self._states = {"Corliss": health.UP, "Redis": health.DOWN}
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("systems"))
-        self.assertContains(resp, "Unknown")
-        self.assertContains(resp, "wired up yet")
+        self.assertContains(resp, "status__dot--up")
+        self.assertContains(resp, "status__dot--down")
+        self.assertContains(resp, "status__dot--unknown")
+        for word in ("Up", "Down", "Unknown"):
+            self.assertContains(resp, word)
+
+    def test_the_page_no_longer_disclaims_the_status_column(self):
+        # This asserted the opposite while /systems/ was a stub. The banner is
+        # gone because the column is real; what replaces it is the staleness
+        # note, which must stay, since a cached dot can lag by up to the TTL.
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("systems"))
+        self.assertNotContains(resp, "wired up yet")
+        self.assertContains(resp, "cached")
+
+    def test_a_retired_surface_is_not_listed_as_a_system(self):
+        # The Manage Console SPA was deleted with the manage_console role and
+        # /manage/ replaced it, but the stack listed it until v0.9.3. A page
+        # that reports liveness must not carry a row for something that is gone.
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("systems"))
+        self.assertNotContains(resp, "Manage Console")
+
+    def test_a_row_can_qualify_what_its_probe_actually_proves(self):
+        # The sync relay's /health never touches Postgres, so "Up" means the
+        # process is serving and not that its storage works. The dot must not
+        # be left to overclaim that on its own.
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("systems"))
+        self.assertContains(resp, "does not check its storage")
 
     def test_a_non_admin_gets_404_not_403(self):
         # A non-admin has no business learning the page exists — same posture
@@ -389,6 +453,30 @@ class SystemsViewTests(NoRosterMixin, TestCase):
     def test_an_anonymous_visitor_is_bounced_through_login(self):
         resp = self.client.get(reverse("systems"))
         self.assertRedirects(resp, reverse("login"))
+
+    def test_the_real_probes_render_with_nothing_reachable(self):
+        # Every other test here hands the template a hand-built stack, so a
+        # drift between what health.check_all actually returns and what the
+        # template reads would hide behind the fake. This runs the real thing
+        # with only the network stubbed out — which is also the local-dev case,
+        # where no probe address is configured at all.
+        self.addCleanup(cache.clear)
+        cache.clear()
+        self._health_patcher.stop()  # this class's fake, and only it
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with patch("corliss.health.requests.get",
+                   side_effect=requests.ConnectionError("refused")), \
+                patch("corliss.health.socket.create_connection",
+                      side_effect=ConnectionRefusedError()):
+            resp = self.client.get(reverse("systems"))
+
+        self.assertEqual(resp.status_code, 200)
+        # Corliss served it and Postgres answered, whatever else is unreachable.
+        self.assertContains(resp, "status__dot--up")
+        for service in ("Garage", "Redis", "Sync relay", "Open WebUI"):
+            self.assertContains(resp, service)
 
 
 class ManageViewTests(NoRosterMixin, TestCase):

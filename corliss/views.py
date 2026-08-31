@@ -61,7 +61,7 @@ from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from corliss import atproto, litellm, membership, oidc, signing
+from corliss import atproto, health, litellm, membership, oidc, signing
 from corliss.models import AtprotoToken, MembershipCache, OidcAuthCode
 
 User = get_user_model()
@@ -747,47 +747,15 @@ def _api_action(request, client, tier):
     return redirect("api")
 
 
-# --- The stack, for /systems/ ------------------------------------------------
-#
-# A description of what this cluster is made of, grouped the way zai-ops groups
-# its CTIDs: core infra is the data foundations (storage with no logic of its
-# own), platform is services other services consume, apps are what members
-# actually use. Held here rather than read from anywhere because nothing in
-# Corliss knows the shape of the cluster — this is the one place that claims to.
-#
-# **Status is not checked yet.** Every entry reports "unknown" except the two
-# this request can answer for free: Corliss is serving the page, and Postgres
-# answered the query that rendered it. Anything else needs a probe per service,
-# which is the next piece of work and deliberately not this one. An entry that
-# guessed would be worse than one that admits it does not know.
-STACK = [
-    ("Core", [
-        ("Garage", "object store — backup target for the control node"),
-        ("PostgreSQL", "the cluster's database: Corliss, LiteLLM, Open WebUI, HappyView"),
-        ("Redis", "session revocation store, so signing out reaches chat in seconds"),
-    ]),
-    ("Platform", [
-        ("Caddy", "the edge — the only LAN-facing container, terminates TLS"),
-        ("HappyView", "the membership registry: applications, grants, admin roster"),
-        ("LiteLLM", "the API gateway in front of the models"),
-    ]),
-    ("Applications", [
-        ("Corliss", "login, membership, OIDC, and members' API keys"),
-        ("Open WebUI", "the chat app"),
-        ("Manage Console", "the registry's admin surface, served as static files"),
-    ]),
-]
-
-
 @require_http_methods(["GET"])
 def systems(request):
-    """What the cluster is made of, and (eventually) whether it is up.
+    """What the cluster is made of, and whether it is up.
 
-    A stub, deliberately: it renders the stack and marks almost everything
-    "unknown" rather than inventing a status. Two entries are honest without a
-    probe — this app is serving the response, and Postgres answered the query
-    behind `request.user` — and the rest need a check per service, which is the
-    next piece of work rather than this one.
+    The stack and its probes live in `corliss.health`, which owns the whole
+    relationship with the cluster the way `membership` owns the registry — so
+    this view is a gate and a render, and no transport code lands in this file.
+    `check_all` never raises and answers from a short-lived cache, so one dead
+    service cannot take this page down with it or make it slow.
 
     Admin-gated the same way `manage` is, and 404 rather than 403 for the same
     reason: a non-admin has no business learning the page exists.
@@ -798,22 +766,16 @@ def systems(request):
     if not request.user.is_cluster_admin:
         raise Http404
 
-    live = {"Corliss", "PostgreSQL"}
-    groups = [
+    return render(
+        request,
+        "systems.html",
         {
-            "name": name,
-            "services": [
-                {
-                    "name": service,
-                    "purpose": purpose,
-                    "state": "up" if service in live else "unknown",
-                }
-                for service, purpose in services
-            ],
-        }
-        for name, services in STACK
-    ]
-    return render(request, "systems.html", {"groups": groups})
+            "groups": health.check_all(),
+            # Named rather than written into the template, so the page cannot
+            # promise a freshness the cache is not keeping.
+            "cache_ttl": health.HEALTH_CACHE_TTL,
+        },
+    )
 
 
 @require_http_methods(["GET", "POST"])
