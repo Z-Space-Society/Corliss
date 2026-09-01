@@ -279,7 +279,9 @@ class LoginResumeGateTests(NoRosterMixin, TestCase):
             atproto,
             "exchange_code",
             return_value=({"sub": MEMBER, "access_token": "AT"}, "n2"),
-        ), patch.object(atproto, "fetch_session_email", return_value=("", False)):
+        ), patch.object(
+            atproto, "fetch_session_email", return_value=("", False)
+        ), patch.object(atproto, "fetch_display_name", return_value=""):
             return self.client.get(
                 reverse("callback"),
                 {"state": "state1", "code": "code", "iss": "https://auth.example"},

@@ -236,6 +236,17 @@
             </span>
 
             <div class="nav__dropdown nav__dropdown--account">
+              {% comment %}
+              Name first, and only when there is one — an empty "Name:" row
+              would be a labelled blank in the one place a reader looks to
+              confirm who they are signed in as. The handle above the dropdown
+              already names them; this says who that handle belongs to.
+              {% endcomment %}
+              {% if user.display_name %}
+                <div class="nav__dropdown-meta">
+                  Name: <span class="nav__dropdown-value">{{ user.display_name }}</span>
+                </div>
+              {% endif %}
               <div class="nav__dropdown-meta">
                 DID: <span class="nav__dropdown-value nav__dropdown-value--did">{{ user.did }}</span>
               </div>
@@ -243,6 +254,7 @@
                 Membership: <span class="nav__dropdown-value">{{ user.membership_label }}</span>
               </div>
               <div class="nav__dropdown-rule"></div>
+              <a class="nav__dropdown-item" href="{% url 'account' %}">Account</a>
               <a class="nav__dropdown-item" href="{% url 'logout' %}">Sign out</a>
             </div>
           </div>

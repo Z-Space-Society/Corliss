@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+
+{% comment %}
+The member's own record, and the only page that can change any of it.
+
+Four fields, two of them read-only, and the split is the point: the DID and the
+handle come from atproto and Corliss has no say in either, while the name and
+the email are seeded from the PDS and then belong to the reader. Showing all
+four together is what makes the two editable ones legible as edits rather than
+as settings — you can see what they sit beside and what they do not override.
+
+**Blank is offered as an action, not left as an omission.** Clearing a field
+re-arms the fill in `views._upsert_member`, so the next sign-in takes the PDS's
+value again. That is the only way back to the original once it is edited, and a
+reader will not guess it, so the hint says it in as many words.
+
+No script. The whole page is one form and a submit button; there is nothing
+here CSS cannot do, and every other member-facing surface degrades the same way.
+{% endcomment %}
+
+{% block title %}Account — SCN{% endblock %}
+
+{% block content %}
+<div class="account-view">
+  <h1>Account</h1>
+
+  <p class="page-text">How you are named on the cluster. Your name and email
+  are taken from your atproto account when you first sign in or you can override here.</p>
+
+  {% if notice %}
+    <p class="alert alert--notice" role="status">{{ notice }}</p>
+  {% endif %}
+  {% if error %}
+    <p class="alert" role="alert">{{ error }}</p>
+  {% endif %}
+
+  <h2 class="section-title">You</h2>
+  <div class="card">
+    <form method="post" action="{% url 'account' %}">
+      {% csrf_token %}
+
+      <div class="field-label-row">
+        <label for="account-display-name">Name</label>
+      </div>
+      <div class="input-row">
+        <input type="text" id="account-display-name" name="display_name"
+               maxlength="255" value="{{ display_name }}"
+               placeholder="how you'd like to be listed">
+      </div>
+
+      <div class="field-label-row">
+        <label for="account-email">Email</label>
+      </div>
+      <div class="input-row">
+        <input type="email" id="account-email" name="email"
+               maxlength="254" value="{{ email }}"
+               placeholder="you@example.com">
+      </div>
+
+      <button type="submit" class="btn-primary">Save</button>
+    </form>
+
+    <p class="hint-text">Leave either blank and it will be filled in from your
+    atproto account the next time you sign in.  Tip:  this is how you undo a change
+    without having to remember what was there before. Changing your email here
+    does not change it at your PDS.</p>
+  </div>
+
+  {% comment %}
+  Below the form because it cannot be acted on: these two are what atproto says
+  and this page has no way to argue. The DID is selectable text rather than a
+  `title`, the same exception the console's member panel makes — this page is
+  about exactly one person, so there is no column of DIDs to keep narrow, and a
+  `title` cannot be copied.
+  {% endcomment %}
+  <h2 class="section-title">Identity</h2>
+  <div class="card">
+    <dl class="modal__facts">
+      <div class="modal__fact">
+        <dt>Handle</dt>
+        <dd>{{ user.username }}</dd>
+      </div>
+      <div class="modal__fact">
+        <dt>DID</dt>
+        <dd class="data-table__did">{{ user.did }}</dd>
+      </div>
+      <div class="modal__fact">
+        <dt>Membership</dt>
+        <dd>{{ user.membership_label }}</dd>
+      </div>
+    </dl>
+    <p class="hint-text">Your DID is what every cluster app knows you by, and it never changes.</p>
+  </div>
+</div>
+{% endblock %}

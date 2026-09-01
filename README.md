@@ -278,6 +278,7 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | Endpoint | Path |
 | -------- | ---- |
 | Home | `/` |
+| Account — your own name and email (signed in) | `/account/` |
 | API keys — issue, revoke, usage (members) | `/api/` |
 | Login / logout | `/auth/login`, `/auth/logout` |
 | ATProto callback | `/auth/oauth/callback` |
@@ -497,6 +498,16 @@ grant is written, so a member is named from the moment they are admitted rather
 than from their first sign-in. That resolution is **display only**: handles are
 mutable, so nothing may key, compare, or store what comes out of it.
 
+**A member's name sits under their handle, never beside it.** It is what an
+admin recognises, but it is not what they match on and not everyone has one —
+it is annotated off the `User` row, so an invited member who has never signed in
+has none. A second line costs height, which this page has; a column would set
+the table's width from its widest name, which is the shape that made this table
+scroll sideways once already. It is deliberately **not** resolved through
+`membership.handles_for`: that helper falls back to a DID-document fetch for
+anyone it does not know, and a name is not worth a network call per row on the
+page that has to render when things are broken.
+
 There is no separate admins table. **Admins are members**, enforced when one is
 appointed, so admin is a column. The column renders from Django's `is_staff` — a
 local mirror re-derived at every login — while the registry's roster record stays
@@ -711,6 +722,48 @@ builds it. `views.about`, `views.about_system`, `views.about_team` — each is a
   rather than derived from `request.resolver_match`, so the value is visible
   where the page is chosen.
 
+## Name and email — `/account/`
+
+A member is keyed by DID and *named* by four things, and only two of them are
+theirs to set. The handle and the DID come from atproto and Corliss has no say
+in either; the name and the email are seeded from the member's PDS at login and
+editable here afterwards. `/account/` is the only place either can be changed,
+and it is signed-in rather than member-gated — an applicant sitting in the queue
+is exactly the person an admin is about to read a name for.
+
+- **The PDS fills a blank; it never overwrites what the member set.** Login
+  refreshes the handle and the PDS URL unconditionally, because those are facts
+  the PDS states. It writes the name and the email only when the stored value is
+  blank. Without that split the account page would be a lie: an edit would
+  revert at the member's next sign-in, silently, because nobody watches their
+  profile while logging in.
+- **There is no "edited locally" column, because a non-blank value is one.**
+  Which also makes clearing a field meaningful — it re-arms the fill, and is how
+  a member undoes an edit without having to remember the original.
+- **The consequence, stated so it is not later found as a bug:** once a member
+  has an email here, a change made at their PDS stops propagating. Both fields
+  are display-only by invariant, so that is cheap; DID is what everything keys
+  on.
+- **The name is read from the member's own repo, not from `getSession`.**
+  `com.atproto.server.getSession` — the authenticated call the email comes from
+  — returns `did`, `handle`, `email` and `emailConfirmed`, and no name at all.
+  So `atproto.fetch_display_name` reads `displayName` off the member's
+  `app.bsky.actor.profile` record through the unauthenticated
+  `com.atproto.repo.getRecord`. That needs **no new OAuth scope**, which matters:
+  adding one re-consents every member at their PDS.
+- **It is also not `_avatar_url`'s door.** That asks the public Bluesky AppView,
+  which is right for decoration on `/about/team/` and wrong for a member's own
+  data — a member on a PDS the AppView never indexed still has a name in their
+  own repo.
+- **Editing the email clears `email_confirmed`.** That flag means "the PDS
+  vouched for this address" and is what `email_verified` in the `id_token`
+  reads. An address typed here has no such backing, and claiming otherwise would
+  assert a verification that never happened.
+- **Blank is the normal state, not a gap.** A member with no profile record has
+  no name, and neither does an invited member who has not yet signed in — the
+  console reads names off the `User` row. Every surface that shows one falls
+  back to the handle rather than rendering an empty space.
+
 ## The nav
 
 Left of the divider: the brand, then **About**. Right of it: **API**, **Tools**,
@@ -732,6 +785,12 @@ ones that want a terminal — rather than alphabetically.
 The menu as a whole is still signed-in-only, which is the rule the rest of that
 row follows. A visitor with no session is being asked to sign in, not to go
 shopping for clients.
+
+**The account chip's menu names the member, then offers Account.** It carries
+their name (when they have one), their DID and their membership standing as
+labelled facts, and the name row is conditional rather than blank-when-unset — a
+labelled empty string in the one place a reader looks to confirm who they are
+signed in as is worse than one fewer row.
 
 **About is the one entry shown to everybody**, signed in or not, and it is the
 only thing on the left. The `.nav__divider` between it and the brand is the same
@@ -768,11 +827,19 @@ trade.
 
 **`id_token` claims:** `sub` = DID, `handle` (also `preferred_username`),
 `iss`/`aud`/`exp`/`iat`/`nonce`, `sid` (the `OidcSession` a later `logout_token`
-will name), plus `email` + `email_verified` when the member's PDS supplied one.
-Email is best-effort — sourced at login via the `transition:email` scope and
-`com.atproto.server.getSession` — so a member who declines the scope simply gets
-no `email` claim. DID is the only stable identifier; never key on handle or
-email.
+will name), plus `name` and `email` + `email_verified` when the member has them.
+
+- **`name` is who they are; `preferred_username` is what you key them on.** The
+  handle claims are unconditional and are still the RP's account identity —
+  `OAUTH_USERNAME_CLAIM=handle` above stays as it is. `name` is what Open WebUI
+  shows a person, and it needs no configuration to be picked up.
+- **Both optional claims are omitted, never sent empty.** An RP reading `name`
+  as a display name will happily render `""` over the username it would
+  otherwise have fallen back to, so an empty claim is worse than no claim.
+- **Neither is guaranteed, and both are the member's to change.** They are
+  seeded from the member's PDS at login and editable at `/account/` — see "Name
+  and email" below. DID is the only stable identifier; never key on handle,
+  name or email.
 
 **`logout_token` claims:** `iss`/`aud`/`sub`/`iat`/`jti`/`sid`, plus the
 `events` claim naming `http://schemas.openid.net/event/backchannel-logout`. No

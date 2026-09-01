@@ -36,9 +36,19 @@ leave docs for "later":
 ## Identity and keys
 
 - **DID is the primary key, everywhere, forever.** `User` is DID-keyed;
-  `MembershipCache` is keyed by DID with no foreign key to `User`. Handles and
-  emails are mutable, optional, and display-only — never key, compare, or store
-  against them.
+  `MembershipCache` is keyed by DID with no foreign key to `User`. Handles,
+  names and emails are mutable, optional, and display-only — never key, compare,
+  or store against them.
+- **The PDS seeds the name and the email; the member owns them.** `username` and
+  `pds_url` are the PDS's facts and are overwritten at every login.
+  `display_name` and `email` are *offered* at login and written only when the
+  stored value is blank, because `/account/` lets the member change them — an
+  edit that reverts at the next sign-in would make that page a lie. A non-blank
+  value **is** the "edited locally" flag; do not add a column for it, and do not
+  restore the unconditional overwrite. `display_name` is one free-form string,
+  matching atproto's `displayName`: `first_name`/`last_name` come free with
+  `AbstractUser` and are used nowhere, and splitting a name across them would be
+  a guess this app does not have to make.
 - **The OIDC `sub` IS the DID.** No opaque internal id, no mapping table at the
   boundary. A relying party keying on `sub` is keying on the DID, and that is
   the contract.
@@ -246,6 +256,10 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
   own panel, which is about exactly one person: there the DID is selectable text,
   because a `title` cannot be copied and there is no column of them to keep
   narrow. **Tables stay handles-only** — that is what the rule is protecting.
+- **A name is a second line under the handle, never a column.** It is annotated
+  off the `User` row in the same subquery pass as `is_admin` — never through
+  `membership.handles_for`, whose fallback is a DID-document fetch per unknown
+  DID. This page has to render when the network does not.
 - **Admin status renders from `is_staff`**, the local mirror, not a roster read
   per request. The roster stays the authority; `_heal_staff_flag` re-derives the
   mirror at every login and `appoint_admin` writes both together.

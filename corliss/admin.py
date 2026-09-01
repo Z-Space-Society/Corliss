@@ -10,16 +10,33 @@ class CorlissUserAdmin(UserAdmin):
     """Admin for the DID-keyed member model.
 
     Extends Django's UserAdmin so the standard auth fieldsets still work, and
-    surfaces the atproto identity fields (`did`, `pds_url`, `last_seen`).
+    surfaces the atproto identity fields (`did`, `pds_url`, `last_seen`) plus
+    the member's own `display_name`.
+
+    `display_name` sits in the atproto fieldset rather than in UserAdmin's
+    "Personal info", which holds `first_name`/`last_name` — the two this app
+    does not use. Putting it beside them would invite an operator to fill in
+    the wrong pair.
     """
 
-    list_display = ("username", "did", "email", "pds_url", "last_seen", "is_staff")
-    search_fields = ("username", "did")
+    list_display = (
+        "username",
+        "display_name",
+        "did",
+        "email",
+        "pds_url",
+        "last_seen",
+        "is_staff",
+    )
+    search_fields = ("username", "did", "display_name")
     readonly_fields = ("did", "last_seen", "last_login", "date_joined")
 
     # Add the atproto identity fields to UserAdmin's default fieldsets.
     fieldsets = UserAdmin.fieldsets + (
-        ("ATProto identity", {"fields": ("did", "pds_url", "last_seen")}),
+        (
+            "ATProto identity",
+            {"fields": ("did", "display_name", "pds_url", "last_seen")},
+        ),
     )
 
 

@@ -170,6 +170,77 @@ class EmailSourcingTests(TestCase):
         self.assertEqual(mock_get.call_count, 2)
 
 
+class DisplayNameSourcingTests(TestCase):
+    """fetch_display_name must never raise either, for the same reason.
+
+    It reaches the profile record through `find_record`, so every call here
+    mocks two GETs: the DID document, then `com.atproto.repo.getRecord`.
+    """
+
+    DID = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
+
+    def _did_doc(self):
+        return FakeResp(
+            json_data={
+                "service": [
+                    {
+                        "id": "#atproto_pds",
+                        "type": "AtprotoPersonalDataServer",
+                        "serviceEndpoint": "https://pds.example.com",
+                    }
+                ]
+            }
+        )
+
+    @patch("corliss.atproto.requests.get")
+    def test_returns_display_name(self, mock_get):
+        mock_get.side_effect = [
+            self._did_doc(),
+            FakeResp(json_data={"value": {"displayName": "Alice Example"}}),
+        ]
+        self.assertEqual(atproto.fetch_display_name(self.DID), "Alice Example")
+
+    @patch("corliss.atproto.requests.get")
+    def test_strips_surrounding_whitespace(self, mock_get):
+        mock_get.side_effect = [
+            self._did_doc(),
+            FakeResp(json_data={"value": {"displayName": "  Alice  "}}),
+        ]
+        self.assertEqual(atproto.fetch_display_name(self.DID), "Alice")
+
+    @patch("corliss.atproto.requests.get")
+    def test_profile_record_without_a_name(self, mock_get):
+        # A profile record can exist carrying only a description or an avatar.
+        mock_get.side_effect = [
+            self._did_doc(),
+            FakeResp(json_data={"value": {"description": "hi"}}),
+        ]
+        self.assertEqual(atproto.fetch_display_name(self.DID), "")
+
+    @patch("corliss.atproto.requests.get")
+    def test_no_profile_record(self, mock_get):
+        # The RecordNotFound shape: HTTP 400 carrying the distinction in the body.
+        mock_get.side_effect = [
+            self._did_doc(),
+            FakeResp(status=400, json_data={"error": "RecordNotFound"}),
+        ]
+        self.assertEqual(atproto.fetch_display_name(self.DID), "")
+
+    @patch("corliss.atproto.requests.get")
+    def test_unreachable_pds_does_not_raise(self, mock_get):
+        mock_get.side_effect = [
+            self._did_doc(),
+            requests.ConnectionError("no route"),
+        ]
+        self.assertEqual(atproto.fetch_display_name(self.DID), "")
+
+    @patch("corliss.atproto.requests.get")
+    def test_unresolvable_did_does_not_raise(self, mock_get):
+        # The failure one step earlier: no DID document, so no PDS to ask.
+        mock_get.side_effect = requests.ConnectionError("no route")
+        self.assertEqual(atproto.fetch_display_name(self.DID), "")
+
+
 class PkceDpopTests(TestCase):
     def test_pkce_pair_is_valid_s256(self):
         verifier, challenge = atproto.pkce_pair()

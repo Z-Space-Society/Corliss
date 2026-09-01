@@ -4,8 +4,10 @@ minting, and ending the sessions those tokens started.
 This is the half of Corliss that re-exposes a logged-in member to relying
 parties. The `id_token` is RS256 (broad OIDC-client compatibility), signed with
 the OIDC key from `corliss.signing` and verifiable via the JWKS endpoint.
-Claims: `sub` = DID, `handle`, and `email`/`email_verified` when the member's
-PDS supplied one (see `corliss.atproto.fetch_session_email`).
+Claims: `sub` = DID, `handle`, and — when the member has one — `name` and
+`email`/`email_verified`. Both of those are seeded from the member's PDS at
+login and editable at `/account/`, so neither is guaranteed; each is omitted
+rather than sent empty.
 
 **Back-channel logout lives here too, including the outbound HTTP.** That is a
 deliberate repeat of the shape `corliss.membership` already uses for
@@ -63,6 +65,7 @@ def discovery_document() -> dict:
             "sub",
             "handle",
             "preferred_username",
+            "name",
             "email",
             "email_verified",
             "iss",
@@ -120,8 +123,16 @@ def mint_id_token(user, *, client_id, nonce="", sid="") -> str:
         "handle": user.username,
         "preferred_username": user.username,
     }
-    # Best-effort claim: only present when the member's PDS supplied an email
-    # (fetch_session_email at login). Absent, not empty-string, when unknown.
+    # Best-effort claims, and **absent rather than empty-string** when unknown.
+    # That distinction is the whole reason these are conditional: a relying
+    # party reading `name` as a display name will happily render "" over the
+    # username it would otherwise have fallen back to, so an empty claim is
+    # worse than no claim.
+    #
+    # `name` is what an RP shows a person; `preferred_username` above stays the
+    # handle, which is what it keys the account on. Two different questions.
+    if user.display_name:
+        payload["name"] = user.display_name
     if user.email:
         payload["email"] = user.email
         payload["email_verified"] = user.email_confirmed

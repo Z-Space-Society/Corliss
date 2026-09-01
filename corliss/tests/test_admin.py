@@ -44,6 +44,42 @@ def _grant(did=DID, *, tier="level-2", active=True):
     )
 
 
+class UserAdminTests(TestCase):
+    """The member list, which is the one place DID, handle, name and email are
+    all shown together."""
+
+    def setUp(self):
+        self.superuser = User.objects.create_superuser(
+            username="root.bsky.social", did="did:plc:rootrootrootrootrootroot"
+        )
+        self.client.force_login(self.superuser)
+
+    def test_the_list_shows_the_name(self):
+        User.objects.create_user(
+            username="alice.bsky.social", did=DID, display_name="Alice Example"
+        )
+        resp = self.client.get(reverse("admin:corliss_user_changelist"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Alice Example")
+        self.assertContains(resp, DID)
+
+    def test_a_member_can_be_found_by_name(self):
+        User.objects.create_user(
+            username="alice.bsky.social", did=DID, display_name="Alice Example"
+        )
+        resp = self.client.get(
+            reverse("admin:corliss_user_changelist"), {"q": "Alice Example"}
+        )
+        self.assertContains(resp, "alice.bsky.social")
+
+    def test_a_member_with_no_name_still_lists(self):
+        """Blank is the normal state for someone with no profile record, and
+        for every member until their next sign-in after this shipped."""
+        User.objects.create_user(username="bob.bsky.social", did=STRANGER)
+        resp = self.client.get(reverse("admin:corliss_user_changelist"))
+        self.assertContains(resp, "bob.bsky.social")
+
+
 class MembershipCacheAdminTests(TestCase):
     def setUp(self):
         self.superuser = User.objects.create_superuser(

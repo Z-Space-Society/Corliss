@@ -24,11 +24,10 @@ class User(AbstractUser):
     (handles can change; DIDs cannot). Password auth is unused — login is via
     ATProto.
 
-    `email` is sourced from the member's PDS on each login (the
-    `transition:email` scope + `com.atproto.server.getSession`, see
-    `corliss.atproto.fetch_session_email`) — it is best-effort and may be
-    blank if the member declined the scope or has none on file. It must still
-    not be relied on as an identifier: DID is the only stable key.
+    `email` and `display_name` are seeded from the member's PDS and then owned
+    by the member — see the fill-blanks rule in `views._upsert_member`. Both are
+    best-effort and may be blank, and neither may be relied on as an identifier:
+    DID is the only stable key.
     """
 
     # Stable atproto identifier — the thing everything actually references.
@@ -42,8 +41,20 @@ class User(AbstractUser):
     # Current PDS, resolved from the DID document. Needed for token refresh.
     pds_url = models.URLField(blank=True)
 
+    # The member's own name for themselves. Seeded from the `displayName` on
+    # their `app.bsky.actor.profile` record at login and editable at `/account/`
+    # thereafter; blank when they have no profile record and have typed nothing.
+    #
+    # NOT `first_name`/`last_name`, which AbstractUser contributes and this app
+    # uses nowhere: atproto's `displayName` is one free-form string, and
+    # splitting it into two would be a guess that this column does not have to
+    # make. Display-only, like the handle and the email — never key on it.
+    display_name = models.CharField(max_length=255, blank=True)
+
     # Whether the PDS reported this email as confirmed (`emailConfirmed` from
-    # getSession). `email` itself is inherited from AbstractUser.
+    # getSession). `email` itself is inherited from AbstractUser. Cleared when
+    # the member edits their email here: an address the PDS never vouched for
+    # is not a verified one, and the `email_verified` claim reads off this.
     email_confirmed = models.BooleanField(default=False)
 
     last_seen = models.DateTimeField(null=True, blank=True)

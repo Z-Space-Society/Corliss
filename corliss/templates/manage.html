@@ -37,6 +37,12 @@ exception is a member's own panel, which is about exactly one person: there the
 DID is selectable text, because somebody who opened it to read the DID wants to
 copy it, and there is no column of them to keep narrow.
 
+**A name sits under the handle, never beside it.** The name is what an admin
+recognises, but it is not what they match on and not everyone has one — it is
+read from the `User` row, so an invited member who has never signed in has none.
+So it is a second line rather than a column: height this page has, width is what
+it ran out of last time.
+
 **The member table carries no controls.** Every write — tier, revocation, admin
 — lives in a panel opened from the handle, because a `Change` column sets the
 table's width from its widest control rather than from anything anybody reads,
@@ -160,9 +166,21 @@ makes it sound otherwise.
           <tbody>
             {% for m in members %}
               <tr>
+                {% comment %}
+                The name goes under the handle rather than into a column of its
+                own. A column would set the table's width from its widest name,
+                which is the shape that made this table scroll sideways once
+                already; a second line costs height, which this page has. The
+                handle stays the link and the primary text — it is what the
+                reader matches against everything else, and it is what a member
+                who has never signed in still has.
+                {% endcomment %}
                 <td class="data-table__handle">
                   <a class="handle-link" href="#member-{{ forloop.counter }}"
                      title="{{ m.did }}">{{ m.handle }}</a>
+                  {% if m.display_name %}
+                    <div class="data-table__sub">{{ m.display_name }}</div>
+                  {% endif %}
                 </td>
                 <td>{{ m.tier|default:"—" }}</td>
                 <td class="data-table__muted">{{ m.last_event_at|date:"Y-m-d H:i" }}</td>
@@ -200,6 +218,12 @@ makes it sound otherwise.
             <h3 class="modal__title" id="member-{{ forloop.counter }}-title">{{ m.handle }}</h3>
 
             <dl class="modal__facts">
+              {% if m.display_name %}
+                <div class="modal__fact">
+                  <dt>Name</dt>
+                  <dd>{{ m.display_name }}</dd>
+                </div>
+              {% endif %}
               <div class="modal__fact">
                 <dt>DID</dt>
                 <dd class="data-table__did">{{ m.did }}</dd>
@@ -247,7 +271,7 @@ makes it sound otherwise.
                   {% csrf_token %}
                   <input type="hidden" name="action" value="revoke">
                   <input type="hidden" name="did" value="{{ m.did }}">
-                  <button type="submit" class="btn-row btn-row--danger">Revoke</button>
+                  <button type="submit" class="btn-row btn-row--danger">Revoke Membership</button>
                 </form>
               {% else %}
                 <p class="hint-inline">Changing a tier or revoking needs a

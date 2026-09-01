@@ -601,6 +601,44 @@ def post_json_with_dpop(
     return _retry_once_for_nonce(_send, nonce)
 
 
+# --- Name sourcing (the member's own profile record) ------------------------
+
+PROFILE_COLLECTION = "app.bsky.actor.profile"
+
+
+def fetch_display_name(did: str) -> str:
+    """The member's `displayName`, from the profile record in their own repo.
+
+    **Not sourced the way the email is, because it cannot be.**
+    `com.atproto.server.getSession` returns `did`, `handle`, `email` and
+    `emailConfirmed` and no name at all, so `fetch_session_email` has nothing to
+    read here. The name lives in a record, and a record is reachable through
+    `find_record` — unauthenticated, needing no scope, so adding this costs no
+    re-consent round (see the SCOPE note above for why that matters).
+
+    **Not the door `_avatar_url` uses**, and the difference is deliberate. That
+    one asks the public Bluesky AppView, which is right for decoration on a
+    prose page and wrong here: this is a member's own data, read at login, and
+    the record lives in their repo — so a member on a PDS the AppView has never
+    indexed still has a name, and Corliss does not learn who its members are by
+    asking Bluesky.
+
+    Never raises, for the same reason `fetch_session_email` never does: this is
+    optional data on the login path. A member with no profile record and a PDS
+    that cannot be reached are both answered `""` — the distinction `find_record`
+    preserves buys nothing here, since either way there is no name to store and
+    a blank leaves the field open for the next login to fill.
+    """
+    try:
+        record = find_record(did, PROFILE_COLLECTION, "self")
+    except OAuthError:
+        return ""
+    if not record:
+        return ""
+    name = record.get("displayName")
+    return name.strip() if isinstance(name, str) else ""
+
+
 # --- Email sourcing (transition:email) -------------------------------------
 
 def fetch_session_email(pds_url, access_token, *, dpop_key, nonce=None):

@@ -1566,10 +1566,11 @@ class CallbackViewTests(TestCase):
         resp = self.client.get(reverse("callback"), {"code": "x"})
         self.assertEqual(resp.status_code, 400)
 
+    @patch("corliss.views.atproto.fetch_display_name", return_value="")
     @patch("corliss.views.atproto.fetch_session_email")
     @patch("corliss.views.atproto.exchange_code")
     def test_successful_callback_creates_member_and_session(
-        self, mock_exchange, mock_email
+        self, mock_exchange, mock_email, _mock_name
     ):
         mock_exchange.return_value = (
             {"sub": DID, "access_token": "AT", "refresh_token": "RT"},
@@ -1594,9 +1595,12 @@ class CallbackViewTests(TestCase):
         self.assertEqual(token.refresh_token, "RT")
         self.assertTrue(token.dpop_private_pem)
 
+    @patch("corliss.views.atproto.fetch_display_name", return_value="")
     @patch("corliss.views.atproto.fetch_session_email")
     @patch("corliss.views.atproto.exchange_code")
-    def test_callback_persists_email_from_pds(self, mock_exchange, mock_email):
+    def test_callback_persists_email_from_pds(
+        self, mock_exchange, mock_email, _mock_name
+    ):
         mock_exchange.return_value = (
             {"sub": DID, "access_token": "AT", "refresh_token": "RT"},
             "n2",
@@ -1611,9 +1615,97 @@ class CallbackViewTests(TestCase):
         self.assertEqual(user.email, "alice@example.com")
         self.assertTrue(user.email_confirmed)
 
+    @patch("corliss.views.atproto.fetch_display_name")
     @patch("corliss.views.atproto.fetch_session_email")
     @patch("corliss.views.atproto.exchange_code")
-    def test_existing_member_handle_is_refreshed(self, mock_exchange, mock_email):
+    def test_callback_persists_display_name_from_pds(
+        self, mock_exchange, mock_email, mock_name
+    ):
+        """The name comes from the profile record, not from the session — a
+        different door from the email's, because getSession has no name in it."""
+        mock_exchange.return_value = (
+            {"sub": DID, "access_token": "AT", "refresh_token": "RT"},
+            "n2",
+        )
+        mock_email.return_value = ("", False)
+        mock_name.return_value = "Alice Example"
+        _seed_pending(self.client, "state_name")
+        self.client.get(
+            reverse("callback"),
+            {"state": "state_name", "code": "code", "iss": "https://auth.example"},
+        )
+        self.assertEqual(User.objects.get(did=DID).display_name, "Alice Example")
+        # Asked about the authenticated DID, never the pre-resolved one.
+        mock_name.assert_called_once_with(DID)
+
+    @patch("corliss.views.atproto.fetch_display_name")
+    @patch("corliss.views.atproto.fetch_session_email")
+    @patch("corliss.views.atproto.exchange_code")
+    def test_login_does_not_overwrite_what_the_member_set(
+        self, mock_exchange, mock_email, mock_name
+    ):
+        """The account page would be a lie otherwise — an edit that reverts at
+        the next sign-in is worse than no page. See `views._upsert_member`."""
+        User.objects.create_user(
+            username="alice.bsky.social",
+            did=DID,
+            display_name="Alice",
+            email="me@elsewhere.example",
+            email_confirmed=False,
+        )
+        mock_exchange.return_value = (
+            {"sub": DID, "access_token": "AT", "refresh_token": "RT"},
+            "n2",
+        )
+        mock_email.return_value = ("alice@pds.example", True)
+        mock_name.return_value = "Alice From The PDS"
+        _seed_pending(self.client, "state_keep")
+        self.client.get(
+            reverse("callback"),
+            {"state": "state_keep", "code": "code", "iss": "https://auth.example"},
+        )
+        user = User.objects.get(did=DID)
+        self.assertEqual(user.display_name, "Alice")
+        self.assertEqual(user.email, "me@elsewhere.example")
+        # And the confirmation stays off: it belongs to the PDS's address, not
+        # to the one the member typed.
+        self.assertFalse(user.email_confirmed)
+
+    @patch("corliss.views.atproto.fetch_display_name")
+    @patch("corliss.views.atproto.fetch_session_email")
+    @patch("corliss.views.atproto.exchange_code")
+    def test_login_fills_a_field_the_member_cleared(
+        self, mock_exchange, mock_email, mock_name
+    ):
+        """Clearing a field is how a member undoes an edit: blank re-arms the
+        fill, which is the other half of the rule above."""
+        User.objects.create_user(
+            username="alice.bsky.social", did=DID, display_name="", email=""
+        )
+        mock_exchange.return_value = (
+            {"sub": DID, "access_token": "AT", "refresh_token": "RT"},
+            "n2",
+        )
+        mock_email.return_value = ("alice@pds.example", True)
+        mock_name.return_value = "Alice From The PDS"
+        _seed_pending(self.client, "state_refill")
+        self.client.get(
+            reverse("callback"),
+            {"state": "state_refill", "code": "code", "iss": "https://auth.example"},
+        )
+        user = User.objects.get(did=DID)
+        self.assertEqual(user.display_name, "Alice From The PDS")
+        self.assertEqual(user.email, "alice@pds.example")
+        self.assertTrue(user.email_confirmed)
+
+    @patch("corliss.views.atproto.fetch_display_name", return_value="")
+    @patch("corliss.views.atproto.fetch_session_email")
+    @patch("corliss.views.atproto.exchange_code")
+    def test_existing_member_handle_is_refreshed(
+        self, mock_exchange, mock_email, _mock_name
+    ):
+        """The handle is the PDS's fact, so it keeps overwriting — the opposite
+        of the name and the email, which the member owns."""
         User.objects.create_user(username="old.handle", did=DID)
         mock_exchange.return_value = (
             {"sub": DID, "access_token": "AT", "refresh_token": "RT"},
@@ -1712,7 +1804,7 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
         ):
             with patch.object(
                 atproto, "fetch_session_email", return_value=("", False)
-            ):
+            ), patch.object(atproto, "fetch_display_name", return_value=""):
                 return self.client.get(
                     reverse("callback"),
                     {
@@ -1796,7 +1888,7 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
         ):
             with patch.object(
                 atproto, "fetch_session_email", return_value=("", False)
-            ):
+            ), patch.object(atproto, "fetch_display_name", return_value=""):
                 self.client.get(
                     reverse("callback"),
                     {"state": "plain", "code": "c", "iss": "https://auth.example"},

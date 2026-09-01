@@ -43,7 +43,12 @@ every page, so this page cannot drift from them.
       it describes, and the chat one hides itself when CHAT_URL is unset — the
       same rule the nav follows, so the page can't offer what isn't deployed.
       {% endcomment %}
-      <h1>Welcome to the cluster.</h1>
+      {% comment %}
+      Named when we have a name, and the sentence stays whole when we do not —
+      "Welcome to the cluster, ." is the failure a greeting invites, so the
+      comma lives inside the branch rather than beside a `default` filter.
+      {% endcomment %}
+      <h1>Welcome to the cluster{% if user.display_name %}, {{ user.display_name }}{% endif %}.</h1>
       <p class="page-text">You're in!  The models on this machine are yours to
       use. There are two ways to reach them, and you can use both.</p>
 

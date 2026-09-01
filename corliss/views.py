@@ -12,6 +12,9 @@ ATProto client (people):
   is the only thing a signed-in non-member can do here. It confers nothing:
   the record asks, and only an admin's grant answers. See
   `corliss.membership`'s "Applying" section.
+- `account`: the member's own name and email — the only place either is
+  editable, and the reason login fills those fields rather than overwriting
+  them. Signed-in, not member-gated: an applicant has a name too.
 - `api`: the member's own API keys — issue, list, revoke, and usage, read live
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
@@ -53,6 +56,8 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.db.models import OuterRef, Subquery
 from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
@@ -89,6 +94,9 @@ APPLY_ERROR_SESSION_KEY = "corliss:apply_error"
 # has to survive exactly one hop to be read on the page that follows.
 MANAGE_NOTICE_SESSION_KEY = "corliss:manage_notice"
 MANAGE_ERROR_SESSION_KEY = "corliss:manage_error"
+
+# The same hop for the account page's own save.
+ACCOUNT_NOTICE_SESSION_KEY = "corliss:account_notice"
 
 # How far back /api/ reports usage. A month is what fits on the page and what
 # a member is actually asking when they look ("am I using a lot?").
@@ -414,12 +422,19 @@ def callback(request):
         nonce=nonce,
     )
 
+    # And their name, from a different door: the session says nothing about a
+    # name, so this reads their profile record. Also best-effort, and both are
+    # only *offered* — `_upsert_member` fills a blank and never overwrites what
+    # the member set at `/account/`.
+    display_name = atproto.fetch_display_name(did)
+
     user = _upsert_member(
         did=did,
         handle=pending["handle"],
         pds_url=pending["pds_url"],
         email=email,
         email_confirmed=email_confirmed,
+        display_name=display_name,
     )
     _store_tokens(user, token_data, dpop_key, nonce, pending)
     _register_registry_session(user, token_data, pending)
@@ -606,6 +621,78 @@ def apply(request):
         request.session[APPLY_ERROR_SESSION_KEY] = str(exc)
 
     return redirect("home")
+
+
+def account(request):
+    """The member's own name and email, and the only place either is editable.
+
+    **Signed in is the whole gate — deliberately not `require_membership`.** An
+    applicant sitting in the queue is exactly the person an admin is about to
+    read a name for, so gating this on a grant would keep the field blank
+    precisely when it is most worth having. Nothing here is an entitlement:
+    it edits two display-only strings on the reader's own row.
+
+    **It only ever writes `request.user`.** No DID, no id, nothing identifying a
+    subject is read from the request — the rule `corliss.litellm` states as "no
+    request ever chooses whose keys it acts on", which applies to any surface
+    that could otherwise be pointed at somebody else.
+
+    Post/Redirect/Get with the outcome parked in the session for one hop, the
+    same shape as `api` and `apply`, so a refresh re-renders rather than
+    re-saves. An invalid email is the exception and re-renders in place, because
+    a redirect would throw away what the member typed.
+
+    **Blank is a real answer, not a failure to fill something in.** Clearing
+    either field re-arms `_upsert_member`'s fill, so the next login takes the
+    PDS's value again — which is how a member undoes an edit without having to
+    remember what the original was. The page says so.
+    """
+    if not request.user.is_authenticated:
+        request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
+        return redirect("login")
+
+    if request.method == "POST":
+        display_name = request.POST.get("display_name", "").strip()
+        email = request.POST.get("email", "").strip()
+
+        if email:
+            try:
+                validate_email(email)
+            except ValidationError:
+                return render(
+                    request,
+                    "account.html",
+                    {
+                        "error": f"{email} is not an email address.",
+                        # Rendered back rather than re-read from the row, so the
+                        # member is correcting what they typed, not starting over.
+                        "display_name": display_name,
+                        "email": email,
+                    },
+                )
+
+        user = request.user
+        user.display_name = display_name
+        if email != user.email:
+            # A changed address is one the PDS never vouched for, so the
+            # confirmation that came with the old one does not carry over.
+            # `email_verified` in the id_token reads straight off this flag.
+            user.email = email
+            user.email_confirmed = False
+        user.save(update_fields=["display_name", "email", "email_confirmed"])
+
+        request.session[ACCOUNT_NOTICE_SESSION_KEY] = "Saved."
+        return redirect("account")
+
+    return render(
+        request,
+        "account.html",
+        {
+            "notice": request.session.pop(ACCOUNT_NOTICE_SESSION_KEY, None),
+            "display_name": request.user.display_name,
+            "email": request.user.email,
+        },
+    )
 
 
 # --- About: what this is, what it runs on, who runs it ----------------------
@@ -935,12 +1022,22 @@ def manage(request):
     # from the roster per render. It is a mirror, kept true at every login by
     # `_heal_staff_flag` and written alongside the roster by `appoint_admin`, and
     # reading it here costs one join instead of a network read.
+    #
+    # `display_name` rides along in the same subquery pass, and deliberately
+    # **not** through `membership.handles_for`: that helper falls back to a
+    # DID-document fetch for anyone it does not know, and a name is not worth a
+    # network call per row on the page that has to render when things are
+    # broken. A member who has never signed in here simply has no name, and the
+    # handle already fills that cell.
     members = list(
         MembershipCache.objects.filter(active=True)
         .annotate(
             is_admin=Subquery(
                 User.objects.filter(did=OuterRef("did")).values("is_staff")[:1]
-            )
+            ),
+            display_name=Subquery(
+                User.objects.filter(did=OuterRef("did")).values("display_name")[:1]
+            ),
         )
         .order_by("did")
     )
@@ -1320,9 +1417,31 @@ def logout(request):
     return redirect("login")
 
 
-def _upsert_member(*, did, handle, pds_url, email="", email_confirmed=False):
-    """Create the member on first login; refresh their PDS-sourced fields
-    (handle, pds_url, email) on every login thereafter."""
+def _upsert_member(
+    *, did, handle, pds_url, email="", email_confirmed=False, display_name=""
+):
+    """Create the member on first login; refresh their PDS-sourced fields on
+    every login thereafter.
+
+    **Two kinds of field, and the difference is who owns them.** The handle and
+    the PDS are facts the PDS states about this account, so they are overwritten
+    every login — nothing local edits them and a stale one is simply wrong. The
+    email and the name are *offered* by the PDS and then owned by the member,
+    who can change them at `/account/`, so login only fills them when they are
+    blank.
+
+    That asymmetry is what makes the account page mean anything. Overwriting
+    here would revert an edit at the member's next sign-in — silently, since a
+    login is not a moment anybody is watching their profile — and a page whose
+    changes evaporate is worse than no page. There is no "edited locally"
+    column: a non-blank value *is* that flag, which is also why clearing a field
+    on the account page re-arms the fill rather than pinning it empty.
+
+    The cost, stated so it is not later found as a bug: once a member has an
+    email here, a change made at their PDS stops propagating. Both are
+    display-only by invariant, so that is cheap — DID is the only thing anything
+    keys on.
+    """
     user, created = User.objects.get_or_create(
         did=did,
         defaults={
@@ -1330,16 +1449,26 @@ def _upsert_member(*, did, handle, pds_url, email="", email_confirmed=False):
             "pds_url": pds_url,
             "email": email,
             "email_confirmed": email_confirmed,
+            "display_name": display_name,
             "is_staff": membership.is_cluster_admin(did),
         },
     )
     if not created:
         user.username = handle
         user.pds_url = pds_url
-        user.email = email
-        user.email_confirmed = email_confirmed
+        if not user.email:
+            user.email = email
+            user.email_confirmed = email_confirmed
+        if not user.display_name:
+            user.display_name = display_name
         user.save(
-            update_fields=["username", "pds_url", "email", "email_confirmed"]
+            update_fields=[
+                "username",
+                "pds_url",
+                "email",
+                "email_confirmed",
+                "display_name",
+            ]
         )
         _heal_staff_flag(user)
     return user

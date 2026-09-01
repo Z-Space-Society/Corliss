@@ -58,6 +58,9 @@ urlpatterns = [
     path("about/", views.about, name="about"),
     path("about/system/", views.about_system, name="about_system"),
     path("about/team/", views.about_team, name="about_team"),
+    # The member's own name and email. Signed-in rather than member-gated —
+    # see `views.account`.
+    path("account/", views.account, name="account"),
     path("api/", views.api, name="api"),
     # The cluster console. Gated on the atproto admin roster, not on a Django
     # flag — see `views.manage`.

@@ -105,6 +105,7 @@ class OidcProviderTests(TestCase):
         self.assertEqual(doc["id_token_signing_alg_values_supported"], ["RS256"])
         self.assertIn("sub", doc["claims_supported"])
         self.assertIn("handle", doc["claims_supported"])
+        self.assertIn("name", doc["claims_supported"])
         self.assertIn("email", doc["claims_supported"])
         self.assertIn("email", doc["scopes_supported"])
 
@@ -154,6 +155,39 @@ class OidcProviderTests(TestCase):
         )
         self.assertEqual(claims["email"], "alice@example.com")
         self.assertTrue(claims["email_verified"])
+
+    def test_id_token_omits_name_when_the_member_has_none(self):
+        """Absent, never empty: a relying party reading `name` as a display
+        name will happily render "" over the username it would otherwise have
+        fallen back to."""
+        token = oidc.mint_id_token(self.user, client_id=CLIENT_ID)
+        jwks = signing.jwks()
+        rsa_jwk = next(k for k in jwks["keys"] if k["kty"] == "RSA")
+        claims = jwt.decode(
+            token,
+            key=jwt.PyJWK.from_dict(rsa_jwk).key,
+            algorithms=["RS256"],
+            audience=CLIENT_ID,
+        )
+        self.assertNotIn("name", claims)
+        # The handle claims are unconditional and stay that way — `name` is who
+        # the member is, `preferred_username` is what the RP keys them on.
+        self.assertEqual(claims["preferred_username"], "alice.bsky.social")
+
+    def test_id_token_carries_name_when_the_member_has_one(self):
+        self.user.display_name = "Alice Example"
+        self.user.save(update_fields=["display_name"])
+        token = oidc.mint_id_token(self.user, client_id=CLIENT_ID)
+        jwks = signing.jwks()
+        rsa_jwk = next(k for k in jwks["keys"] if k["kty"] == "RSA")
+        claims = jwt.decode(
+            token,
+            key=jwt.PyJWK.from_dict(rsa_jwk).key,
+            algorithms=["RS256"],
+            audience=CLIENT_ID,
+        )
+        self.assertEqual(claims["name"], "Alice Example")
+        self.assertEqual(claims["preferred_username"], "alice.bsky.social")
 
     def test_id_token_for_an_admin_without_a_grant_carries_no_tier(self):
         """The other half of GATE's split, and the reason it is safe.
