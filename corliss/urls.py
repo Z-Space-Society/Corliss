@@ -54,6 +54,10 @@ urlpatterns = [
     # The member's own end of the same subject: asking to join. Writes to the
     # applicant's PDS, never to the registry.
     path("membership/apply", views.apply, name="apply"),
+    # The public explanation, in three pages. Ungated; see `views.about`.
+    path("about/", views.about, name="about"),
+    path("about/system/", views.about_system, name="about_system"),
+    path("about/team/", views.about_team, name="about_team"),
     path("api/", views.api, name="api"),
     # The cluster console. Gated on the atproto admin roster, not on a Django
     # flag — see `views.manage`.

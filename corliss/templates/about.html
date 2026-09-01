@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% comment %}
+The first of three. This one answers "what is this", the other two answer
+"what does it run on" and "who runs it".
+
+Text adapted from the project's own public write-up at
+https://news.z-space.ca/zai/. That page is the outward description of the same
+thing under its earlier name, and this is where somebody who lands on the
+cluster itself should find it without leaving. The two will drift; when they
+do, the write-up is the one being restated here, not the other way round.
+
+No context from the view: everything on this page is prose, so there is nothing
+for a template variable to be out of date about. `about_page` is set for the
+nav's benefit. See base.html.
+{% endcomment %}
+
+{% block title %}About — SCN{% endblock %}
+
+{% block content %}
+<div class="account-view about-view">
+  <h1>About</h1>
+
+  <p class="page-text about-lead">The Shared Computer Network is a collective
+  that pools member resources to fund, build and operate high-performance AI
+  models, hosted locally at Z-Space in Vancouver.</p>
+
+  <p class="page-text">It is as much a shared learning environment as it is a
+  service. Members contribute to a common infrastructure and, in return, get
+  hands-on access to local AI systems and a growing body of shared knowledge
+  about running them.</p>
+
+  <p class="page-text">From there we are exploring applications that are
+  approachable and useful for any community, such as group-based shared
+  knowledge bases, where what individuals gather is pooled so everyone benefits
+  from the collective experience of the community.</p>
+
+  <h2 class="section-title">What it looks like</h2>
+  <div class="card">
+    <p class="page-text">A small cluster of consumer-grade PCs sits behind a
+    secure gateway. Members hold keys to a number of models configured on it,
+    and reach them two ways: a chat window in the browser, and an API key for
+    everything else.</p>
+
+    <p class="page-text">The API is the same one commercial providers speak, so
+    most tools need only a base URL and a key pointed somewhere new: a chat app
+    on your phone, a coding assistant, an agent you are building. Nothing here
+    bills you, and there is nothing to run up.</p>
+  </div>
+
+  <h2 class="section-title">Where your data goes</h2>
+  <div class="card">
+    <p class="page-text">Nowhere. Every request is served by machines in the
+    room; your data does not leave Canada, or even Vancouver. That is the point
+    of running it here rather than renting it.</p>
+  </div>
+
+  <h2 class="section-title">Shared discovery</h2>
+  <div class="card">
+    <p class="page-text">The collective is organised around finding things out
+    together. The expectation is that members experiment, document what they
+    learn, and make their results openly available to one another.</p>
+
+    <p class="page-text">One of the central purposes of the project is to
+    advance every member's technical understanding of local AI infrastructure
+    faster than any of them could alone. The code is public for the same reason:
+    the whole stack is on
+    <a href="https://github.com/Z-Space-Society" target="_blank" rel="noopener">GitHub</a>.</p>
+  </div>
+
+  <h2 class="section-title">Getting involved</h2>
+  <div class="card">
+    <p class="page-text">We are in an early prototype phase with a select group
+    of early access. If you are an individual or an aligned organisation in
+    Vancouver, get in touch at
+    <a href="mailto:zai@z-space.ca">zai@z-space.ca</a>.</p>
+
+    <p class="page-text">If you run a coworking or similar community space
+    anywhere in Canada and want a setup like this one, we would like to hear
+    from you. Working out how to make it repeatable is part of the project.</p>
+
+    {% comment %}
+    The rename is worth a line rather than a redirect: everything written about
+    this project before mid-2026 says ZAI, including the write-up this page is
+    adapted from and the repository that builds the cluster.
+    {% endcomment %}
+    <p class="page-text">Older writing about the project calls it
+    <strong>ZAI</strong> or <strong>Z-Space AI</strong>. Same project, earlier
+    name.</p>
+  </div>
+
+  <p class="about-more">Read on: <a href="{% url 'about_system' %}">the
+  system</a> that runs it, and <a href="{% url 'about_team' %}">the team</a>
+  that builds it.</p>
+</div>
+{% endblock %}

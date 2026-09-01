@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% comment %}
+Who builds and runs the cluster.
+
+Each person is named by their handle, linked to their Atmosphere profile, and
+that is deliberate rather than decorative: the handle is the same string they
+sign in here with, so the page names people the way the system does. No email
+addresses and no potted biographies. What is here is each person's relationship
+to this project, which is the only thing a reader of this page is asking.
+
+Three sections and not the whole working group, which is larger and changes.
+{% endcomment %}
+
+{% block title %}The Team — SCN{% endblock %}
+
+{% block content %}
+<div class="account-view about-view">
+  <h1>The Team</h1>
+
+  <p class="page-text about-lead">A small working group in Vancouver. Between
+  them: the space and the community it came out of, the hardware and the
+  operations, and the models the cluster actually serves.</p>
+
+  <div class="card">
+    <div class="about-person">
+      {% if avatars.jacob %}
+        <img class="about-person__avatar" src="{{ avatars.jacob }}" alt=""
+             width="64" height="64" loading="lazy" referrerpolicy="no-referrer">
+      {% endif %}
+      <div>
+        <h2 class="about-person__name">Jacob Sayles</h2>
+        <p class="about-handle">
+          <a class="handle-link handle-link--out"
+             href="https://bsky.app/profile/jacob.cascadia.social"
+             target="_blank" rel="noopener">jacob.cascadia.social</a>
+        </p>
+      </div>
+    </div>
+
+    <p class="page-text">Technical Steward, the one who builds the cluster and
+    keeps it running: the inference machines and the Proxmox host they answer
+    to,
+    <a href="https://github.com/Z-Space-Society/Corliss" target="_blank" rel="noopener">Corliss</a>
+    (this app), and
+    <a href="https://github.com/Z-Space-Society/zai-ops" target="_blank" rel="noopener">zai-ops</a>,
+    the Proxmox/Ansible IaC that stands the whole thing up from bare metal.</p>
+
+    <p class="page-text">Stewardship is designed into the project rather than
+    bolted onto it. Shared resources need someone at the helm, especially as
+    systems get more complex. Making that a defined role rather than a volunteer
+    accident is also what lets another community run one of these without
+    inventing the operations from scratch.</p>
+  </div>
+
+  <div class="card">
+    <div class="about-person">
+      {% if avatars.scott %}
+        <img class="about-person__avatar" src="{{ avatars.scott }}" alt=""
+             width="64" height="64" loading="lazy" referrerpolicy="no-referrer">
+      {% endif %}
+      <div>
+        <h2 class="about-person__name">Scott Hadfield</h2>
+        <p class="about-handle">
+          <a class="handle-link handle-link--out"
+             href="https://bsky.app/profile/hadsie.com"
+             target="_blank" rel="noopener">hadsie.com</a>
+        </p>
+      </div>
+    </div>
+
+    <p class="page-text">The man behind the models. Scott decides what actually runs on the
+    nodes: which open weights are worth serving, at what quantisation and
+    context, and which machine each one belongs on. That is the part of this
+    system a member meets first and judges it by.</p>
+
+    <p class="page-text">He also wrote the ATProto lexicons behind the
+    membership record, and the first admin console for working it.</p>
+  </div>
+
+  <div class="card">
+    <div class="about-person">
+      {% if avatars.boris %}
+        <img class="about-person__avatar" src="{{ avatars.boris }}" alt=""
+             width="64" height="64" loading="lazy" referrerpolicy="no-referrer">
+      {% endif %}
+      <div>
+        <h2 class="about-person__name">Boris Mann</h2>
+        <p class="about-handle">
+          <a class="handle-link handle-link--out"
+             href="https://bsky.app/profile/bmann.ca"
+             target="_blank" rel="noopener">bmann.ca</a>
+        </p>
+      </div>
+    </div>
+
+    <p class="page-text">A driving force in the Atmosphere community, 
+    <a href="https://dwebyvr.org/" target="_blank" rel="noopener">DWeb YVR</a>
+    and <a href="https://z-space.ca" target="_blank" rel="noopener">Z-Space</a>, the coworking space this cluster physically lives in.</p>
+
+    <p class="page-text">Boris has pushed hardest on what gets
+    built on top of the models: a shared, community-owned knowledge base rather
+    than one more chat window.</p>
+  </div>
+
+  <h2 class="section-title">And everyone else</h2>
+  <div class="card">
+    <p class="page-text">The working group is wider than three people, and the
+    hardware is wider still. Some of the machines serving models are on loan
+    from members who own them. The point of the collective is that it is not a
+    service somebody else runs for you.</p>
+  </div>
+
+  <p class="about-more">Read on: <a href="{% url 'about' %}">what this is</a>,
+  and <a href="{% url 'about_system' %}">the system</a> it runs on.</p>
+</div>
+{% endblock %}

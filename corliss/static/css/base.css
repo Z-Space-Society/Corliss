@@ -108,6 +108,10 @@ a {
   color: var(--accent);
 }
 
+/* The two ends of the nav. `.nav` itself is space-between, so each end is one
+   flex item however many things are in it, which is what lets the left end
+   grow an About menu without the right end moving. */
+.nav__group,
 .nav__items {
   display: flex;
   align-items: center;
@@ -287,6 +291,39 @@ a {
 .nav__dropdown-item:hover {
   background: var(--nav-active-bg);
   color: var(--text);
+}
+
+/* The page the reader is already on. Colour alone, no background: the hover
+   highlight has to stay the thing that tracks the pointer, and two lit rows in
+   a three-row menu would make it ambiguous which one the click lands on. */
+.nav__dropdown-item.is-active {
+  color: var(--text);
+}
+
+/* Names a group of items inside a menu. Small, quiet and uppercase so it reads
+   as a heading rather than as a first entry somebody might try to click —
+   .nav__dropdown-meta is the wrong thing here, since that styles a labelled
+   *fact* in the account panel rather than a heading over a list. */
+.nav__dropdown-label {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted-2);
+}
+
+/* The dropdown's version of .nav__item--closed: present, visibly not open yet.
+   Same reasoning, same tokens — a member-only app stays listed for a
+   non-member, because the menu is where the cluster says what it has. */
+.nav__dropdown-item--closed {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.nav__dropdown-item--closed:hover {
+  background: none;
+  color: var(--text-disabled);
 }
 
 .nav__status-dot {
@@ -760,8 +797,113 @@ a.btn-primary {
   vertical-align: middle;
 }
 
+/* --- About pages --------------------------------------------------------- */
+
+/* The about pages run wide: 80% of the window rather than the account pages'
+   560px reading measure. They are the outward-facing description of the
+   project, and they carry tables of machines and repositories that a narrow
+   column pushes into their own scrollbars. Worn alongside .account-view, whose
+   `width: 100%` this caps. */
+.about-view {
+  max-width: 80%;
+}
+
+/* .page-text is spaced for the inside of a card, where the padding does most
+   of the separating and a run of paragraphs is rare. These pages are almost
+   nothing but runs of paragraphs, so the gap has to be real. It is added here
+   rather than by loosening .page-text everywhere it is already right. */
+.about-view .page-text + .page-text {
+  margin-top: 12px;
+}
+
+/* The one sentence that says what the page is, before the first section title.
+   Full --text rather than --text-secondary: it is the page's claim, and the
+   paragraphs under it are the elaboration. */
+.about-lead {
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0 0 8px;
+}
+
+/* A person's handle, under their name. The handle IS the identity on this
+   cluster, the same string they sign in with, so it stands on its own line
+   instead of being mentioned in the prose. */
+.about-handle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* The team page's card header: face, name, handle. The name is an <h2> here
+   rather than a .section-title above the card, because a picture and the name
+   it belongs to have to sit on the same line to read as one person. */
+.about-person {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0 0 18px;
+}
+
+/* Loaded live from Bluesky, so its dimensions are fixed here and stated on the
+   tag as well: the CDN is a third party, and a picture that arrives late must
+   not push the paragraph under it down the page when it does. The background
+   fills the circle for the same reason, before the image lands. */
+.about-person__avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--inset);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.about-person__name {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+/* The people are cards in a row with no section title between them, so the
+   first one needs the gap the title used to provide. */
+.about-lead + .card {
+  margin-top: 28px;
+}
+
+/* Where the three about pages point at each other. The nav menu can do this
+   too, but only for a reader who thinks to go back up to it. A page that has
+   ended should say what there is to read next. */
+.about-more {
+  font-size: 13.5px;
+  color: var(--text-muted);
+  margin: 32px 0 0;
+}
+
+.about-more a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.about-more a:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
 /* --- Footer -------------------------------------------------------------- */
 
+/* Pinned to the bottom of the window, not to the bottom of the document. The
+   build stamp is the quickest confirmation a deploy actually landed, and on the
+   long pages this app now has it was several screens down.
+
+   Sticky rather than fixed: it keeps its place in the flex column, so it still
+   occupies real height and nothing has to be padded out from under it. On a
+   page shorter than the window `.page`'s min-height already puts it at the
+   bottom and sticky changes nothing; on a longer one it rides the viewport.
+
+   Both of the other two properties are load-bearing. The background is what
+   makes content scroll *under* it rather than through it — the footer had none,
+   because until now nothing was ever behind it. The z-index sits below the
+   nav's dropdowns (10) so an open menu still wins. */
 .footer {
   display: flex;
   align-items: center;
@@ -770,13 +912,17 @@ a.btn-primary {
   padding: 18px 24px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  background: var(--bg);
 }
 
 /* The build stamp and the copyright are separated by .footer's own gap — no
    separator glyph between them, and nothing to lay out. */
 .footer__copy,
 .footer__version {
-  font-size: 12px;
+  font-size: 13.5px;
   color: var(--text-muted-2);
 }
 

@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime
 from unittest.mock import patch
 
@@ -176,7 +177,11 @@ class HomeViewTests(NoRosterMixin, TestCase):
         _grant()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertNotContains(resp, "Open chat")
+        # The button's own words. It was "Open chat" until the page and the nav
+        # started calling the thing by its name; an assertion left on the old
+        # label passes for the wrong reason, since the old string is absent
+        # whether or not the block rendered.
+        self.assertNotContains(resp, "Open Web UI")
         self.assertContains(resp, "Create an API key")
 
     def test_a_non_member_is_not_welcomed_in(self):
@@ -191,6 +196,94 @@ class HomeViewTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
         self.assertNotContains(resp, "account-card")
+
+
+class AboutViewTests(NoRosterMixin, TestCase):
+    """`/about/`, `/about/system/`, `/about/team/`: the public explanation.
+
+    Ungated on purpose: they are what a visitor who is not a member yet reads to
+    find out what membership is for, so a session requirement would put the
+    explanation behind the thing it explains.
+    """
+
+    # The dropdown item marked as the page the reader is on. Written across two
+    # lines in base.html, hence the \s+ rather than a literal match.
+    ACTIVE_ITEM = re.compile(r'class="nav__dropdown-item is-active"\s+href="([^"]+)"')
+
+    def setUp(self):
+        super().setUp()
+        # The team page reads avatars off the public AppView. Left unpatched the
+        # suite would make a real outbound call to Bluesky on every run — slow,
+        # and a network outage would start failing tests that are about markup.
+        patcher = patch.object(atproto, "avatar_urls", return_value={})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_team_page_renders_when_the_avatars_cannot_be_read(self):
+        # The degradation the whole design rests on: a lookup that answered
+        # nothing costs the reader a picture, never the page.
+        resp = self.client.get(reverse("about_team"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "Jacob Sayles")
+        self.assertNotContains(resp, "about-person__avatar")
+
+    def test_the_team_page_shows_a_face_when_there_is_one(self):
+        url = "https://cdn.bsky.app/img/avatar/plain/did:plc:x/bafkrei"
+        with patch.object(
+            atproto, "avatar_urls", return_value={"bmann.ca": url}
+        ):
+            resp = self.client.get(reverse("about_team"))
+        self.assertContains(resp, url)
+
+    def test_all_three_open_for_a_signed_out_visitor(self):
+        for name in ("about", "about_system", "about_team"):
+            with self.subTest(page=name):
+                resp = self.client.get(reverse(name))
+                self.assertEqual(resp.status_code, 200)
+
+    def test_a_signed_out_visitor_is_offered_the_menu(self):
+        # On the home page, which is where somebody who has not signed in lands.
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, reverse("about"))
+        self.assertContains(resp, reverse("about_system"))
+        self.assertContains(resp, reverse("about_team"))
+
+    def test_each_page_marks_itself_in_the_menu(self):
+        # A menu that only opens on hover gives no other clue about where the
+        # reader already is, which is what `about_page` is for.
+        for name in ("about", "about_system", "about_team"):
+            with self.subTest(page=name):
+                html = self.client.get(reverse(name)).content.decode()
+                self.assertEqual(
+                    self.ACTIVE_ITEM.findall(html), [reverse(name)]
+                )
+
+    def test_a_page_outside_the_section_marks_nothing(self):
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertEqual(self.ACTIVE_ITEM.findall(html), [])
+        self.assertNotContains(
+            self.client.get(reverse("home")), "nav__item--menu is-active"
+        )
+
+    def test_the_three_pages_point_at_each_other(self):
+        # Each one ends by naming the other two, so the section is navigable
+        # without going back up to a menu that has to be hovered to open.
+        pages = ["about", "about_system", "about_team"]
+        for name in pages:
+            with self.subTest(page=name):
+                resp = self.client.get(reverse(name))
+                for other in pages:
+                    if other != name:
+                        self.assertContains(resp, reverse(other))
+
+    def test_the_system_page_probes_nothing(self):
+        # The distinction from /systems/ is the whole reason both exist: this
+        # one describes the stack and never asks it anything, so it cannot be
+        # slow and cannot report a state it got wrong.
+        with patch.object(health, "check_all") as probe:
+            resp = self.client.get(reverse("about_system"))
+        self.assertEqual(resp.status_code, 200)
+        probe.assert_not_called()
 
 
 class NavMenuTests(NoRosterMixin, TestCase):

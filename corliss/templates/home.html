@@ -44,21 +44,8 @@ every page, so this page cannot drift from them.
       same rule the nav follows, so the page can't offer what isn't deployed.
       {% endcomment %}
       <h1>Welcome to the cluster.</h1>
-      <p class="page-text">You're in — the models on this machine are yours to
+      <p class="page-text">You're in!  The models on this machine are yours to
       use. There are two ways to reach them, and you can use both.</p>
-
-      {% if CHAT_URL %}
-        <h2 class="section-title">Chat</h2>
-        <div class="card">
-          <p class="page-text">The quickest way in: a chat window in your
-          browser, already signed in as you. Ask questions, work through a
-          problem, hand it a document to read. Nothing to install and nothing
-          to configure — your membership is the whole setup.</p>
-          <p>
-            <a class="btn-primary" href="{{ CHAT_URL }}">Open chat</a>
-          </p>
-        </div>
-      {% endif %}
 
       <h2 class="section-title">Your own tools</h2>
       <div class="card">
@@ -73,6 +60,19 @@ every page, so this page cannot drift from them.
           <a class="btn-primary" href="{% url 'api' %}">Create an API key</a>
         </p>
       </div>
+
+
+      {% if CHAT_URL %}
+        <h2 class="section-title">Open Web UI</h2>
+        <div class="card">
+          <p class="page-text">The quickest way in: a chat window in your
+          browser, already signed in as you. Ask questions, work through a
+          problem, hand it a document to read.</p>
+          <p>
+            <a class="btn-primary" href="{{ CHAT_URL }}">Open Web UI</a>
+          </p>
+        </div>
+      {% endif %}
 
       <h2 class="section-title">Fair use</h2>
       <div class="card">

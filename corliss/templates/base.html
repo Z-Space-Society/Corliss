@@ -17,14 +17,48 @@
 <body>
   <div class="page">
     <nav class="nav">
-      <a class="nav__brand" href="{% url 'home' %}">
-        <svg width="22" height="22" viewBox="0 0 22 22" style="flex-shrink: 0;">
-          <rect x="1" y="2" width="20" height="13" rx="2" fill="oklch(0.62 0.17 255)"></rect>
-          <rect x="8" y="17" width="6" height="2" rx="1" fill="oklch(0.62 0.17 255)"></rect>
-          <rect x="5" y="19" width="12" height="1.5" rx="0.75" fill="oklch(0.62 0.17 255)"></rect>
-        </svg>
-        <span class="nav__brand-text">sharedcomputer<span class="nav__brand-accent">.network</span></span>
-      </a>
+      {% comment %}
+      The left group: the mark, then About. The divider between them is the
+      same rule that separates the Manage menu from the account chip on the
+      right, one glyph doing one job everywhere: marking where the nav changes
+      subject. Here the change is from "this site" to "pages about it".
+
+      About is the only entry in the row that is shown to everybody, signed in
+      or not. It is the explanation the signed-out home page is too short to
+      carry, so hiding it behind a session would put it where nobody who needs
+      it is standing.
+      {% endcomment %}
+      <div class="nav__group">
+        <a class="nav__brand" href="{% url 'home' %}">
+          <svg width="22" height="22" viewBox="0 0 22 22" style="flex-shrink: 0;">
+            <rect x="1" y="2" width="20" height="13" rx="2" fill="oklch(0.62 0.17 255)"></rect>
+            <rect x="8" y="17" width="6" height="2" rx="1" fill="oklch(0.62 0.17 255)"></rect>
+            <rect x="5" y="19" width="12" height="1.5" rx="0.75" fill="oklch(0.62 0.17 255)"></rect>
+          </svg>
+          <span class="nav__brand-text">sharedcomputer<span class="nav__brand-accent">.network</span></span>
+        </a>
+
+        <div class="nav__divider"></div>
+
+        {% comment %}
+        `about_page` is set by the three about views and by nothing else, so it
+        is both "is the reader in this section" for the trigger and "which page"
+        for the items. A menu that opens on hover gives no other clue about
+        where the reader already is.
+        {% endcomment %}
+        <div class="nav__menu">
+          <span class="nav__item nav__item--menu{% if about_page %} is-active{% endif %}">About</span>
+
+          <div class="nav__dropdown nav__dropdown--left">
+            <a class="nav__dropdown-item{% if about_page == 'about' %} is-active{% endif %}"
+               href="{% url 'about' %}">About</a>
+            <a class="nav__dropdown-item{% if about_page == 'system' %} is-active{% endif %}"
+               href="{% url 'about_system' %}">The System</a>
+            <a class="nav__dropdown-item{% if about_page == 'team' %} is-active{% endif %}"
+               href="{% url 'about_team' %}">The Team</a>
+          </div>
+        </div>
+      </div>
 
       <div class="nav__items">
         {% comment %}
@@ -44,19 +78,10 @@
         same thing to a screen reader that the colour says to everyone else, and
         the title answers the question the closed door raises.
 
-        Chat still hides entirely when CHAT_URL is unset. A disabled entry says
-        "not for you yet"; on a cluster with no chat deployed, that would be a
-        different and false statement.
+        Open WebUI still hides entirely when CHAT_URL is unset. A disabled entry
+        says "not for you yet"; on a cluster with no chat deployed, that would be
+        a different and false statement.
         {% endcomment %}
-        {% if user.is_authenticated and CHAT_URL %}
-          {% if user.may_enter %}
-            <a class="nav__item" href="{{ CHAT_URL }}">Chat</a>
-          {% else %}
-            <span class="nav__item nav__item--closed" aria-disabled="true"
-                  title="Members only — a cluster admin has to let you in first">Chat</span>
-          {% endif %}
-        {% endif %}
-
         {% if user.is_authenticated %}
           {% if user.may_enter %}
             <a class="nav__item" href="{% url 'api' %}">API</a>
@@ -64,6 +89,75 @@
             <span class="nav__item nav__item--closed" aria-disabled="true"
                   title="Members only — a cluster admin has to let you in first">API</span>
           {% endif %}
+        {% endif %}
+
+        {% comment %}
+        Tools: the things a member points at the cluster, in two groups that are
+        genuinely different rather than one list with a rule in it.
+
+        **Hosted apps run here and answer to GATE.** Open WebUI is on our
+        machines, signs the member in as themselves, and is closed to a
+        non-member exactly the way the API is.
+
+        **Useful tools are somebody else's software**, listed because they speak
+        the API this cluster serves. Nothing here grants them anything and there
+        is nothing to gate: the link is public and the App Store does not care
+        whether you are a member. What makes the tool useful is a key, and the
+        key is behind GATE on the API page where it belongs.
+
+        The whole menu is still signed-in-only, which is the same rule the rest
+        of this row follows. A visitor with no session is being asked to sign
+        in, not to go shopping for clients.
+        {% endcomment %}
+        {% if user.is_authenticated %}
+          <div class="nav__menu">
+            <span class="nav__item nav__item--menu">Tools</span>
+
+            <div class="nav__dropdown nav__dropdown--left">
+              {% if CHAT_URL %}
+                <div class="nav__dropdown-label">Hosted apps</div>
+                {% if user.may_enter %}
+                  <a class="nav__dropdown-item" href="{{ CHAT_URL }}">Open WebUI</a>
+                {% else %}
+                  <span class="nav__dropdown-item nav__dropdown-item--closed"
+                        aria-disabled="true"
+                        title="Members only — a cluster admin has to let you in first">Open WebUI</span>
+                {% endif %}
+                <div class="nav__dropdown-rule"></div>
+              {% endif %}
+
+              <div class="nav__dropdown-label">Useful tools</div>
+              {% comment %}
+              Hard-coded rather than settings: these are third-party software,
+              the same on every cluster, so per-cluster values could only ever
+              be the same values written twice. Contrast CHAT_URL, which is this
+              cluster's own deployment and genuinely differs.
+
+              Ordered by how much a reader has to install before the tool does
+              anything, not alphabetically: an app, then a browser extension,
+              then the four that want a terminal. Somebody opening this menu for
+              the first time should hit the thing they can use today first.
+              {% endcomment %}
+              <a class="nav__dropdown-item"
+                 href="https://apps.apple.com/ca/app/liquid-apollo/id6448019325"
+                 target="_blank" rel="noopener">Liquid Apollo</a>
+              <a class="nav__dropdown-item"
+                 href="https://opencode.ai/"
+                 target="_blank" rel="noopener">opencode</a>
+              <a class="nav__dropdown-item"
+                 href="https://pi.dev/"
+                 target="_blank" rel="noopener">Pi.dev</a>
+              <a class="nav__dropdown-item"
+                 href="https://hermes-agent.ai/"
+                 target="_blank" rel="noopener">Hermes Agent</a>
+              <a class="nav__dropdown-item"
+                 href="https://openworklabs.com/"
+                 target="_blank" rel="noopener">OpenWork</a>
+              <a class="nav__dropdown-item"
+                 href="https://github.com/n4ze3m/page-assist"
+                 target="_blank" rel="noopener">Page Assist</a>
+            </div>
+          </div>
         {% endif %}
 
         {% comment %}

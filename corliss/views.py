@@ -608,6 +608,76 @@ def apply(request):
     return redirect("home")
 
 
+# --- About: what this is, what it runs on, who runs it ----------------------
+#
+# Three prose pages, public on purpose. They are the only surface here that
+# explains the cluster to somebody who is not in it yet. The signed-out home
+# page says what membership *is*, and everything past GATE assumes the reader
+# already knows; gating these would leave that explanation nowhere.
+#
+# Each is `render` and nothing else: the content lives in the template, so
+# there is no context for a page of prose to disagree with. `about_page` is the
+# one exception, and it is chrome rather than content. base.html marks the
+# open menu with it, so the reader can see which of the three they are on.
+# Passed by name rather than derived from `request.resolver_match` so the value
+# is visible where the page is chosen.
+
+
+@require_http_methods(["GET"])
+def about(request):
+    """What the Shared Computer Network is."""
+    return render(request, "about.html", {"about_page": "about"})
+
+
+@require_http_methods(["GET"])
+def about_system(request):
+    """What the cluster is made of, for a reader who is not an admin.
+
+    Deliberately not `/systems/`, which is the same subject asked as an
+    operational question: live health, admin-gated. This one is a description
+    and never probes anything, so it cannot be slow and cannot be wrong about
+    whether a service is up. It does not say.
+    """
+    return render(request, "about_system.html", {"about_page": "system"})
+
+
+# The three people the team page introduces, as slug -> handle. Here and not in
+# the template only because the avatars have to be looked up by handle before
+# the page renders; the names and the prose stay in about_team.html, which is
+# the one place a person is actually described. The slug is what the template
+# reaches the picture with, since a Django dot-lookup cannot take a key with
+# dots in it and every one of these handles has them.
+TEAM_HANDLES = {
+    "boris": "bmann.ca",
+    "jacob": "jacob.cascadia.social",
+    "scott": "hadsie.com",
+}
+
+
+@require_http_methods(["GET"])
+def about_team(request):
+    """Who builds and runs it, with their current Bluesky pictures.
+
+    The pictures are live rather than checked in: an avatar's URL carries the
+    blob's CID, so it changes whenever somebody swaps their photo and a
+    hard-coded one would rot silently into a broken image. `avatar_urls` is
+    cached, capped at a short timeout, and never raises — a handle it could not
+    read is absent, and the template falls back to the name alone.
+    """
+    avatars = atproto.avatar_urls(TEAM_HANDLES.values())
+    return render(
+        request,
+        "about_team.html",
+        {
+            "about_page": "team",
+            "avatars": {
+                slug: avatars.get(handle, "")
+                for slug, handle in TEAM_HANDLES.items()
+            },
+        },
+    )
+
+
 @require_http_methods(["GET", "POST"])
 def api(request):
     """The member's own API keys: issue one, see them, revoke one, see usage.

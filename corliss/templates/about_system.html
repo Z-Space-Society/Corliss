@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% comment %}
+What the cluster is made of, written for a member rather than for an operator.
+
+Deliberately the same subject as `/systems/` and deliberately a different page:
+that one asks whether each service is answering right now and is admin-gated
+because the answer is operational; this one describes the shape of the thing and
+never probes anything. Neither should grow into the other. The moment this page
+reports a state it can be wrong about one, and the moment /systems/ explains the
+architecture there are two places to keep the explanation.
+
+Everything here is hard-coded, which is the trade this page makes: no context
+means nothing to go stale between deploys, and it means a machine leaving the
+fleet is a template edit. Machines change more slowly than this page would be
+worth wiring up for.
+{% endcomment %}
+
+{% block title %}The System — SCN{% endblock %}
+
+{% block content %}
+<div class="account-view about-view">
+  <h1>The System</h1>
+
+  <p class="page-text about-lead">One Proxmox host, a handful of inference
+  machines, and four repositories that build and run the whole thing. All of it
+  is living at Z-Space.</p>
+
+  <h2 class="section-title">Two layers</h2>
+  <div class="card">
+    <p class="page-text">The <strong>infrastructure layer</strong> is the AI
+    service itself: a gateway sitting in front of the inference machines. Never
+    a single-user setup and never a direct line to a model. Everything goes
+    through the gateway, which is what makes accounts, keys and quotas mean
+    anything.</p>
+
+    <p class="page-text">The <strong>application layer</strong> is what gets
+    built on top. Chat, and eventually the shared knowledge base and the
+    note-taking tools, are ordinary clients of the gateway: they get no special
+    access and they never go around it. Keeping the two apart is what lets
+    either one be replaced without touching the other.</p>
+  </div>
+
+  <h2 class="section-title">The host</h2>
+  <div class="card">
+    <p class="page-text">One machine, <strong>Heron</strong>, runs
+    <a href="https://www.proxmox.com/" target="_blank" rel="noopener">Proxmox</a>
+    and holds every service except inference. Each service is its own LXC
+    container running natively under systemd, with no Docker anywhere in the
+    stack. They talk to each other over an internal bridge that has no route in
+    from the world.</p>
+
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>What runs it</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Reverse proxy</td>
+            <td class="data-table__muted">Caddy. Terminates TLS, and is the public edge.</td>
+          </tr>
+          <tr>
+            <td>Session broker</td>
+            <td class="data-table__muted">Corliss, this app. Sign-in, keys, the console.</td>
+          </tr>
+          <tr>
+            <td>Registry</td>
+            <td class="data-table__muted">HappyView, serving the membership lexicons</td>
+          </tr>
+          <tr>
+            <td>Gateway</td>
+            <td class="data-table__muted">LiteLLM. Every inference request goes through it.</td>
+          </tr>
+          <tr>
+            <td>Chat</td>
+            <td class="data-table__muted">Open WebUI</td>
+          </tr>
+          <tr>
+            <td>Sync relay</td>
+            <td class="data-table__muted">scn-sync-relay, the automerge server behind shared notes</td>
+          </tr>
+          <tr>
+            <td>Database</td>
+            <td class="data-table__muted">Postgres, shared by the services above</td>
+          </tr>
+          <tr>
+            <td>Sessions</td>
+            <td class="data-table__muted">Redis</td>
+          </tr>
+          <tr>
+            <td>Object store</td>
+            <td class="data-table__muted">Garage, S3-compatible</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <h2 class="section-title">The machines that think</h2>
+  <div class="card">
+    <p class="page-text">Inference runs on separate hardware: a heterogeneous
+    set of new, used and donated parts, some of it on loan from members. None of
+    these machines is publicly exposed, and none runs anything but
+    <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener">llama.cpp</a>'s
+    server. The gateway is the only thing that talks to them.</p>
+
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Node</th>
+            <th>Hardware</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>gx10</td>
+            <td class="data-table__muted">ASUS Ascent GX10 (NVIDIA GB10), 128&nbsp;GB unified memory. On loan, and currently the primary node.</td>
+          </tr>
+          <tr>
+            <td>orca</td>
+            <td class="data-table__muted">2&times; RTX 3090, 48&nbsp;GB VRAM, with one model pinned across both cards</td>
+          </tr>
+          <tr>
+            <td>salmon</td>
+            <td class="data-table__muted">2&times; GTX 1080 Ti, 22&nbsp;GB VRAM</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="hint-text">The fleet changes. Which models are actually being
+    served, and by which node, is answered live on the API page.</p>
+  </div>
+
+  <h2 class="section-title">Which models</h2>
+  <div class="card">
+    <p class="page-text">Open-weight models only, with a standing preference for
+    ones released from jurisdictions with meaningful transparency law: France,
+    Canada, Switzerland. What each node serves is set at the gateway and changes
+    as better weights land.</p>
+  </div>
+
+  <h2 class="section-title">The code</h2>
+  <div class="card">
+    <p class="page-text">Four repositories, all public. One of the project's
+    aims is that another community could stand up a cluster like this one, and
+    that is not possible if the recipe is private.</p>
+
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Repository</th>
+            <th>What it is</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a class="handle-link handle-link--out"
+                   href="https://github.com/Z-Space-Society/zai-ops"
+                   target="_blank" rel="noopener">zai-ops</a></td>
+            <td class="data-table__muted">Ansible and Proxmox. Builds a cluster from a bare machine and operates it.</td>
+          </tr>
+          <tr>
+            <td><a class="handle-link handle-link--out"
+                   href="https://github.com/Z-Space-Society/Corliss"
+                   target="_blank" rel="noopener">Corliss</a></td>
+            <td class="data-table__muted">Django. The session broker, the member surface, and this page.</td>
+          </tr>
+          <tr>
+            <td><a class="handle-link handle-link--out"
+                   href="https://github.com/Z-Space-Society/member-registry"
+                   target="_blank" rel="noopener">member-registry</a></td>
+            <td class="data-table__muted">ATProto lexicons and the code that serves them. The record of who is a member.</td>
+          </tr>
+          <tr>
+            <td><a class="handle-link handle-link--out"
+                   href="https://github.com/Z-Space-Society/scn-sync-relay"
+                   target="_blank" rel="noopener">scn-sync-relay</a></td>
+            <td class="data-table__muted">Rust. The sync server behind shared notes.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="hint-text">The repository is still called <code>zai-ops</code>
+    after the project's earlier name. Renaming it would break the one URL that
+    bootstraps a new cluster, which was not worth the churn.</p>
+  </div>
+
+  <p class="about-more">Read on: <a href="{% url 'about' %}">what this is</a>,
+  and <a href="{% url 'about_team' %}">the team</a> that builds it.</p>
+</div>
+{% endblock %}

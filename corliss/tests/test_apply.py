@@ -515,8 +515,8 @@ class NavForANonMemberTests(ClearsCache):
     absent.
 
     Hiding them told a non-member nothing about what membership is for; linking
-    them live — which is what Chat did — handed out a promise that breaks on the
-    next click, since both pages refuse them anyway.
+    them live — which is what the chat entry did — handed out a promise that
+    breaks on the next click, since both pages refuse them anyway.
     """
 
     def setUp(self):
@@ -532,7 +532,9 @@ class NavForANonMemberTests(ClearsCache):
         resp = self.client.get(reverse("home"))
         html = resp.content.decode()
 
-        self.assertIn(">Chat</span>", html)
+        # Open WebUI now lives under the Tools menu rather than in the row, but
+        # it is the same door and it is closed the same way.
+        self.assertIn(">Open WebUI</span>", html)
         self.assertIn(">API</span>", html)
         # The claim that matters: no way through. A span has no href, so this
         # also fails if either ever reverts to a bare <a>.
@@ -553,13 +555,18 @@ class NavForANonMemberTests(ClearsCache):
         self.assertIn('href="https://chat.example.com"', html)
         self.assertIn(f'href="{reverse("api")}"', html)
         self.assertNotIn("nav__item--closed", html)
+        # The dropdown's own closed state is a separate class, so a nav row with
+        # no closed entries is not on its own proof that the menu has none.
+        self.assertNotIn("nav__dropdown-item--closed", html)
 
     @override_settings(CHAT_URL="")
     def test_chat_stays_hidden_when_it_is_not_deployed(self):
         # A closed door says "not for you yet". On a cluster with no chat, that
-        # would be a different statement, and a false one.
+        # would be a different statement, and a false one. The group heading
+        # goes with it: a "Hosted apps" label over nothing is the same lie.
         html = self.client.get(reverse("home")).content.decode()
-        self.assertNotIn(">Chat</span>", html)
+        self.assertNotIn("Open WebUI", html)
+        self.assertNotIn("Hosted apps", html)
         self.assertIn(">API</span>", html)
 
 

@@ -62,7 +62,7 @@ to activate. `uv run python manage.py …` is the explicit equivalent.
 
 Configuration is entirely env-driven — see [`.env.example`](.env.example) for
 the full list. `.env` is git-ignored; **never commit secrets or private keys**.
-`CHAT_URL` drives the nav's "Chat" link, `MANAGE_URL` the one remaining link to
+`CHAT_URL` drives the nav's "Open WebUI" entry under Tools, `MANAGE_URL` the one remaining link to
 the Manage Console — the fallback offered on `/manage/` to an admin whose
 sign-in picked up no registry session (the nav entry is **gone**: `/manage/`
 covers everything that console did, roster editing included, and the setting
@@ -287,6 +287,7 @@ manage.py ensure_admin                   # idempotent break-glass local admin;
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
 | Membership push (from the registry) | `/membership/events` |
 | Apply for membership (signed-in non-members) | `/membership/apply` |
+| About — what this is, the system, the team (public) | `/about/`, `/about/system/`, `/about/team/` |
 | Console — applications, members, admins, invite, reconcile (cluster admins) | `/manage/` |
 | Authenticate the service account so roster edits can be made (POST, cluster admins; returns through `/auth/callback`) | `/manage/unlock` |
 | Systems — the stack, with live health checks (cluster admins) | `/systems/` |
@@ -668,6 +669,74 @@ which is everything the page claims when it says "Up". A client library would
 buy a real credential's worth of complexity to learn what eleven bytes on a
 socket already prove. If Django's cache is ever pointed at Redis, do it
 deliberately; do not quietly adopt this setting for it.
+
+## About — `/about/`
+
+Three prose pages: what the Shared Computer Network is, what it runs on, and who
+builds it. `views.about`, `views.about_system`, `views.about_team` — each is a
+`render` and nothing else.
+
+- **They are public, and that is the point.** They are the only surface here
+  that explains the cluster to somebody who is not in it yet: the signed-out
+  home page says what membership *is*, and everything past GATE assumes the
+  reader already knows. Gating them would leave the explanation nowhere.
+- **`/about/system/` is not `/systems/`, and neither should grow into the
+  other.** They are the same subject asked as two different questions. The about
+  page describes the shape of the stack and never probes anything, so it cannot
+  be slow and cannot be wrong about whether a service is up — it does not say.
+  `/systems/` answers whether each service is responding right now, which is an
+  operational question and therefore admin-gated. The moment the about page
+  reports a state it can be wrong about one; the moment `/systems/` explains the
+  architecture there are two copies of the explanation.
+  `test_the_system_page_probes_nothing` is what holds that line.
+- **The team page's faces are live, and are the one exception to the rule
+  below.** A Bluesky avatar URL carries the blob's CID, so it changes whenever
+  somebody swaps their photo and a checked-in URL would rot silently into a
+  broken image. `atproto.avatar_urls` reads them off the public AppView, which
+  is where `resolve_handle_to_did` already asks and which serves profile reads
+  unauthenticated. It is cached for six hours, capped at a 3s timeout, fans out
+  across a thread pool, and never raises: a handle it could not read is absent
+  from the result and the template drops that `<img>` rather than rendering a
+  broken frame. Nothing on the page depends on it. This is not the registry,
+  and it must not become a precedent for putting one on a render path.
+- **Every other fact on them is in the template.** No context means nothing to go
+  stale between deploys, and it means a machine leaving the fleet is a template
+  edit. Machines change more slowly than wiring this up would be worth. The
+  about copy is adapted from the project's own public write-up at
+  <https://news.z-space.ca/zai/>; when the two drift, that write-up is the thing
+  being restated here.
+- **`about_page` is the one piece of context, and it is chrome.** The three
+  views pass it so base.html can mark the open menu, since a menu that opens on
+  hover gives no other clue about where the reader already is. Passed by name
+  rather than derived from `request.resolver_match`, so the value is visible
+  where the page is chosen.
+
+## The nav
+
+Left of the divider: the brand, then **About**. Right of it: **API**, **Tools**,
+**Manage** for admins, then the account chip.
+
+**Tools has two groups, and they are not one list with a rule in it.** *Hosted
+apps* run on this cluster and answer to GATE — Open WebUI is closed to a
+non-member exactly the way the API is, and the whole group (heading included)
+disappears when `CHAT_URL` is unset, since a "Hosted apps" label over nothing is
+the same false statement a disabled entry would be. *Useful tools* is somebody
+else's software, listed because it speaks the API this cluster serves; there is
+nothing to gate, because what makes such a tool useful is a key, and the key is
+behind GATE on `/api/`. The entries are hard-coded rather than settings: they
+are the same third-party software on every cluster, so per-cluster values could
+only be the same values written twice. They are ordered by how much a reader has
+to install before the tool does anything — an app, a browser extension, then the
+ones that want a terminal — rather than alphabetically.
+
+The menu as a whole is still signed-in-only, which is the rule the rest of that
+row follows. A visitor with no session is being asked to sign in, not to go
+shopping for clients.
+
+**About is the one entry shown to everybody**, signed in or not, and it is the
+only thing on the left. The `.nav__divider` between it and the brand is the same
+glyph that separates Manage from the account chip: one rule doing one job,
+marking where the nav changes subject.
 
 ## Wiring up a relying party (Open WebUI shown)
 

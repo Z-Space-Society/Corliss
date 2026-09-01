@@ -276,6 +276,73 @@ def resolve_handle_to_did(handle: str) -> str:
         raise OAuthError(f"could not resolve handle {handle!r}") from exc
 
 
+# How long an avatar lookup may hold up a page render, and how long the answer
+# is good for. Shorter than TIMEOUT (10s), which is a member's login and worth
+# waiting for; a picture on the about page is not. The window is long because
+# these change when somebody changes their profile picture, which is roughly
+# never, and because the fallback costs the reader nothing.
+AVATAR_TIMEOUT = 3
+AVATAR_CACHE_TTL = 60 * 60 * 6
+
+_AVATAR_CACHE_KEY = "corliss:avatars:"
+
+
+def avatar_urls(handles) -> dict:
+    """Current avatar URLs for a few accounts, keyed by handle.
+
+    A handle alone cannot be turned into a picture: Bluesky serves avatars from
+    `cdn.bsky.app` under the account's DID *and the blob's CID*, and the CID
+    changes every time somebody swaps their photo. So the live URL has to be
+    read off the profile, which is what this does.
+
+    The public AppView, which `resolve_handle_to_did` already asks, serves
+    profile reads unauthenticated. Nothing here is a member's data and nothing
+    here is signed.
+
+    **Never raises, and never blocks for long.** A handle that could not be
+    looked up is simply absent from the result, and the page renders without a
+    picture for that person rather than not rendering. The lookups fan out
+    across a thread pool so the wall clock is one timeout rather than three,
+    and the result is cached so a slow AppView does not cost that on every
+    load — the same shape `health.check_all` uses, and for the same reasons.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from django.core.cache import cache
+
+    handles = list(handles)
+    key = _AVATAR_CACHE_KEY + ",".join(sorted(handles))
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
+    with ThreadPoolExecutor(max_workers=len(handles) or 1) as pool:
+        found = list(pool.map(_avatar_url, handles))
+
+    urls = {handle: url for handle, url in zip(handles, found) if url}
+    cache.set(key, urls, AVATAR_CACHE_TTL)
+    return urls
+
+
+def _avatar_url(handle: str) -> str | None:
+    """One account's avatar URL, or None if it could not be read.
+
+    Catches everything on purpose. This is decoration on a prose page; there is
+    no failure here worth propagating, and an account with no profile picture
+    at all is the same outcome as an AppView that did not answer.
+    """
+    try:
+        r = requests.get(
+            "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile",
+            params={"actor": handle},
+            timeout=AVATAR_TIMEOUT,
+        )
+        r.raise_for_status()
+        return r.json().get("avatar") or None
+    except Exception:
+        return None
+
+
 def resolve_handle_for_admin(handle: str) -> str:
     """Resolve a handle to a DID for admin-granting: only the two atproto-spec
     methods (DNS TXT, then HTTPS well-known) — deliberately no fallback to the
