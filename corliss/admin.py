@@ -9,14 +9,23 @@ from corliss.models import MembershipCache, OidcSession, User
 class CorlissUserAdmin(UserAdmin):
     """Admin for the DID-keyed member model.
 
-    Extends Django's UserAdmin so the standard auth fieldsets still work, and
-    surfaces the atproto identity fields (`did`, `pds_url`, `last_seen`) plus
-    the member's own `display_name`.
+    Extends Django's UserAdmin so password management and the permissions
+    machinery still work, but **declares `fieldsets` outright rather than
+    appending to `UserAdmin.fieldsets`.**
 
-    `display_name` sits in the atproto fieldset rather than in UserAdmin's
-    "Personal info", which holds `first_name`/`last_name` — the two this app
-    does not use. Putting it beside them would invite an operator to fill in
-    the wrong pair.
+    Appending is what used to leave `first_name` and `last_name` on the form.
+    They come free with `AbstractUser` and this app uses neither — a name here
+    is one free-form `display_name`, matching atproto's `displayName` — so two
+    empty boxes sat above it inviting an operator to fill in the pair nothing
+    reads. Written out rather than filtered out of Django's tuple, because four
+    groups on the page are easier to check against the page than a
+    comprehension that removes two names from a structure you then have to go
+    and look up.
+
+    The cost, since it is a copy: a field Django adds to `AbstractUser` in some
+    future release will not appear here until this tuple is updated. That is
+    the trade — an admin form that shows exactly what this app stores, against
+    one that inherits whatever upstream adds.
     """
 
     list_display = (
@@ -29,13 +38,38 @@ class CorlissUserAdmin(UserAdmin):
         "is_staff",
     )
     search_fields = ("username", "did", "display_name")
-    readonly_fields = ("did", "last_seen", "last_login", "date_joined")
 
-    # Add the atproto identity fields to UserAdmin's default fieldsets.
-    fieldsets = UserAdmin.fieldsets + (
+    # `email_confirmed` is shown but not editable: it means "the member's PDS
+    # vouched for this address", which is not something an operator can decide
+    # here. It is worth showing because it answers "why is `email_verified`
+    # false in the id_token" without a shell. Corliss clears it itself when the
+    # member edits their email at `/account/`.
+    # `username` holds the atproto handle, refreshed from the PDS at every
+    # login — an edit here survives until then and no longer.
+    readonly_fields = (
+        "did",
+        "email_confirmed",
+        "last_seen",
+        "last_login",
+        "date_joined",
+    )
+
+    fieldsets = (
+        ("Profile", {"fields": ("display_name", "email", "email_confirmed")}),
+        ("ATProto identity", {"fields": ("did", "pds_url")}),
+        ("Important dates", {"fields": ("date_joined", "last_login", "last_seen")}),
         (
-            "ATProto identity",
-            {"fields": ("did", "display_name", "pds_url", "last_seen")},
+            "Permissions",
+            {
+                "fields": (
+                    "password",
+                    "is_active",
+                    "is_staff",
+                    "is_superuser",
+                    "groups",
+                    "user_permissions",
+                )
+            },
         ),
     )
 

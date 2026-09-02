@@ -72,6 +72,32 @@ class UserAdminTests(TestCase):
         )
         self.assertContains(resp, "alice.bsky.social")
 
+    def test_the_change_form_does_not_offer_first_and_last_name(self):
+        """They come free with AbstractUser and this app uses neither. Two
+        empty boxes on the form invite an operator to fill in the pair nothing
+        reads — which is why `fieldsets` is declared rather than appended to."""
+        user = User.objects.create_user(username="alice.bsky.social", did=DID)
+        resp = self.client.get(
+            reverse("admin:corliss_user_change", args=[user.pk])
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, 'name="first_name"')
+        self.assertNotContains(resp, 'name="last_name"')
+        # The one name this app does keep is on the form, and editable.
+        self.assertContains(resp, 'name="display_name"')
+
+    def test_email_confirmed_is_shown_but_not_editable(self):
+        """It means the PDS vouched for the address — not something an operator
+        can decide here, and what `email_verified` in the id_token reads."""
+        user = User.objects.create_user(
+            username="alice.bsky.social", did=DID, email_confirmed=True
+        )
+        resp = self.client.get(
+            reverse("admin:corliss_user_change", args=[user.pk])
+        )
+        self.assertContains(resp, "Email confirmed")
+        self.assertNotContains(resp, 'name="email_confirmed"')
+
     def test_a_member_with_no_name_still_lists(self):
         """Blank is the normal state for someone with no profile record, and
         for every member until their next sign-in after this shipped."""
