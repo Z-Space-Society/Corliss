@@ -178,6 +178,22 @@ ever opened Django's `/admin/`.
   `--superuser` bypasses every permission check and has to be asked for by name.
   `_heal_staff_flag` skips superusers in both directions, so it can never lock out
   an account somebody deliberately escalated.
+- **A superuser sees; the roster acts.** `User.is_cluster_admin` — the property,
+  asked only by `/manage/`, `/systems/`, `manage_unlock` and the nav — returns
+  true for `is_superuser`, so `ensure_admin`'s `did:local:admin` can reach the
+  recovery button instead of only Django's `/admin/`. Every path that *writes*
+  asks `membership.is_cluster_admin(did)`, the module function, which has no such
+  clause. **That split is the entire safety argument, so do not "unify" the two
+  spellings.** It holds structurally as well as by convention: reconcile spends
+  the shared read token and needs no authority, while a grant or a roster entry
+  is signed by the acting admin's own registry session, and no Django flag can
+  forge a DPoP proof.
+- **The clause is `is_superuser` and must never become `is_staff`.** They look
+  alike and are not: `is_staff` is written by `appoint_admin` and re-derived by
+  `_heal_staff_flag`, so it is a *cache* of the roster's answer, and reading it
+  here would make the cache the authority — dismissing an admin would stop
+  taking effect until they next signed in. `is_superuser` is written by nothing
+  automatic. This was tried and reverted; do not re-propose it.
 - **Authority is asked at the event's timestamp** (`Roster.was_admin_at`), never
   "is this DID an admin now". Removing an admin ends their authority going
   forward; it must not un-write what they already approved.
@@ -279,6 +295,12 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
   the same treatment.
 - Dev members are keyed `did:dev:<handle>` — not a registered DID method, so
   they can never collide with a real DID.
+- **A `DEV_ADMIN_DIDS` account gets Django `is_superuser` at dev login**
+  (`views._apply_dev_superuser`), because `is_staff` alone opens the admin index
+  with no model permissions and the point of a bypass is not needing a second
+  setup step. Mirrored rather than set, the way `_heal_staff_flag` mirrors the
+  roster, so dropping a DID from the list clears the flag at the next dev login.
+  Same three guards, and reachable only from `dev_login`.
 - **atproto login genuinely cannot work over localhost**, and the protocol's
   own localhost exception is deliberately not used (see the README for why).
   Nothing is misconfigured when a loopback login fails; do not "fix" it.

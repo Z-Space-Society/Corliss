@@ -64,15 +64,46 @@ class User(AbstractUser):
         """ELEVATE, as an attribute — usable as `user.is_cluster_admin` in any
         template, the way `is_superuser` is.
 
-        Read, never stored: this is a property over the roster in the service
-        DID's repo, not a database flag. That distinction is the whole point of
+        Read, never stored: the roster in the service DID's repo is what says
+        who is an admin, not a database flag. That is the whole point of
         `corliss.membership`'s roster section — a stored flag would drift from
         the record and could not be revoked by editing it.
+
+        **`is_superuser` opens the door anyway, and the rule that makes that
+        safe is: a superuser sees, the roster acts.** This property is only ever
+        asked "may I open this page" — by `views.manage`, `views.systems`,
+        `views.manage_unlock` and the nav. Every path that *writes* asks
+        `membership.is_cluster_admin(did)` instead, the module function with no
+        such clause: `_edit_roster`, approve/revoke, `_scope_for`,
+        `_heal_staff_flag`. So a superuser reaches the console and the reconcile
+        button — which spends the shared read token and needs no authority — and
+        still cannot author a grant or a roster entry, because those are signed
+        by the acting admin's own registry session and no Django flag can forge
+        one. Keep that split: widening this property into the write paths for
+        consistency's sake is what it is guarding against.
+
+        The clause exists for `ensure_admin`'s `did:local:admin`, which is not
+        on the roster and never will be. Without it the break-glass account
+        opens Django's `/admin/` and not the page holding the recovery button —
+        backwards for the account that exists for when the normal way in is
+        broken.
+
+        **`is_staff` is deliberately not here.** It looks like the same kind of
+        flag and is not: `membership.appoint_admin` writes it and
+        `views._heal_staff_flag` re-derives it at every login, so it is a
+        *cache* of this answer. Read it and the cache becomes the authority —
+        taking somebody off the roster would stop ending their access until they
+        next happened to sign in. `is_superuser` nothing writes on its own;
+        `ensure_admin` sets it on the break-glass row and `make_admin`
+        makes you ask for `--superuser` by name.
 
         `cached_property` so the nav asking on every render costs one lookup per
         request rather than one per mention. `membership` itself imports this
         module, so the import is local to the call.
         """
+        if self.is_superuser:
+            return True
+
         from corliss import membership
 
         return membership.is_cluster_admin(self.did)

@@ -509,6 +509,7 @@ def dev_login(request):
         email=f"{handle}@dev.invalid",
         email_confirmed=False,
     )
+    _apply_dev_superuser(user)
     auth_login(
         request, user, backend="django.contrib.auth.backends.ModelBackend"
     )
@@ -518,6 +519,36 @@ def dev_login(request):
     # helper, so the relying-party flow is testable end to end without atproto
     # and a dev session meets the same gate a real one does.
     return _resume_after_login(request)
+
+
+def _apply_dev_superuser(user):
+    """Give a `DEV_ADMIN_DIDS` account Django superuser, in development only.
+
+    `DEV_ADMIN_DIDS` already makes `membership.is_cluster_admin` answer yes, so
+    a dev sign-in reaches `/manage/` and `/systems/`. It did *not* reach
+    anything in Django's `/admin/`: `_upsert_member` sets `is_staff` from the
+    same answer, and `is_staff` alone opens the admin index with **no model
+    permissions** — an empty page. So looking at a row locally meant editing the
+    settings file and then running `createsuperuser` by hand, which is exactly
+    the kind of second setup step a development bypass exists to remove.
+
+    **Mirrored, not merely set**, the way `_heal_staff_flag` mirrors the roster:
+    dropping a DID from `DEV_ADMIN_DIDS` clears the flag at the next dev login
+    rather than leaving a superuser behind that nothing will ever take back.
+
+    Guarded exactly like every other bypass here — `DEBUG` *and*
+    `DEV_LOGIN_ENABLED`, checked again rather than trusted from the caller, with
+    `corliss.apps` failing startup if `DEV_ADMIN_DIDS` is set without `DEBUG`.
+    It is reachable only from `dev_login`, which is not even routed otherwise.
+    A `did:dev:` row cannot exist in production, since that view is the only
+    thing that mints one.
+    """
+    if not (settings.DEBUG and settings.DEV_LOGIN_ENABLED):
+        return
+    should_be = user.did in settings.DEV_ADMIN_DIDS
+    if user.is_superuser != should_be:
+        user.is_superuser = should_be
+        user.save(update_fields=["is_superuser"])
 
 
 def home(request):
@@ -940,12 +971,19 @@ def manage(request):
     """The cluster console: who has asked, who is a member, who is an admin,
     and reconcile.
 
-    Gated on `is_cluster_admin` — a live read of the public roster — and
-    deliberately **not** on `is_superuser`. That distinction is what keeps this
-    page reachable on a cluster rebuilt from nothing: the roster needs no
-    database and no cache, so an admin can arrive here with `MembershipCache`
-    empty and every member locked out. The recovery action therefore lives
-    behind the one door that does not depend on the thing being recovered.
+    Gated on `user.is_cluster_admin` — a live read of the public roster, or
+    `is_superuser`. The roster clause is the one that matters: it needs no
+    database and no cache, so an admin arrives here with `MembershipCache` empty
+    and every member locked out, and the recovery action sits behind the one
+    door that does not depend on the thing being recovered.
+
+    The superuser clause covers the case one step worse — the roster unreadable,
+    or the service session lapsed — where `did:local:admin` is the only way in
+    and would otherwise reach Django's `/admin/` but not this page. **It opens
+    the page, not the registry**: the reconcile button below spends the shared
+    read token and needs no authority, while approve, revoke, tier and roster
+    edits re-ask `membership.is_cluster_admin` at action time and still refuse.
+    See `User.is_cluster_admin` for why that split is the whole safety argument.
 
     POST runs reconciliation, through the same `MembershipRegistry.reconcile`
     the management command calls. One code path, so a click and a scheduled run

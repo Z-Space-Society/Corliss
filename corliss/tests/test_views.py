@@ -638,6 +638,55 @@ class ManageViewTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(reverse("manage")).status_code, 404)
 
+    def test_a_superuser_reaches_the_console_without_the_roster(self):
+        """The break-glass clause. `ensure_admin`'s `did:local:admin` is not on
+        the roster and never will be, so without this it opens Django's
+        `/admin/` and not the page holding the reconcile button.
+
+        `NoRosterMixin` pins `is_cluster_admin` to False, so the roster is
+        answering no here and the superuser flag is the only thing letting this
+        request through.
+        """
+        root = User.objects.create_superuser(
+            username="admin", did="did:local:admin"
+        )
+        self.client.force_login(root)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(self.client.get(reverse("systems")).status_code, 200)
+
+    def test_is_staff_alone_does_not_open_the_console(self):
+        """`is_staff` is the roster's *mirror* — written by `appoint_admin` and
+        re-derived by `_heal_staff_flag`. Reading it as authority would mean
+        dismissing an admin stopped taking effect until they next signed in.
+        Only `is_superuser` carries the clause; this is the regression guard."""
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        self.client.force_login(self.user)
+
+        self.assertEqual(self.client.get(reverse("manage")).status_code, 404)
+        self.assertEqual(self.client.get(reverse("systems")).status_code, 404)
+
+    def test_a_superuser_still_cannot_author_a_roster_edit(self):
+        """**A superuser sees; the roster acts.** The page opens, and the writes
+        on it do not: `_edit_roster` re-asks `membership.is_cluster_admin`, the
+        module function, which carries no superuser clause. Widening the
+        property into the write paths for consistency is what this pins."""
+        root = User.objects.create_superuser(
+            username="admin", did="did:local:admin"
+        )
+        self.client.force_login(root)
+
+        with self._roster():
+            resp = self.client.post(
+                reverse("manage"), {"action": "add_admin", "subject": STRANGER}
+            )
+
+        self.assertEqual(resp.status_code, 404)
+
     def test_an_admin_sees_the_member_roll(self):
         _grant(tier="level-5")
         self._as_cluster_admin()

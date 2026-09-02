@@ -10,6 +10,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from corliss import views
 from corliss.apps import check_dev_login_requires_debug
 from corliss.models import MembershipCache
 from corliss.views import POST_LOGIN_REDIRECT
@@ -87,6 +88,44 @@ class DevLoginTests(TestCase):
         resp = self.client.get(reverse("dev_login"))
         self.assertEqual(resp.status_code, 405)
 
+    @override_settings(DEV_ADMIN_DIDS=["did:dev:alice.bsky.social"])
+    def test_a_dev_admin_gets_django_superuser(self):
+        """Otherwise `/admin/` opens as an index with no model permissions —
+        `is_staff` alone grants none — and looking at a row locally means
+        editing settings and then running `createsuperuser` by hand. A bypass
+        that needs a second setup step is not doing its job."""
+        self.client.post(reverse("dev_login"), {"handle": "alice.bsky.social"})
+        user = User.objects.get(did="did:dev:alice.bsky.social")
+        self.assertTrue(user.is_superuser)
+        self.assertTrue(user.is_staff)
+
+    def test_an_ordinary_dev_member_does_not(self):
+        """The list is the whole grant — signing in is not."""
+        self.client.post(reverse("dev_login"), {"handle": "bob.bsky.social"})
+        self.assertFalse(
+            User.objects.get(did="did:dev:bob.bsky.social").is_superuser
+        )
+
+    def test_dropping_a_did_from_the_list_clears_the_flag(self):
+        """Mirrored, not merely set — the way `_heal_staff_flag` mirrors the
+        roster — so removing yourself from the list takes effect rather than
+        leaving a superuser behind that nothing will ever take back."""
+        with override_settings(DEV_ADMIN_DIDS=["did:dev:alice.bsky.social"]):
+            self.client.post(
+                reverse("dev_login"), {"handle": "alice.bsky.social"}
+            )
+        self.assertTrue(
+            User.objects.get(did="did:dev:alice.bsky.social").is_superuser
+        )
+
+        with override_settings(DEV_ADMIN_DIDS=[]):
+            self.client.post(
+                reverse("dev_login"), {"handle": "alice.bsky.social"}
+            )
+        self.assertFalse(
+            User.objects.get(did="did:dev:alice.bsky.social").is_superuser
+        )
+
     def test_resumes_a_pending_oidc_authorize(self):
         # The resume is gated on membership exactly as `callback`'s is — one
         # helper serves both — so a dev session has to be a member's to be
@@ -153,6 +192,24 @@ class DevLoginRefusedTests(TestCase):
     def test_login_page_hides_the_dev_form(self):
         resp = self.client.get(reverse("login"))
         self.assertNotContains(resp, "Dev sign-in (no auth)")
+
+    @override_settings(
+        DEBUG=False,
+        DEV_LOGIN_ENABLED=False,
+        DEV_ADMIN_DIDS=["did:dev:alice.bsky.social"],
+    )
+    def test_dev_superuser_re_checks_its_own_guards(self):
+        """`_apply_dev_superuser` is only ever called from `dev_login`, which is
+        not even routed outside DEBUG — so this asserts the re-check, the same
+        belt-and-braces the view itself does. A helper that hands out
+        `is_superuser` should not be one route registration away from doing it.
+        """
+        user = User.objects.create_user(
+            username="alice.bsky.social", did="did:dev:alice.bsky.social"
+        )
+        views._apply_dev_superuser(user)
+        user.refresh_from_db()
+        self.assertFalse(user.is_superuser)
 
 
 class DevLoginSystemCheckTests(TestCase):

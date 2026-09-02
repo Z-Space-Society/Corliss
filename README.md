@@ -90,9 +90,13 @@ sets Django's `is_staff`, from one operation — `manage.py make_admin`, or the
 button on `/manage/`. The roster is the authority and `is_staff` is a mirror of
 it, re-derived at every login so the two cannot drift.
 
-`is_superuser` is **not** part of that. It bypasses every permission check, so
-`--superuser` has to be asked for by name; plain `is_staff` opens the admin index
-with no model permissions at all, which is what made merging it affordable. See
+`is_superuser` is **not** part of that pair. It bypasses every permission check,
+so `--superuser` has to be asked for by name; plain `is_staff` opens the admin
+index with no model permissions at all, which is what made merging it
+affordable. It does open `/manage/` and `/systems/`, for the break-glass account
+— see [The console](#the-console--manage) for why that costs nothing. What it
+never does is grant `is_staff`'s authority in reverse: `is_staff` stays a mirror
+of the roster, and nothing reads it to decide who is an admin. See
 [Membership](docs/membership.md).
 
 ### Why atproto login can't work over localhost
@@ -155,11 +159,21 @@ DEV_ADMIN_DIDS=did:dev:you.bsky.social   # alongside DEBUG=true
 Write the handle part in lowercase — the comparison is an exact string match,
 as DID comparison must be, and the dev sign-in mints lowercase.
 
-Those DIDs answer yes to `is_cluster_admin` and to nothing else: no membership,
-and no grant. Same `DEBUG` requirement and the same `manage.py check` failure if
-it is set without one. Note it is a *read* override, not a roster write — it
-makes the check answer yes without a record existing, so it does not go through
-`appoint_admin` and sets no `is_staff`.
+Those DIDs answer yes to `is_cluster_admin` and grant no membership and no
+tier. Same `DEBUG` requirement and the same `manage.py check` failure if it is
+set without one. It is a *read* override, not a roster write: the check answers
+yes without a record existing, so nothing goes through `appoint_admin` and the
+roster itself is untouched.
+
+**A listed DID also gets Django `is_superuser` at dev sign-in**, so `/admin/` is
+actually usable. `is_staff` follows the admin answer as it does for a real
+login, and `is_staff` alone opens the admin index with **no model permissions**
+— an empty page. Without the superuser half, looking at a row locally meant
+editing settings and then running `createsuperuser` by hand, which is the second
+setup step a bypass exists to remove. It is **mirrored, not merely set**
+(`views._apply_dev_superuser`), so dropping a DID from the list clears the flag
+at that account's next dev sign-in rather than leaving a superuser behind.
+Same three guards, and it is reachable only from `/auth/dev-login`.
 
 #### Real atproto login locally (a named tunnel)
 
@@ -272,6 +286,21 @@ manage.py make_admin alice.bsky.social   # cluster admin: roster entry + is_staf
 manage.py ensure_admin                   # idempotent break-glass local admin;
                                          #   reads CORLISS_ADMIN_PASSWORD
 ```
+
+**The member form shows what this app stores, and nothing it doesn't.**
+`CorlissUserAdmin` declares its `fieldsets` outright rather than appending to
+`UserAdmin.fieldsets`, which is what used to leave `first_name` and `last_name`
+on the page: they come free with `AbstractUser`, nothing here reads them, and
+two empty boxes above `display_name` invite an operator to fill in the wrong
+pair. The cost of the copy is that a field added to `AbstractUser` upstream will
+not appear until the tuple is updated — deliberate, and the reason
+`test_the_change_form_does_not_offer_first_and_last_name` exists.
+
+`email_confirmed` is on the form but **read-only**. It means "the member's PDS
+vouched for this address", which is not a thing an operator can decide; it is
+shown because it answers "why is `email_verified` false in the `id_token`"
+without a shell. Corliss clears it itself when a member edits their email at
+`/account/`.
 
 ## Endpoints
 
@@ -441,11 +470,26 @@ the registry, this re-derives LiteLLM from the cache.
 ## The console — `/manage/`
 
 Members, admins, and reconciliation, for cluster admins. Gated on
-`is_cluster_admin` — a live roster read — and **never on `is_superuser`**. That
-is what keeps it reachable on a cluster rebuilt from nothing: the roster needs no
-database and no cache, so an admin can arrive with `MembershipCache` empty and
-every member locked out, and press the button that fills it. The recovery action
-sits behind the one door that does not depend on the thing being recovered.
+`user.is_cluster_admin` — a live roster read, **or** `is_superuser`. The roster
+clause is what keeps it reachable on a cluster rebuilt from nothing: the roster
+needs no database and no cache, so an admin can arrive with `MembershipCache`
+empty and every member locked out, and press the button that fills it. The
+recovery action sits behind the one door that does not depend on the thing being
+recovered.
+
+The superuser clause covers the case one step worse — the roster unreadable, or
+the service session lapsed — where the break-glass `did:local:admin` is the only
+way in. It is never on the roster, so without the clause it opens Django's
+`/admin/` and not the page holding the recovery button.
+
+**A superuser sees; the roster acts.** That is the whole safety argument, and it
+is structural rather than a policy: reconcile spends the shared read token and
+needs no authority, while approve, revoke, tier and roster edits are signed by
+the acting admin's own registry session — so a superuser reaches this page and
+still cannot author a grant, because no Django flag can forge a DPoP proof. The
+split lives in the two spellings: `user.is_cluster_admin` (the property, asked
+by pages and the nav) carries the clause, `membership.is_cluster_admin(did)`
+(the function, asked by every write) does not.
 
 The two tables come from different places, and the difference is the point:
 applications are read live from the registry's index and are written by the
