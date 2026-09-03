@@ -386,5 +386,17 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
   writes the **roster** and calls `setSpaceAccess`; it must never grow a path
   that writes a grant or a revocation — those stay authored by the admin who
   decided, on their own session.
+- **A Corliss path that writes someone else's Workspace.** Same shape as the
+  bullet above, and worth stating before the surface exists rather than after.
+  A Workspace's authority is its creator's own DID, so only the creator can add
+  or remove its members — HappyView accepts member changes from the space
+  authority or an instance superuser and from nobody else, and invites and
+  managing-app policy both fail to widen that. The temptation, when "Boris asks
+  Jacob to add Scott" gets annoying, will be to route around it with the service
+  account. **That must not happen here.** The service session writes the roster
+  and calls `setSpaceAccess` on the *registry* space; it has no authority over a
+  member's Workspace and must not acquire one. The only sanctioned escape is a
+  HappyView instance superuser held by member-registry, evaluated behind its own
+  written decision — a registry-side change, never a Corliss credential.
 - **atproto's `http://localhost` development client.** Lowest fidelity exactly
   where this app is most likely to break — see the README.
