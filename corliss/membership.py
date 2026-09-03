@@ -1582,10 +1582,11 @@ REVOKE_MEMBER_NSID = "network.sharedcomputer.admin.revokeMember"
 # `MembershipRegistry.set_space_access`.
 SET_SPACE_ACCESS_NSID = "network.sharedcomputer.admin.setSpaceAccess"
 
-# The tier vocabulary, mirroring `scn-member-registry/src/tiers.ts` and the
-# TIERS table in `lua/approve_member.lua`. SCN owns these slugs; they are not
-# read from whatever enforces entitlements, which is the point — the registry
-# decides what a tier is, and the enforcer maps from the slug.
+# The tier vocabulary, mirroring the TIERS table in
+# `scn-member-registry/lua/approve_member.lua` — now the only other copy, since
+# that repo's `src/tiers.ts` went with its SPA. SCN owns these slugs; they are
+# not read from whatever enforces entitlements, which is the point — the
+# registry decides what a tier is, and the enforcer maps from the slug.
 #
 # Slugs rather than integers because `level-0` is the free tier and the most
 # common one. The reason is stated upstream in JavaScript terms (`0` is falsy,
