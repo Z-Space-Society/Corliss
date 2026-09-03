@@ -10,7 +10,7 @@ than trusting what the client sent.
 Issuing proves active membership; revoking proves the key belongs to the
 caller. A client may never aim the provisioner key at another member. That rule
 came out of the pre-strip HappyView Lua (`issue_key.lua`, `revoke_key.lua` in
-member-registry at `ad9b424^`) and survives the port unchanged, because the
+scn-member-registry at `ad9b424^`) and survives the port unchanged, because the
 thing it guards against did not change.
 
 Like `MembershipRegistry` in `corliss.membership` and back-channel logout in

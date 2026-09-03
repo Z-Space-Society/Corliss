@@ -624,12 +624,13 @@ def may_enter(did):
 # keeps the record answerable for who decided what.
 #
 # **Why the roster stays where it is**, rather than moving somewhere Corliss
-# could write it directly: three Lua procedures in member-registry gate every
-# registry write on this record, HappyView cannot read Corliss's database, and
-# grants are verified against who was a current admin *at the grant's time*
-# (`Roster.was_admin_at`). It is the registry's authorization mechanism, which
-# Corliss reads — not Corliss's own notion of admin. Keeping it outside Corliss
-# is also what leaves governance standing if Corliss is ever compromised.
+# could write it directly: three Lua procedures in scn-member-registry gate
+# every registry write on this record, HappyView cannot read Corliss's
+# database, and grants are verified against who was a current admin *at the
+# grant's time* (`Roster.was_admin_at`). It is the registry's authorization
+# mechanism, which Corliss reads — not Corliss's own notion of admin. Keeping
+# it outside Corliss is also what leaves governance standing if Corliss is ever
+# compromised.
 #
 # **Both halves of "make an admin" happen together.** The roster entry is the
 # authority; `is_staff` is a local mirror of it so that "admin" means one thing
@@ -1581,9 +1582,9 @@ REVOKE_MEMBER_NSID = "network.sharedcomputer.admin.revokeMember"
 # `MembershipRegistry.set_space_access`.
 SET_SPACE_ACCESS_NSID = "network.sharedcomputer.admin.setSpaceAccess"
 
-# The tier vocabulary, mirroring `member-registry/src/tiers.ts` and the TIERS
-# table in `lua/approve_member.lua`. SCN owns these slugs; they are not read
-# from whatever enforces entitlements, which is the point — the registry
+# The tier vocabulary, mirroring `scn-member-registry/src/tiers.ts` and the
+# TIERS table in `lua/approve_member.lua`. SCN owns these slugs; they are not
+# read from whatever enforces entitlements, which is the point — the registry
 # decides what a tier is, and the enforcer maps from the slug.
 #
 # Slugs rather than integers because `level-0` is the free tier and the most
@@ -1629,11 +1630,11 @@ APPLICATIONS_MAX_PAGES = 5
 # from here when the answer is yes. See that function for why deciding on an
 # unverified DID is safe.
 #
-# Corliss is a **public** client here, exactly as the SPA is: a client key and a
-# PKCE verifier binding the provision to the registration, no client secret.
-# Nothing needs one — the pair is single-use and short-lived — and not minting a
-# secret keeps this repo's answer to "what can this key do if it leaks" the same
-# as member-registry's: register a session for someone who has already
+# Corliss is a **public** client here, exactly as the SPA is: a client key and
+# a PKCE verifier binding the provision to the registration, no client secret.
+# Nothing needs one — the pair is single-use and short-lived — and not minting
+# a secret keeps this repo's answer to "what can this key do if it leaks" the
+# same as scn-member-registry's: register a session for someone who has already
 # authorised, which still cannot write anything the roster does not allow.
 
 

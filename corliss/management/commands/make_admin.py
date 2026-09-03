@@ -6,10 +6,10 @@
 
 **One "admin", two halves, written together.** Being an admin means a current
 entry on the registry's public roster — that is the authority, the thing
-member-registry's Lua checks before it will accept a grant — and `is_staff`,
-which opens Django's `/admin/`. This command writes both, and so does the
-button on `/manage/`; both call `membership.appoint_admin`. Making them one
-operation is the point: two ways to be an admin was one too many.
+scn-member-registry's Lua checks before it will accept a grant — and
+`is_staff`, which opens Django's `/admin/`. This command writes both, and so
+does the button on `/manage/`; both call `membership.appoint_admin`. Making
+them one operation is the point: two ways to be an admin was one too many.
 
 The roster is written **first**. If that fails nothing has changed, rather than
 leaving somebody holding a Django flag the registry has never heard of.

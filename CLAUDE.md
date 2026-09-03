@@ -8,8 +8,8 @@ Scope is **this repo only**. Cluster-wide concerns (containers, roles, the
 gateway's own config) belong to
 [zai-ops](https://github.com/Z-Space-Society/zai-ops); the membership lexicons
 and the Lua that serves them belong to
-[member-registry](https://github.com/Z-Space-Society/member-registry). Corliss
-consumes both and owns neither.
+[scn-member-registry](https://github.com/Z-Space-Society/scn-member-registry).
+Corliss consumes both and owns neither.
 
 **What Corliss is:** the cluster's session broker. It runs the ATProto OAuth
 client upstream and mints OIDC downstream — it *is* the bridge, not a client of
@@ -95,8 +95,8 @@ leave docs for "later":
   registry.** It would put HappyView in the login path, turning a registry
   outage into a login outage, and would take the recovery path down with it
   since `/manage/` and the reconcile button are reached by logging in.
-  member-registry's own invariant says the same thing from the other side: "Do
-  not introduce a HappyView dependency into the request path."
+  scn-member-registry's own invariant says the same thing from the other side:
+  "Do not introduce a HappyView dependency into the request path."
 
 ## The two registry doors, which must not merge
 
@@ -394,9 +394,10 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
   managing-app policy both fail to widen that. The temptation, when "Boris asks
   Jacob to add Scott" gets annoying, will be to route around it with the service
   account. **That must not happen here.** The service session writes the roster
-  and calls `setSpaceAccess` on the *registry* space; it has no authority over a
-  member's Workspace and must not acquire one. The only sanctioned escape is a
-  HappyView instance superuser held by member-registry, evaluated behind its own
-  written decision — a registry-side change, never a Corliss credential.
+  and calls `setSpaceAccess` on the *registry* space; it has no authority over
+  a member's Workspace and must not acquire one. The only sanctioned escape is
+  a HappyView instance superuser held by scn-member-registry, evaluated behind
+  its own written decision — a registry-side change, never a Corliss
+  credential.
 - **atproto's `http://localhost` development client.** Lowest fidelity exactly
   where this app is most likely to break — see the README.
