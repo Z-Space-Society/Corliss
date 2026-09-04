@@ -869,6 +869,13 @@ roster. Making one takes a cluster membership; changing one takes being in it.
   has not joined the roster for anything else. What would have caught it was a
   test with two members in one workspace; there was one with two workspaces and
   one member each, which passes either way.
+- **The Django admin can write a workspace the app never would.** `/admin/` is
+  superuser-only and fully editable here, unlike `MembershipCache` and
+  `OidcSession`, because a workspace is local data with no external source of
+  truth to contradict. It is still a door around "only a member changes a
+  workspace", and it can leave a roster the app refuses to leave, an empty one
+  included. That is the reason every action re-asks membership instead of
+  trusting the row it rendered from.
 - **The page reads before it edits.** The name and description render as text
   with an Edit control; the form is a panel opened by `:target`, with no script,
   the way `/manage/`'s member panels are. A form is what you get when you ask to

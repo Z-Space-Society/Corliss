@@ -1,8 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from django.db.models import OuterRef, Subquery
+from django.db.models import Count, OuterRef, Subquery
 
-from corliss.models import MembershipCache, OidcSession, User
+from corliss.models import MembershipCache, OidcSession, User, Workspace
 
 
 @admin.register(User)
@@ -165,3 +165,56 @@ class OidcSessionAdmin(admin.ModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+@admin.register(Workspace)
+class WorkspaceAdmin(admin.ModelAdmin):
+    """The workspaces members have made, and who is in them.
+
+    **Fully editable, unlike the two pages above, and the difference is the
+    point.** `MembershipCache` is read-only because the registry owns it and an
+    edit here would be reverted; `OidcSession` because it is a belief about
+    somebody else's state. A workspace is local Corliss data with no external
+    source of truth to contradict, so an operator changing one here is not
+    fighting anything.
+
+    That does make this the one door around the app's own rule that only a
+    member of a workspace can change it. It is the same shape as every other
+    superuser-only page, and it is why `/workspaces/` re-asks membership on
+    every action rather than trusting a row: this page can produce a roster the
+    app's own surfaces would never have written, including an empty one.
+    """
+
+    list_display = ("name", "member_count", "created_by", "created_at")
+    search_fields = ("name", "description", "members__username", "members__did")
+    ordering = ("name",)
+
+    # The two-pane widget rather than a multi-select: the roster is the reason
+    # to open this page, and a scrolling list where ctrl-click is the only way
+    # to keep an existing selection is how somebody empties one by accident.
+    filter_horizontal = ("members",)
+
+    # `created_by` reads by handle, and UserAdmin already declares the
+    # `search_fields` this needs.
+    autocomplete_fields = ("created_by",)
+
+    # `created_at` is `auto_now_add`. `automerge_root` is reserved for the notes
+    # editor and is written by nothing yet: an editable box invites filling it
+    # in with a value no code reads, so it is shown (blank is the honest state)
+    # and not offered.
+    readonly_fields = ("automerge_root", "created_at")
+
+    def get_queryset(self, request):
+        """Count the roster for the list column.
+
+        Safe to annotate directly here, and worth saying why, because the same
+        line is a bug one file over: `views.workspaces` filters by `members` to
+        find the asking member's own workspaces, and a `Count` over that
+        already-filtered join counts the filter rather than the roster. Nothing
+        filters this queryset, so the join is the whole roster.
+        """
+        return super().get_queryset(request).annotate(member_count=Count("members"))
+
+    @admin.display(description="Members", ordering="member_count")
+    def member_count(self, obj):
+        return obj.member_count
