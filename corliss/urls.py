@@ -61,6 +61,13 @@ urlpatterns = [
     # The member's own name and email. Signed-in rather than member-gated —
     # see `views.account`.
     path("account/", views.account, name="account"),
+    # The workspaces a member is in. The first family here keyed by an id rather
+    # than a fixed string, because a workspace has no name the URL could use: two
+    # groups may pick the same one. The literal route is listed before the
+    # converter so `new` can never be read as a workspace to open.
+    path("workspaces/", views.workspaces, name="workspaces"),
+    path("workspaces/new", views.workspace_new, name="workspace_new"),
+    path("workspaces/<int:pk>/", views.workspace_edit, name="workspace_edit"),
     path("api/", views.api, name="api"),
     # The cluster console. Gated on the atproto admin roster, not on a Django
     # flag — see `views.manage`.

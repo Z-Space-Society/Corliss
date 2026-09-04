@@ -1,11 +1,11 @@
 """Corliss's data model — deliberately small, all in one module.
 
-Five models: the DID-keyed `User` everything references, the server-side
+Six models: the DID-keyed `User` everything references, the server-side
 atproto token store, the OIDC provider's short-lived auth codes, the record of
-which relying parties hold a session, and the membership cache. The import
-contract is `from corliss.models import ...`; if this file ever grows unwieldy
-it can become a `models/` package re-exporting the same names without touching
-callers or the database.
+which relying parties hold a session, the membership cache, and the workspace a
+group of members shares. The import contract is `from corliss.models import
+...`; if this file ever grows unwieldy it can become a `models/` package
+re-exporting the same names without touching callers or the database.
 """
 
 from django.conf import settings
@@ -112,7 +112,7 @@ class User(AbstractUser):
     def may_enter(self):
         """GATE, as an attribute — so the nav can offer only what it can open.
 
-        The same question `views.require_membership` asks, exposed here for the
+        The same question `views.membership_denial` asks, exposed here for the
         one caller that is not a view: a template deciding whether to show a
         link. Offering a member-only page to someone the gate will bounce is a
         promise the next click breaks.
@@ -174,6 +174,22 @@ class User(AbstractUser):
         if self.has_pending_application:
             return "pending"
         return "none"
+
+    def get_bsky_url(self):
+        """This member's profile on bsky.app.
+
+        **Addressed by DID, never by handle.** bsky.app takes either, but a
+        handle is mutable, so one written into a link goes stale the moment the
+        member changes theirs and lands on a 404 or, worse, on whoever holds it
+        now. The console's application queue builds the same link the same way
+        and for the same reason.
+
+        Deliberately not named `get_absolute_url`. That name means "where this
+        object lives on *this* site" and Django acts on it: the admin links to
+        it and `redirect(obj)` resolves it. This points somewhere else entirely,
+        at a service that merely knows the same DID.
+        """
+        return f"https://bsky.app/profile/{self.did}"
 
     def touch_last_seen(self, *, save=True):
         """Stamp the current time as this member's last activity."""
@@ -406,3 +422,54 @@ class MembershipCache(models.Model):
     def __str__(self):
         state = f"active {self.tier}" if self.active else "revoked"
         return f"MembershipCache({self.did}, {state})"
+
+
+class Workspace(models.Model):
+    """A named place a group of members shares.
+
+    **Membership is the whole authorization rule.** Everyone in `members` can
+    rename the workspace and add or remove anybody, including the creator and
+    including themselves. There are no roles here and no owner clause. The
+    creator is added to `members` when the workspace is made, because otherwise
+    they could not edit what they just created.
+
+    That flatness is what `views._workspace_for_member` enforces, and it is why
+    the last member cannot be removed: an empty roster is a workspace nobody can
+    ever open again.
+
+    Getting in requires a cluster membership, since `@member_required` gates
+    every view and `add_member` re-asks `membership.may_enter`. Past that the
+    two are separate questions. Being a cluster member puts you in no
+    workspace; being in a workspace is a fact this table holds and the registry
+    knows nothing about.
+    """
+
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+
+    # `related_name` because `user.workspaces` is the list view's entire query,
+    # and `workspace_set` would make the one line anybody reads say less.
+    members = models.ManyToManyField("User", blank=True, related_name="workspaces")
+
+    # Reserved for the notes editor: the automerge document this workspace's
+    # notes hang off. Blank until that lands, because a required column here
+    # would mean no workspace could be created at all before it does.
+    automerge_root = models.CharField(max_length=255, blank=True, default="")
+
+    # Who made it, for the record. Nullable and `related_name="+"`: authorship is
+    # history rather than authority. It grants nothing that being in `members`
+    # does not, so nothing needs to look it up from the user's side.
+    created_by = models.ForeignKey(
+        "User",
+        blank=True,
+        null=True,
+        related_name="+",
+        on_delete=models.PROTECT,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block title %}New workspace · SCN{% endblock %}
+
+{% block content %}
+<div class="account-view">
+  <h1>New workspace</h1>
+  <p class="page-text"></p>
+
+  <div class="card">
+    <form method="post" class="stacked-form" action="{% url 'workspace_new' %}">
+      {% csrf_token %}
+      {{ form }}
+      <button type="submit" class="btn-primary">Create workspace</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

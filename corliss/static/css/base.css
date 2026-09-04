@@ -397,6 +397,19 @@ a {
   margin-top: 28px;
 }
 
+/* A card introduced by a line of page copy, with no .section-title between them
+   to supply the gap. .page-text's 4px is sized for a paragraph followed by
+   another paragraph; a card is a different kind of object and has to sit clear
+   of the sentence that introduces it.
+
+   The two selectors land on the same 20px because adjacent margins collapse: the
+   .alert case keeps its own 14px bottom margin, and max(14, 20) is what shows.
+   So a page reads the same whether or not there is a notice on it. */
+.page-text + .card,
+.alert + .card {
+  margin-top: 20px;
+}
+
 .card__title {
   font-size: 15px;
   font-weight: 600;
@@ -521,6 +534,30 @@ a {
   display: flex;
   justify-content: flex-end;
   margin: -12px -8px 20px 0;
+}
+
+/* The way out of a panel, in the card's top-right corner: quiet, because it is
+   the escape from the card rather than a control the card is for. Same size and
+   colour as a link inside .hint-text, so the understated links on a page look
+   like one thing.
+
+   Out of flow, and that is the difference from .card__corner above. The lock
+   takes a flow row precisely so it can never land on the console card's error
+   line; here the top of the card is one short left-aligned field label, nothing
+   else can arrive there, and a flow row would push the first field down by the
+   height of a link that is not part of the form. `top`/`right` match .card's
+   padding so it sits level with that first label. */
+.card--dismissable {
+  position: relative;
+}
+
+.card__dismiss {
+  position: absolute;
+  top: 28px;
+  right: 28px;
+  font-size: 12px;
+  color: oklch(0.68 0.15 255);
+  text-decoration: none;
 }
 
 .lock-form {
@@ -1007,6 +1044,15 @@ a.btn-primary {
 
 .data-table__muted {
   color: var(--text-muted);
+}
+
+/* A count rather than a label, so it centres under its heading. Left-aligned, a
+   column of single digits sits against the edge of a cell sized by the word
+   "Members" above it and reads as stray text; centred, the numbers line up as
+   the column they are. On the heading too, so the two stay together. */
+.data-table__count,
+th.data-table__count {
+  text-align: center;
 }
 
 /* A second line under a cell's primary text — today the member's name under
@@ -1496,4 +1542,148 @@ a.btn-primary {
 
 .key-fill__input::placeholder {
   color: var(--text-disabled);
+}
+
+/* --- Rendered forms ------------------------------------------------------- */
+
+/* For the pages whose template says `{{ form }}` and nothing else. Django's div
+   renderer emits one `<div>` per field holding a `<label>`, a `<ul
+   class="errorlist">` when there is something wrong, and the widget; these rules
+   are the whole of what makes that markup wear this site's clothes, so a new
+   form needs no template work at all.
+
+   The border sits on the control rather than on a wrapper, which is where
+   .input-row puts it. That wrapper is a vertically centred flex row built around
+   something one line tall, and it cannot hold a textarea; moving the border in
+   is what lets one rule cover both, and it is what the renderer's markup offers
+   to style anyway.
+
+   Scoped to the class rather than written against `form`, because the console
+   and /api/ are full of hand-written row-forms sitting in table cells, and they
+   are a different kind of thing that must not pick these up. */
+.stacked-form > div {
+  margin-bottom: 14px;
+}
+
+.stacked-form label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: oklch(0.82 0.006 255);
+}
+
+.stacked-form input,
+.stacked-form textarea {
+  width: 100%;
+  background: var(--inset);
+  border: 1px solid var(--border-input);
+  border-radius: 9px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.5;
+  outline: none;
+  padding: 12px 14px;
+}
+
+.stacked-form input:focus,
+.stacked-form textarea:focus {
+  border-color: var(--accent);
+}
+
+.stacked-form textarea {
+  display: block;
+  resize: vertical;
+}
+
+.stacked-form ::placeholder {
+  color: var(--text-disabled);
+}
+
+/* Django's own <ul class="errorlist">, made to read like the .alert it would
+   otherwise duplicate: quieter, because it sits against the field it is about
+   rather than at the top of the page speaking for the whole form. Left where the
+   renderer puts it, above the control, so a screen reader meets the problem
+   before the box it belongs to. */
+.stacked-form .errorlist {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* --- Workspaces ----------------------------------------------------------- */
+
+/* A link wearing the row control's clothes, for the controls on this site that
+   go somewhere rather than posting something: "New workspace" opens a page,
+   "Edit" opens the panel below. Only the underline needs undoing, since
+   .btn-row supplies the rest and `a { color: inherit }` means the colour is
+   already right. */
+a.btn-row {
+  text-decoration: none;
+}
+
+/* A workspace reads before it edits: the name and description are text, and the
+   form is a panel opened by `:target`. Same mechanism as the console's member
+   panels, with no script: a control that needs JS to open is a control that
+   does not open when the JS does not load.
+
+   Exactly one of the two is ever on screen, so their order in the markup is
+   free, which is what lets the form come first. CSS can hide what *follows* a
+   `:target` and not what precedes it, and that adjacency is the whole trick. */
+.workspace-panel {
+  display: none;
+}
+
+.workspace-panel:target,
+.workspace-panel.is-open {
+  display: block;
+}
+
+.workspace-panel:target + .workspace-read,
+.workspace-panel.is-open + .workspace-read {
+  display: none;
+}
+
+/* The description and its one control share a line, the control on the right
+   edge. `baseline` rather than `center` or `flex-start`, because the thing to
+   line up is the two pieces of text: a description long enough to wrap would
+   centre its whole block against a button and leave the button floating beside
+   the middle of a paragraph, where baseline keeps it level with the first line
+   however many there are. */
+.workspace-read {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+/* The description takes the slack and the button keeps its size, so the button
+   sits on the right edge whether the description is a sentence or a paragraph. */
+.workspace-read .page-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.workspace-read__edit {
+  flex-shrink: 0;
+}
+
+/* Two columns: who, and the one control that row carries. A table of two
+   auto-width columns splits its slack between them, which leaves the button
+   floating just past the longest handle rather than on an edge. Handing the
+   name column all of the slack puts the control where a row's action belongs,
+   and keeps it in one vertical line down the table however long the handles
+   above and below it run. */
+.data-table--roster th:first-child,
+.data-table--roster td:first-child {
+  width: 100%;
+}
+
+.data-table--roster td:last-child {
+  text-align: right;
 }

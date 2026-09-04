@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+
+{% block title %}{{ workspace.name }} · SCN{% endblock %}
+
+{% block content %}
+{% comment %}
+The id the edit panel closes to. Same trick `/manage/`'s member panels use: a
+`:target` panel is dismissed by pointing the fragment at some other id on the
+page, and this one is the page itself, so closing does not scroll anywhere.
+{% endcomment %}
+<div class="account-view console-view" id="workspace">
+  <h1>{{ workspace.name }}</h1>
+
+  {% comment %}
+  The two panels below are the same two facts read and written, and exactly one
+  of them is on screen at a time, so their order here is not their order on the
+  page and does not matter. The form is first because CSS can hide what
+  *follows* a `:target` and not what precedes it.
+
+  `form.errors` holds the panel open on a failed save. The fragment does not
+  survive a POST, so without it a refused name would close the form and take the
+  message with it.
+  {% endcomment %}
+  <div class="workspace-panel{% if form.errors %} is-open{% endif %}" id="edit">
+    <div class="card card--dismissable">
+      {% comment %}
+      Cancel sits in the corner rather than under Save. Below the primary button
+      it read as a second thing to press; up here it reads as the way out of a
+      panel, which is what it is. Out of flow, so the form starts exactly where
+      it would if the link were not there.
+      {% endcomment %}
+      <a class="card__dismiss" href="#workspace">Cancel</a>
+      <form method="post" class="stacked-form"
+            action="{% url 'workspace_edit' pk=workspace.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save">
+        {{ form }}
+        <button type="submit" class="btn-primary">Save</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="workspace-read">
+    {% if workspace.description %}
+      <p class="page-text">{{ workspace.description|linebreaksbr }}</p>
+    {% else %}
+      <p class="page-text">No description yet.</p>
+    {% endif %}
+    <a class="btn-row workspace-read__edit" href="#edit">Edit</a>
+  </div>
+
+  <h2 class="section-title">Members</h2>
+
+  <div class="card">
+    {% comment %}
+    Messages sit in this card rather than at the top of the page, because this
+    card is where every action that can produce one lives. Renaming produces
+    none: the heading above already shows what it changed.
+    {% endcomment %}
+    {% if notice %}<p class="alert alert--notice" role="status">{{ notice }}</p>{% endif %}
+    {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
+
+    {% comment %}
+    Everyone here can do everything on this page, so the table carries no roles
+    column and no owner marker. There is nothing per-row to say except who,
+    and the one control each row needs.
+
+    The handle is what a reader sees; the DID it stands for is on the cell's
+    title. That is the rule everywhere on this site: handles are mutable and
+    display-only, and a table of DIDs is a table nobody can read. The remove
+    button posts the DID for the same reason: a handle that changed between
+    this render and the click would remove the wrong person, or nobody.
+
+    The handle links out to the member's profile, the way the console's
+    application queue does: adding or removing somebody means knowing who they
+    are, and the alternative is retyping a handle into another tab. No `title`
+    on the link itself, so the cell's DID tooltip still answers for the whole
+    cell.
+    {% endcomment %}
+    <div class="table-scroll">
+      <table class="data-table data-table--roster">
+        <thead>
+          <tr>
+            <th>Member</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for member in members %}
+            <tr>
+              <td class="data-table__handle" title="{{ member.did }}">
+                <a class="handle-link handle-link--out"
+                   href="{{ member.get_bsky_url }}"
+                   target="_blank" rel="noopener">{{ member.username }}</a>
+                {% if member.display_name %}
+                  <div class="data-table__sub">{{ member.display_name }}</div>
+                {% endif %}
+              </td>
+              <td>
+                {% comment %}
+                The sole member's control is rendered disabled rather than
+                dropped, the same way `/manage/`'s admin buttons are when the
+                service session is missing: a button that is absent is a
+                mystery, and one that is present and refuses states the rule.
+                The view refuses it too, so this is the explanation and not
+                the check.
+
+                Confirmed for somebody else because it takes their access away,
+                and confirmed differently for yourself because it takes yours.
+                You would need one of the others to put you back.
+                {% endcomment %}
+                {% if members|length == 1 %}
+                  <button type="button" class="btn-row" disabled
+                          title="A workspace needs someone in it. Add another member first.">Leave</button>
+                {% else %}
+                  <form method="post" class="row-form"
+                        action="{% url 'workspace_edit' pk=workspace.pk %}"
+                        onsubmit="return confirm('{% if member.pk == user.pk %}Leave {{ workspace.name|escapejs }}? Someone still in it would have to add you back.{% else %}Remove {{ member.username|escapejs }} from {{ workspace.name|escapejs }}?{% endif %}');">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="remove_member">
+                    <input type="hidden" name="did" value="{{ member.did }}">
+                    <button type="submit" class="btn-row btn-row--danger">
+                      {% if member.pk == user.pk %}Leave{% else %}Remove{% endif %}
+                    </button>
+                  </form>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% comment %}
+    The add field, behind the rule, the way the console's invite field sits
+    below its roster.
+
+    `<datalist>` is the browser's own typeahead: it filters as the handle is
+    typed, works from the keyboard, and needs no script, which is what lets
+    this page keep base.html's rule that only /api/ loads JS. It lists cluster
+    members not already here, so it offers exactly what the view will accept;
+    the view re-asks both questions anyway, because a datalist is a convenience
+    and a POST can carry anything.
+    {% endcomment %}
+    <form method="post" class="row-form row-form--add"
+          action="{% url 'workspace_edit' pk=workspace.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="add_member">
+      <input type="text" name="handle" class="text-input" list="workspace-candidates"
+             placeholder="handle to add" aria-label="Handle to add"
+             autocomplete="off" required>
+      <datalist id="workspace-candidates">
+        {% for candidate in candidates %}
+          <option value="{{ candidate.username }}">{{ candidate.display_name }}</option>
+        {% endfor %}
+      </datalist>
+      <button type="submit" class="btn-row">Add</button>
+    </form>
+
+    <p class="hint-text">Only cluster members can be added, and only ones who
+    have signed in here at least once. There is nobody to add before that.</p>
+  </div>
+</div>
+{% endblock %}

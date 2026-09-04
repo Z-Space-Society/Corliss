@@ -18,7 +18,7 @@ No script. The whole page is one form and a submit button; there is nothing
 here CSS cannot do, and every other member-facing surface degrades the same way.
 {% endcomment %}
 
-{% block title %}Account — SCN{% endblock %}
+{% block title %}Account · SCN{% endblock %}
 
 {% block content %}
 <div class="account-view">
@@ -30,33 +30,19 @@ here CSS cannot do, and every other member-facing surface degrades the same way.
   {% if notice %}
     <p class="alert alert--notice" role="status">{{ notice }}</p>
   {% endif %}
-  {% if error %}
-    <p class="alert" role="alert">{{ error }}</p>
-  {% endif %}
 
   <h2 class="section-title">You</h2>
   <div class="card">
-    <form method="post" action="{% url 'account' %}">
+    {% comment %}
+    `{{ form }}` and nothing else. The labels, the widgets and the per-field
+    errors are `AccountForm`'s to describe; `.stacked-form` in base.css is what
+    makes Django's rendering wear this site's clothes. There is no page-level
+    error box any more because there is no page-level error: a bad address is
+    the email field's problem and belongs against the email field.
+    {% endcomment %}
+    <form method="post" class="stacked-form" action="{% url 'account' %}">
       {% csrf_token %}
-
-      <div class="field-label-row">
-        <label for="account-display-name">Name</label>
-      </div>
-      <div class="input-row">
-        <input type="text" id="account-display-name" name="display_name"
-               maxlength="255" value="{{ display_name }}"
-               placeholder="how you'd like to be listed">
-      </div>
-
-      <div class="field-label-row">
-        <label for="account-email">Email</label>
-      </div>
-      <div class="input-row">
-        <input type="email" id="account-email" name="email"
-               maxlength="254" value="{{ email }}"
-               placeholder="you@example.com">
-      </div>
-
+      {{ form }}
       <button type="submit" class="btn-primary">Save</button>
     </form>
 

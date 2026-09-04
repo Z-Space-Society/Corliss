@@ -84,10 +84,13 @@
         {% endcomment %}
         {% if user.is_authenticated %}
           {% if user.may_enter %}
+            <a class="nav__item" href="{% url 'workspaces' %}">Workspaces</a>
             <a class="nav__item" href="{% url 'api' %}">API</a>
           {% else %}
             <span class="nav__item nav__item--closed" aria-disabled="true"
-                  title="Members only — a cluster admin has to let you in first">API</span>
+                  title="Members only. A cluster admin has to let you in first.">Workspaces</span>
+            <span class="nav__item nav__item--closed" aria-disabled="true"
+                  title="Members only. A cluster admin has to let you in first.">API</span>
           {% endif %}
         {% endif %}
 
@@ -121,7 +124,7 @@
                 {% else %}
                   <span class="nav__dropdown-item nav__dropdown-item--closed"
                         aria-disabled="true"
-                        title="Members only — a cluster admin has to let you in first">Open WebUI</span>
+                        title="Members only. A cluster admin has to let you in first.">Open WebUI</span>
                 {% endif %}
                 <div class="nav__dropdown-rule"></div>
               {% endif %}

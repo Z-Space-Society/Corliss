@@ -1,4 +1,4 @@
-# Corliss — ATProto login, OIDC out
+# Corliss: ATProto login, OIDC out
 
 Corliss lets people sign in with their **ATProto handle** (Bluesky et al.)
 instead of yet another account, and re-exposes that session to your own
@@ -20,19 +20,20 @@ that pushes grants and revocations to it. See
 
 ## Layout
 
-Corliss is a **single Django app**. Five models, one URL table; the protocol
+Corliss is a **single Django app**. Six models, one URL table; the protocol
 halves are plain modules, not sub-apps. A future subsystem earns its own app
 only by being genuinely standalone.
 
 | Module | Responsibility |
 | ------ | -------------- |
-| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `OidcSession`, `MembershipCache`. |
+| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `OidcSession`, `MembershipCache`, `Workspace`. |
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
 | `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
 | `corliss/membership.py` | The whole registry relationship: consuming its membership push, reconciling the cache against it, reading the application queue, writing grants and revocations as the acting admin, and resolving whether a DID is currently a member. |
 | `corliss/litellm.py` | Provisioning members into LiteLLM and issuing their API keys — the only place a gateway credential is used (same one-relationship-one-module rule). |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
+| `corliss/forms.py` | The two `ModelForm`s, for `/account/` and workspaces. Rendered as `{{ form }}`; the console's row-forms stay hand-written, see below. |
 | `corliss/signing.py` | Loads the signing keys, builds the JWKS. |
 | `corliss/version.py` | Resolves which build is running, for the footer's stamp (see [Releases](#releases)). |
 
@@ -82,7 +83,7 @@ session — offered to cluster admins because that is who would have those
 credentials, not because Corliss grants anything by linking them. Each can be
 left blank, which simply hides what it feeds. The `LITELLM_*` trio is what makes
 `/api/` able to issue keys rather than only describe them — see
-[API keys](#api-keys--api).
+[API keys](#api-keys-api).
 
 The nav's admin links answer to **one authority**: the atproto admin roster
 (`user.is_cluster_admin`). Making someone an admin writes the roster entry *and*
@@ -94,7 +95,7 @@ it, re-derived at every login so the two cannot drift.
 so `--superuser` has to be asked for by name; plain `is_staff` opens the admin
 index with no model permissions at all, which is what made merging it
 affordable. It does open `/manage/` and `/systems/`, for the break-glass account
-— see [The console](#the-console--manage) for why that costs nothing. What it
+— see [The console](#the-console-manage) for why that costs nothing. What it
 never does is grant `is_staff`'s authority in reverse: `is_staff` stays a mirror
 of the roster, and nothing reads it to decide who is an admin. See
 [Membership](docs/membership.md).
@@ -309,6 +310,9 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Home | `/` |
 | Account — your own name and email (signed in) | `/account/` |
 | API keys — issue, revoke, usage (members) | `/api/` |
+| Workspaces — the ones you are in (members) | `/workspaces/` |
+| New workspace (members) | `/workspaces/new` |
+| A workspace — rename, add/remove members (its own members) | `/workspaces/<id>/` |
 | Login / logout | `/auth/login`, `/auth/logout` |
 | ATProto callback | `/auth/oauth/callback` |
 | ATProto client metadata (**is** the `client_id`) | `/auth/client-metadata.json` |
@@ -342,7 +346,7 @@ Discovery and JWKS sit at the root deliberately: an OIDC issuer of
 `https://example.com` must serve its discovery document at
 `https://example.com/.well-known/openid-configuration`.
 
-## Membership — who is allowed in
+## Membership: who is allowed in
 
 Corliss authenticates people; it does not decide who may use the cluster. That
 lives in an external registry (append-only grant and revocation records, held in
@@ -364,7 +368,7 @@ Three properties carry the whole design, and each is load-bearing:
 envelope, applying and the admin queue, deciding, reconciliation, why an admin's
 login differs from the first network call onwards, GATE, and back-channel logout.
 
-## API keys — `/api/`
+## API keys: `/api/`
 
 Members reach the cluster's models directly over HTTP, with a key they issue
 themselves. Corliss holds the credential that mints those keys; the page shows
@@ -482,7 +486,7 @@ Reads the cache, never the registry, which keeps the two repairs separable. On a
 rebuilt cluster run `reconcile_membership` first: that re-derives the cache from
 the registry, this re-derives LiteLLM from the cache.
 
-## The console — `/manage/`
+## The console: `/manage/`
 
 Members, admins, and reconciliation, for cluster admins. Gated on
 `user.is_cluster_admin` — a live roster read, **or** `is_superuser`. The roster
@@ -612,7 +616,7 @@ Two edits are refused outright: removing the last current admin, and removing th
 service account. The first would end every approve and revoke with no way back;
 the second removes the identity that performs these writes.
 
-## Systems — `/systems/`
+## Systems: `/systems/`
 
 What the cluster is made of and whether each part is answering, for cluster
 admins. Gated like `/manage/`, and 404 rather than 403 for the same reason: a
@@ -740,7 +744,7 @@ buy a real credential's worth of complexity to learn what eleven bytes on a
 socket already prove. If Django's cache is ever pointed at Redis, do it
 deliberately; do not quietly adopt this setting for it.
 
-## About — `/about/`
+## About: `/about/`
 
 Three prose pages: what the Shared Computer Network is, what it runs on, and who
 builds it. `views.about`, `views.about_system`, `views.about_team` — each is a
@@ -781,7 +785,35 @@ builds it. `views.about`, `views.about_system`, `views.about_team` — each is a
   rather than derived from `request.resolver_match`, so the value is visible
   where the page is chosen.
 
-## Name and email — `/account/`
+## Forms
+
+There are exactly two form classes, in [`corliss/forms.py`](corliss/forms.py),
+and the line between them and everything else is worth stating.
+
+- **A `ModelForm` is for text a person types into a model.** `/account/`'s name
+  and email, and a workspace's name and description. The length limit, the
+  required-ness, the validation and the redisplay-with-errors all come from the
+  model instead of from hand-written checks that can drift from it.
+- **A row-form is an action and an identifier in a table cell.** Approve, revoke,
+  set tier, add member: `{% csrf_token %}`, a hidden `action`, a hidden DID, a
+  button. Those stay hand-written HTML read with `request.POST.get(...)`, and
+  the existence of `forms.py` is not an invitation to convert them. There is no
+  model behind them and nothing for a form class to validate.
+- **The templates render `{{ form }}` and nothing else.** Django's div renderer
+  emits the label, the errors and the widget per field; `.stacked-form` in
+  base.css is what makes that markup match this site. So a new form is a class
+  and one line of template, with no per-field HTML and no partial for two pages
+  to keep in step. Per-field rendering is real Django and was the first cut here,
+  but it is the most verbose of the options and it earned a file that existed
+  only to avoid writing ten lines twice.
+- **`.stacked-form` puts the border on the control, not on a wrapper.** That is
+  the one deviation from `.input-row`, which is a vertically centred flex row
+  built around something one line tall and therefore cannot hold a textarea. One
+  rule covering both is worth the difference, and the renderer's markup gives
+  nothing else to hang it on. `.input-row` stays for the hand-written fields on
+  `/`, `/auth/login` and `/api/`.
+
+## Name and email: `/account/`
 
 A member is keyed by DID and *named* by four things, and only two of them are
 theirs to set. The handle and the DID come from atproto and Corliss has no say
@@ -823,10 +855,75 @@ is exactly the person an admin is about to read a name for.
   console reads names off the `User` row. Every surface that shows one falls
   back to the handle rather than rendering an empty space.
 
+## Workspaces: `/workspaces/`
+
+A workspace is a named place a few people share: a name, a description, and a
+roster. Making one takes a cluster membership; changing one takes being in it.
+
+- **The page reads before it edits.** The name and description render as text
+  with an Edit control; the form is a panel opened by `:target`, with no script,
+  the way `/manage/`'s member panels are. A form is what you get when you ask to
+  change something, not the default way to look at something. Exactly one of the
+  two panels is on screen at a time, which is why the form comes *first* in the
+  markup: CSS can hide what follows a `:target` and not what precedes it. A
+  refused name holds the panel open through `form.errors`, since the fragment
+  does not survive the POST.
+- **The sole member's Leave button is disabled, not absent.** Same reasoning as
+  the console's admin controls without a service session: an absent button is a
+  mystery, and a present one that states the rule is an explanation. The view
+  refuses it as well, so the disabled control is not the check.
+- **Renaming leaves no notice; member changes do.** The heading is the feedback
+  for a rename, and a box saying "Saved." over the name it just changed says
+  nothing the page does not. The messages that remain sit in the Members card,
+  which is where every action that can produce one now lives.
+- **Workspace membership is the whole authorization rule, and it is flat.**
+  Everyone in a workspace can rename it and add or remove anybody, themselves
+  and the creator included. `created_by` is history, not authority, and nothing
+  reads it to decide anything. There are no roles here because there is nothing
+  yet that two roles would answer differently, and a permission system is on the
+  rejected list for the same reason it is there for tiers.
+- **A workspace you are not in answers 404, not 403.** `_workspace_for_member`
+  is a single `get_object_or_404(..., members=request.user)`, so the check *is*
+  the lookup and there is no way to write the second without the first. 403 on a
+  bare id would make ids enumerable, and the list never offered you that one.
+- **This is not a fifth access level.** All three views are `@member_required`;
+  being in the workspace is a second question asked inside them, the same shape
+  as a tier deciding what a member on `/api/` receives.
+- **Cluster membership and workspace membership are separate questions**, and
+  they touch in exactly one place: `add_member` re-asks `membership.may_enter`
+  and refuses somebody GATE would refuse. Without it, a workspace would be a way
+  to hand out standing the cluster never granted. Being a cluster member still
+  puts you in no workspace.
+- **The creator is added to `members` on create.** Without it they would be
+  locked out of what they had just made, on the redirect, because `created_by`
+  grants nothing.
+- **The last member cannot be removed.** An empty roster is a workspace nobody
+  can ever open again, not even a cluster admin, because membership is the only
+  key. Same failure `membership.dismiss_admin` refuses for the roster. Leaving
+  one you are not alone in is fine, and lands on the list rather than on the
+  page you can no longer open.
+- **Adding takes a handle; removing posts a DID.** A handle is what a person can
+  type and read, and it is matched against local `User` rows only. This never
+  resolves one at the network, so someone who has never signed in here cannot be
+  added. Removal has a rendered row to post from, and a handle that changed
+  between the render and the click would remove the wrong person or nobody.
+- **The handle field autocompletes from a `<datalist>`, not from script.** It is
+  the browser's own typeahead: it filters as you type, works from the keyboard
+  and needs no JS, which is what lets this page keep the rule that only `/api/`
+  loads any.
+  It lists active cluster members not already in the workspace, read from the
+  cache and the user table with no network call, so the page renders when the
+  registry is down. The view re-asks both questions regardless: a datalist is a
+  convenience, and a POST can carry anything.
+- **`automerge_root` is blank and unused.** It is where the notes editor will
+  hang this workspace's document. Declared `blank=True` rather than required,
+  because a required column with no default would mean no workspace could be
+  created at all before that lands.
+
 ## The nav
 
-Left of the divider: the brand, then **About**. Right of it: **API**, **Tools**,
-**Manage** for admins, then the account chip.
+Left of the divider: the brand, then **About**. Right of it: **Workspaces**,
+**API**, **Tools**, **Manage** for admins, then the account chip.
 
 **Tools has two groups, and they are not one list with a rule in it.** *Hosted
 apps* run on this cluster and answer to GATE — Open WebUI is closed to a

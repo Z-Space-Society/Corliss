@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Workspaces · SCN{% endblock %}
+
+{% block content %}
+<div class="account-view console-view">
+  <h1>Workspaces</h1>
+  <p class="page-text">A Workspace is where you, and select other members, can
+    share notes, files, and other data.  Everyone who is a member of a Workspace
+    has full read/write access to the full Workspace. Only your Workspaces are
+    shown in this table.
+  </p>
+
+  {% if notice %}<p class="alert alert--notice" role="status">{{ notice }}</p>{% endif %}
+
+  <div class="card">
+    {% if workspaces %}
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th class="data-table__count">Members</th>
+              <th>Created</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for workspace in workspaces %}
+              <tr>
+                <td>
+                  <a href="{% url 'workspace_edit' pk=workspace.pk %}">{{ workspace.name }}</a>
+                  {% if workspace.description %}
+                    <div class="data-table__sub">{{ workspace.description|truncatechars:80 }}</div>
+                  {% endif %}
+                </td>
+                <td class="data-table__count">{{ workspace.member_count }}</td>
+                <td class="data-table__muted">{{ workspace.created_at|date:"Y-m-d" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="hint-text">You are not in a workspace yet. Make one, or ask
+      someone in an existing workspace to add you. Being a cluster member does
+      not put you in any of them.</p>
+    {% endif %}
+
+    {% comment %}
+    Below the list, behind the same rule the console's invite field sits behind:
+    it adds to what is above it, and an empty list is the one case where it is
+    the only thing in the card. A link rather than a form, because the create
+    page is somewhere to go and not a write to post.
+    {% endcomment %}
+    <div class="row-form row-form--add">
+      <a class="btn-row" href="{% url 'workspace_new' %}">New workspace</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -19,6 +19,10 @@ section below defines them and says when to reach for which.
 - `account`: the member's own name and email — the only place either is
   editable, and the reason login fills those fields rather than overwriting
   them. Signed-in, not member-gated: an applicant has a name too.
+- `workspaces` / `workspace_new` / `workspace_edit`: the named places members
+  share. Member-gated to make one; past that, being in a workspace is the whole
+  permission and it is flat — everyone in it can rename it and change who else
+  is. See the section above them for how that stays separate from GATE.
 - `api`: the member's own API keys — issue, list, revoke, and usage, read live
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
@@ -62,18 +66,17 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import ValidationError
-from django.core.validators import validate_email
-from django.db.models import OuterRef, Subquery
+from django.db.models import Count, OuterRef, Subquery
 from django.http import Http404, HttpResponseBadRequest, JsonResponse
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from corliss import atproto, health, litellm, membership, oidc, signing
-from corliss.models import AtprotoToken, MembershipCache, OidcAuthCode
+from corliss.forms import AccountForm, WorkspaceForm
+from corliss.models import AtprotoToken, MembershipCache, OidcAuthCode, Workspace
 
 User = get_user_model()
 
@@ -103,6 +106,11 @@ MANAGE_ERROR_SESSION_KEY = "corliss:manage_error"
 
 # The same hop for the account page's own save.
 ACCOUNT_NOTICE_SESSION_KEY = "corliss:account_notice"
+
+# And for a workspace's saves and roster edits, which redirect after posting for
+# the same reason the console does.
+WORKSPACE_NOTICE_SESSION_KEY = "corliss:workspace_notice"
+WORKSPACE_ERROR_SESSION_KEY = "corliss:workspace_error"
 
 # How far back /api/ reports usage. A month is what fits on the page and what
 # a member is actually asking when they look ("am I using a lot?").
@@ -801,53 +809,262 @@ def account(request):
     re-saves. An invalid email is the exception and re-renders in place, because
     a redirect would throw away what the member typed.
 
+    `AccountForm` owns the validation and the redisplay. It is one of two form
+    classes in this app, and this is why: the console's controls are an action
+    and an identifier, while these two fields are text a person types into a
+    model. Do not read the form class as an invitation to convert the row-forms.
+
     **Blank is a real answer, not a failure to fill something in.** Clearing
     either field re-arms `_upsert_member`'s fill, so the next login takes the
     PDS's value again — which is how a member undoes an edit without having to
     remember what the original was. The page says so.
     """
-    if request.method == "POST":
-        display_name = request.POST.get("display_name", "").strip()
-        email = request.POST.get("email", "").strip()
+    form = AccountForm(request.POST or None, instance=request.user)
 
-        if email:
-            try:
-                validate_email(email)
-            except ValidationError:
-                return render(
-                    request,
-                    "account.html",
-                    {
-                        "error": f"{email} is not an email address.",
-                        # Rendered back rather than re-read from the row, so the
-                        # member is correcting what they typed, not starting over.
-                        "display_name": display_name,
-                        "email": email,
-                    },
-                )
-
-        user = request.user
-        user.display_name = display_name
-        if email != user.email:
+    if request.method == "POST" and form.is_valid():
+        # `commit=False` and an explicit `update_fields`, rather than plain
+        # `form.save()`. Two reasons, and both are about the columns the form
+        # cannot see: `email_confirmed` is set here and is not a field anybody
+        # submits, and a full save would write back every other column off an
+        # instance loaded at the top of the request.
+        user = form.save(commit=False)
+        if "email" in form.changed_data:
             # A changed address is one the PDS never vouched for, so the
             # confirmation that came with the old one does not carry over.
             # `email_verified` in the id_token reads straight off this flag.
-            user.email = email
             user.email_confirmed = False
         user.save(update_fields=["display_name", "email", "email_confirmed"])
 
         request.session[ACCOUNT_NOTICE_SESSION_KEY] = "Saved."
         return redirect("account")
 
+    # A failed save falls through to here with the bound form, so the member is
+    # correcting what they typed rather than starting the page over.
     return render(
         request,
         "account.html",
         {
+            "form": form,
             "notice": request.session.pop(ACCOUNT_NOTICE_SESSION_KEY, None),
-            "display_name": request.user.display_name,
-            "email": request.user.email,
         },
     )
+
+
+# --- Workspaces: a named place a group of members shares --------------------
+#
+# Member-gated, because making one is something the cluster gives you. Past
+# that, **workspace membership is the whole authorization rule** and it is flat:
+# everyone in `members` can rename the workspace and change its roster, the
+# creator holds nothing extra, and there are no roles. `_workspace_for_member`
+# is the single place that rule is asked, and every action re-asks it there
+# rather than trusting the page that rendered the button.
+#
+# Cluster membership and workspace membership stay separate questions. GATE says
+# who may be here at all; this table says who is in what, and the registry knows
+# nothing about it. They meet in exactly one place: `add_member` refuses
+# somebody GATE would refuse, so a workspace cannot become a way around it.
+
+
+def _workspace_for_member(request, pk):
+    """The workspace, if the asker is in it. 404 otherwise.
+
+    404 rather than 403, for the reason `admin_required` gives: somebody outside
+    a workspace has no business learning that it exists, and the list never
+    offered it to them. A 403 on a bare id would turn this into an enumerator.
+
+    Membership *is* the permission, so this is both the lookup and the check:
+    one query, and no way to write the second without the first.
+    """
+    return get_object_or_404(Workspace, pk=pk, members=request.user)
+
+
+@member_required
+@require_http_methods(["GET"])
+def workspaces(request):
+    """The workspaces you are in.
+
+    Only yours. A workspace you are not in is not listed, not linked and not
+    reachable, which is the answer `_workspace_for_member` gives one URL later.
+    The page and the view cannot disagree about what you can see.
+    """
+    return render(
+        request,
+        "workspaces.html",
+        {
+            "workspaces": request.user.workspaces.annotate(
+                member_count=Count("members")
+            ),
+            "notice": request.session.pop(WORKSPACE_NOTICE_SESSION_KEY, None),
+        },
+    )
+
+
+@member_required
+@require_http_methods(["GET", "POST"])
+def workspace_new(request):
+    """Make one, and land in it.
+
+    The creator is added to `members` here and this is the only place that
+    happens implicitly. Without it they would be locked out of the workspace
+    they just made, since `created_by` grants nothing.
+    """
+    form = WorkspaceForm(request.POST or None)
+
+    if request.method == "POST" and form.is_valid():
+        workspace = form.save(commit=False)
+        workspace.created_by = request.user
+        workspace.save()
+        workspace.members.add(request.user)
+        # No notice: the page it lands on is the workspace, with the name on it.
+        # "Workspace created." over the thing just created says nothing the page
+        # does not already say.
+        return redirect("workspace_edit", pk=workspace.pk)
+
+    return render(request, "workspace_new.html", {"form": form})
+
+
+@member_required
+@require_http_methods(["GET", "POST"])
+def workspace_edit(request, pk):
+    """A workspace: what it is, who is in it, and the form to change the first.
+
+    **The page reads before it edits.** The name and the description render as
+    text, and the form sits behind an Edit control, opened by `:target` with no
+    script the way `/manage/`'s member panels are. A form is what you get when
+    you ask to change something, not the default way to look at it.
+
+    Post/Redirect/Get for all three actions: they are writes, and a refresh that
+    re-posted would re-run one. Member changes leave a message that rides one hop
+    in the session, the way `/manage/` and `/account/` carry theirs; a successful
+    save leaves none, because the text it changed is the page you land on.
+
+    The exception is a save that fails validation, which renders the bound form
+    in place. A redirect there would drop what the member typed on the floor,
+    which is the one thing a form has to not do. `form.errors` is also what holds
+    the panel open on that render, since the fragment did not survive the POST.
+    """
+    workspace = _workspace_for_member(request, pk)
+
+    if request.method == "POST":
+        action = request.POST.get("action", "save")
+        if action == "add_member":
+            return _add_workspace_member(request, workspace)
+        if action == "remove_member":
+            return _remove_workspace_member(request, workspace)
+
+        form = WorkspaceForm(request.POST, instance=workspace)
+        if form.is_valid():
+            form.save()
+            return redirect("workspace_edit", pk=workspace.pk)
+    else:
+        form = WorkspaceForm(instance=workspace)
+
+    members = list(workspace.members.order_by("username"))
+
+    # Who the add field offers: cluster members not already in, read out of the
+    # cache and the user table with no network call, because this page must
+    # render when the registry is unreachable. `active=True` is not optional: without it a
+    # revoked member is still on the list.
+    candidates = (
+        User.objects.filter(
+            did__in=MembershipCache.objects.filter(active=True).values("did")
+        )
+        .exclude(pk__in=[member.pk for member in members])
+        .order_by("username")
+    )
+
+    return render(
+        request,
+        "workspace_edit.html",
+        {
+            "workspace": workspace,
+            "form": form,
+            "members": members,
+            "candidates": candidates,
+            "notice": request.session.pop(WORKSPACE_NOTICE_SESSION_KEY, None),
+            "error": request.session.pop(WORKSPACE_ERROR_SESSION_KEY, None),
+        },
+    )
+
+
+def _add_workspace_member(request, workspace):
+    """Add somebody by handle. Redirects back to the workspace.
+
+    The handle is typed, and the datalist that completes it is a convenience
+    rather than a check, and a hand-written POST reaches here with anything.
+    So both questions are re-asked server-side: is there a member here by that
+    handle, and would GATE let them in.
+
+    That second one is the single point where cluster membership and workspace
+    membership touch. Without it a workspace would be a way to hand somebody
+    standing the cluster never granted them.
+    """
+    handle = request.POST.get("handle", "").strip().lstrip("@")
+    if not handle:
+        request.session[WORKSPACE_ERROR_SESSION_KEY] = "No one was named."
+        return redirect("workspace_edit", pk=workspace.pk)
+
+    # By handle, because that is what a person can type and read. Matched
+    # against local rows only. This never resolves a handle at the network, so
+    # someone who has never signed in here cannot be added, which is the same
+    # bound `candidates` renders.
+    user = User.objects.filter(username__iexact=handle).first()
+    if user is None:
+        request.session[WORKSPACE_ERROR_SESSION_KEY] = (
+            f"No member here goes by {handle}."
+        )
+        return redirect("workspace_edit", pk=workspace.pk)
+
+    if not membership.may_enter(user.did):
+        request.session[WORKSPACE_ERROR_SESSION_KEY] = (
+            f"{handle} is not a cluster member, so they cannot be added."
+        )
+        return redirect("workspace_edit", pk=workspace.pk)
+
+    if workspace.members.filter(pk=user.pk).exists():
+        request.session[WORKSPACE_NOTICE_SESSION_KEY] = f"{handle} is already here."
+    else:
+        workspace.members.add(user)
+        request.session[WORKSPACE_NOTICE_SESSION_KEY] = f"Added {handle}."
+    return redirect("workspace_edit", pk=workspace.pk)
+
+
+def _remove_workspace_member(request, workspace):
+    """Remove somebody by DID. Redirects back, or to the list if it was you.
+
+    **By DID, never by handle.** A handle is mutable and display-only; posting
+    one back would mean a member who changed theirs between the render and the
+    click removes nobody, or the wrong person.
+
+    Two outcomes that are not the ordinary one:
+
+    - **The last member is not removable.** A workspace with an empty roster is
+      one nobody can ever open again, not the remover and not the creator and
+      not a cluster admin, because membership is the only key. Same failure
+      `membership.dismiss_admin` refuses for the roster.
+    - **Removing yourself is allowed**, and lands on the list rather than back
+      here, which you can no longer open.
+    """
+    did = request.POST.get("did", "").strip()
+    user = workspace.members.filter(did=did).first() if did else None
+    if user is None:
+        request.session[WORKSPACE_ERROR_SESSION_KEY] = "They are not in this workspace."
+        return redirect("workspace_edit", pk=workspace.pk)
+
+    if workspace.members.count() == 1:
+        request.session[WORKSPACE_ERROR_SESSION_KEY] = (
+            "A workspace needs someone in it. Add another member first."
+        )
+        return redirect("workspace_edit", pk=workspace.pk)
+
+    workspace.members.remove(user)
+
+    if user.pk == request.user.pk:
+        request.session[WORKSPACE_NOTICE_SESSION_KEY] = f"You left {workspace.name}."
+        return redirect("workspaces")
+
+    request.session[WORKSPACE_NOTICE_SESSION_KEY] = f"Removed {user.username}."
+    return redirect("workspace_edit", pk=workspace.pk)
 
 
 # --- About: what this is, what it runs on, who runs it ----------------------
