@@ -887,13 +887,19 @@ def workspaces(request):
     reachable, which is the answer `_workspace_for_member` gives one URL later.
     The page and the view cannot disagree about what you can see.
     """
+    # Two steps, and the obvious one-step version is wrong. Filtering by
+    # `members` constrains the join to the asking member's own row, and a
+    # `Count("members")` annotated onto *that* counts what is left of the join
+    # rather than the roster: every workspace reported one member, however many
+    # it had. So the membership test picks the ids, and the count is taken on a
+    # query that has not joined the roster for any other purpose.
+    mine = Workspace.objects.filter(pk__in=request.user.workspaces.values("pk"))
+
     return render(
         request,
         "workspaces.html",
         {
-            "workspaces": request.user.workspaces.annotate(
-                member_count=Count("members")
-            ),
+            "workspaces": mine.annotate(member_count=Count("members")),
             "notice": request.session.pop(WORKSPACE_NOTICE_SESSION_KEY, None),
         },
     )

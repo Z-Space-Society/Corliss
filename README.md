@@ -860,6 +860,15 @@ is exactly the person an admin is about to read a name for.
 A workspace is a named place a few people share: a name, a description, and a
 roster. Making one takes a cluster membership; changing one takes being in it.
 
+- **The list's member count is taken on its own query, and that is a fix not a
+  style.** `request.user.workspaces` filters the m2m join down to the asking
+  member's own row, so a `Count("members")` annotated onto that query counts
+  what is left of the join rather than the roster. Shipped in v1.1.0 and found
+  in production, where every workspace reported one member however many it had.
+  The membership test now picks the ids and the count is taken on a query that
+  has not joined the roster for anything else. What would have caught it was a
+  test with two members in one workspace; there was one with two workspaces and
+  one member each, which passes either way.
 - **The page reads before it edits.** The name and description render as text
   with an Edit control; the form is a panel opened by `:target`, with no script,
   the way `/manage/`'s member panels are. A form is what you get when you ask to

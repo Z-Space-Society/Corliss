@@ -129,6 +129,21 @@ class WorkspaceCreateTests(NoRosterMixin, TestCase):
         # What they typed comes back with the error, rather than being dropped.
         self.assertContains(resp, "kept")
 
+    def test_the_list_counts_every_member_not_just_you(self):
+        """Production found this at v1.1.0: every workspace said "1".
+
+        Filtering by `members` constrains the m2m join to the asking member's
+        own row, so a `Count("members")` annotated onto that query counts what
+        is left of the join rather than the roster. The count has to be taken on
+        a query that has not joined the roster to answer something else.
+        """
+        bob = _member("bob.test", BOB)
+        workspace = Workspace.objects.create(name="Notes", created_by=self.alice)
+        workspace.members.add(self.alice, bob)
+
+        resp = self.client.get(reverse("workspaces"))
+        self.assertEqual(resp.context["workspaces"][0].member_count, 2)
+
     def test_the_empty_list_says_so(self):
         resp = self.client.get(reverse("workspaces"))
         self.assertEqual(resp.status_code, 200)
