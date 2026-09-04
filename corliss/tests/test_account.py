@@ -59,22 +59,13 @@ class AccountPageTests(NoRosterMixin, TestCase):
         self.assertContains(resp, DID)
         self.assertContains(resp, "alice.bsky.social")
 
-    def test_signed_out_is_sent_to_login_and_comes_back(self):
-        self.client.logout()
-        resp = self.client.get(reverse("account"))
-        self.assertRedirects(
-            resp, reverse("login"), fetch_redirect_response=False
-        )
-        self.assertEqual(
-            self.client.session["post_login_redirect"], reverse("account")
-        )
-
     def test_a_non_member_may_still_edit_their_name(self):
         """Deliberately not member-gated: an applicant in the queue is exactly
         the person an admin is about to read a name for.
 
         This user holds no `MembershipCache` row, so they would fail
-        `require_membership` — which this page deliberately does not call.
+        `@member_required` — which this page deliberately does not carry. The
+        signed-out bounce is `@login_required`'s, covered in `test_gate`.
         """
         resp = self.client.post(
             reverse("account"),

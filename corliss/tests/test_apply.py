@@ -375,13 +375,18 @@ class ApplyViewTests(ClearsCache):
         super().setUp()
         self.user = make_member()
 
-    def test_a_signed_out_visitor_is_sent_to_login(self):
-        resp = self.client.post(reverse("apply"))
-        self.assertRedirects(resp, reverse("login"), fetch_redirect_response=False)
+    def test_get_writes_nothing_and_goes_home(self):
+        """Acts on POST only, so a refresh cannot write a second application.
 
-    def test_get_is_refused(self):
+        A GET redirects to `/` rather than returning 405: that is where a POST
+        ends up anyway, and it is what a login bounce resumes into. What the
+        test is really asserting is that nothing was written.
+        """
         self.client.force_login(self.user)
-        self.assertEqual(self.client.get(reverse("apply")).status_code, 405)
+        with patch.object(membership, "submit_application") as submit:
+            resp = self.client.get(reverse("apply"))
+        self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
+        submit.assert_not_called()
 
     def test_it_is_csrf_protected(self):
         # The test client waives CSRF by default, so this is the only place the

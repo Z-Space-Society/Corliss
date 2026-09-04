@@ -16,13 +16,13 @@ Two more that look like housekeeping and are not:
 """
 
 from unittest.mock import Mock, patch
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from corliss import atproto, membership
+from corliss import atproto, health, membership
 from corliss.models import MembershipCache, OidcAuthCode
 from corliss.views import POST_LOGIN_REDIRECT, SESSION_PREFIX
 
@@ -245,22 +245,29 @@ class AuthorizeGateTests(NoRosterMixin, TestCase):
         )
 
 
-RESUME_TARGET = "/oidc/authorize?client_id=open-webui"
-
-
+@override_settings(OIDC_CLIENT_ID=CLIENT_ID, OIDC_REDIRECT_URIS=[REDIRECT_URI])
 class LoginResumeGateTests(NoRosterMixin, TestCase):
-    """The resume after login — gated, while the login itself is not.
+    """The resume after login — the login itself is never gated.
 
     A non-member must still be able to sign in: the home page's apply state
-    needs a session to exist at all, and it is where APPLY will live. What they
+    needs a session to exist at all, and that page is where they ask. What they
     must not get is a ride onward into the relying party they arrived from.
+
+    **The resume no longer asks the membership question itself.** It hands them
+    back to the target, and the target refuses — `authorize` inline, everything
+    else through `@member_required` / `@admin_required`. Same destination, one
+    more redirect, and one place asking instead of two.
 
     Driven through `callback` rather than the helper directly, because the claim
     is about a completed login, and a synthesized request would not prove that
     the session was established before the check ran.
     """
 
-    def _complete_login(self, resume_to=RESUME_TARGET):
+    def _resume_target(self):
+        return f"{reverse('authorize')}?{urlencode(_authorize_params())}"
+
+    def _complete_login(self, resume_to=None):
+        resume_to = resume_to or self._resume_target()
         session = self.client.session
         session[POST_LOGIN_REDIRECT] = resume_to
         session[SESSION_PREFIX + "state1"] = {
@@ -290,15 +297,23 @@ class LoginResumeGateTests(NoRosterMixin, TestCase):
     def test_a_member_is_resumed_into_the_authorize_they_came_from(self):
         _grant()
         resp = self._complete_login()
-        self.assertEqual(resp["Location"], RESUME_TARGET)
+        self.assertEqual(resp["Location"], self._resume_target())
 
-    def test_a_non_member_lands_on_home_with_a_session_intact(self):
+    def test_a_non_member_ends_up_on_home_with_a_session_intact(self):
+        """Followed to the end, because the refusal now happens one hop later —
+        at `authorize`, which is the surface that owns the question."""
         resp = self._complete_login()
-        self.assertEqual(resp["Location"], reverse("home"))
+        self.assertEqual(resp["Location"], self._resume_target())
+        self.assertRedirects(self.client.get(resp["Location"]), reverse("home"))
+        self.assertEqual(OidcAuthCode.objects.count(), 0)
         # The login itself succeeded — refusing the resume must not refuse the
         # session, or there is no way to reach the page that explains why.
         self.assertIn("_auth_user_id", self.client.session)
         self.assertTrue(User.objects.filter(did=MEMBER).exists())
+
+    def test_a_poisoned_resume_cannot_leave_the_site(self):
+        resp = self._complete_login(resume_to="//evil.example/steal")
+        self.assertEqual(resp["Location"], reverse("home"))
 
 
 class HomeIsWhereRefusalsLandTests(NoRosterMixin, TestCase):
@@ -372,15 +387,6 @@ class ApiGateTests(NoRosterMixin, TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "https://api.example.com")
 
-    def test_a_non_member_is_refused(self):
-        self.client.force_login(self.user)
-        self.assertRedirects(self.client.get(reverse("api")), reverse("home"))
-
-    def test_an_anonymous_visitor_is_bounced_through_login(self):
-        resp = self.client.get(reverse("api"))
-        self.assertRedirects(resp, reverse("login"))
-        self.assertEqual(self.client.session[POST_LOGIN_REDIRECT], reverse("api"))
-
     @override_settings(**LITELLM_SETTINGS)
     def test_a_non_member_posting_never_reaches_litellm(self):
         # The refusal has to happen before the provisioner key is touched, not
@@ -402,15 +408,6 @@ class ApiGateTests(NoRosterMixin, TestCase):
                 reverse("api"), {"action": "revoke", "token": "abc123def456"}
             )
         self.assertRedirects(resp, reverse("home"))
-        request.assert_not_called()
-
-    @override_settings(**LITELLM_SETTINGS)
-    def test_an_anonymous_post_never_reaches_litellm(self):
-        with patch("corliss.litellm.requests.request") as request:
-            resp = self.client.post(
-                reverse("api"), {"action": "create", "label": "laptop"}
-            )
-        self.assertRedirects(resp, reverse("login"))
         request.assert_not_called()
 
     @override_settings(**LITELLM_SETTINGS)
@@ -442,6 +439,101 @@ class ApiGateTests(NoRosterMixin, TestCase):
         self.assertRedirects(posted, reverse("api"), fetch_redirect_response=False)
         for call in request.call_args_list:
             self.assertNotIn("/key/generate", call.args[1])
+
+
+class TheFourLevelsTests(NoRosterMixin, TestCase):
+    """The three decorators, once each, against one real view apiece.
+
+    Gating is a property of the decorator now, not of each view, so this is the
+    only place that asserts the shapes: who is bounced, who is refused, and how.
+    A view's own tests say what it renders, and take the gate as read — testing
+    `/manage/` and `/systems/` both refuse a non-admin is testing
+    `@admin_required` twice.
+
+    The one view not covered here is `/oidc/authorize`, which gates inline
+    because its relying-party validation has to run first. `AuthorizeGateTests`
+    owns that.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(
+            username="alice.bsky.social", did=MEMBER
+        )
+
+    # Level 2 — @login_required. Django's own, so what is actually being
+    # asserted is our half: that `login` picks its `?next=` up off the query
+    # string and parks it where the atproto round trip will find it.
+    def test_signed_out_is_sent_to_login_and_the_target_is_remembered(self):
+        resp = self.client.get(reverse("account"))
+        self.assertRedirects(
+            resp, f"{reverse('login')}?next={reverse('account')}"
+        )
+        self.assertEqual(
+            self.client.session[POST_LOGIN_REDIRECT], reverse("account")
+        )
+
+    def test_a_non_member_is_welcome_at_level_2(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(reverse("account")).status_code, 200)
+
+    # Level 3 — @member_required.
+    def test_level_3_bounces_the_signed_out_and_remembers_where(self):
+        resp = self.client.get(reverse("api"))
+        self.assertRedirects(resp, reverse("login"))
+        self.assertEqual(self.client.session[POST_LOGIN_REDIRECT], reverse("api"))
+
+    def test_level_3_refuses_a_non_member_to_the_page_that_explains_it(self):
+        self.client.force_login(self.user)
+        self.assertRedirects(self.client.get(reverse("api")), reverse("home"))
+
+    # Level 4 — @admin_required. 404, not 403: a non-admin has no business
+    # learning the page is there.
+    def test_level_4_bounces_the_signed_out_and_remembers_where(self):
+        resp = self.client.get(reverse("systems"))
+        self.assertRedirects(resp, reverse("login"))
+        self.assertEqual(
+            self.client.session[POST_LOGIN_REDIRECT], reverse("systems")
+        )
+
+    def test_level_4_is_a_404_for_a_member_who_is_not_an_admin(self):
+        _grant()
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(reverse("systems")).status_code, 404)
+
+    def test_level_4_opens_for_a_roster_admin(self):
+        admin = User.objects.create_user(username="admin.bsky.social", did=ADMIN)
+        self.as_roster_admin(ADMIN)
+        self.client.force_login(admin)
+        with patch.object(health, "check_all", return_value=[]):
+            self.assertEqual(
+                self.client.get(reverse("systems")).status_code, 200
+            )
+
+
+class NextIsNotAnOpenRedirectTests(TestCase):
+    """`?next=` is user input, which the session key never used to be.
+
+    Every writer of `post_login_redirect` was ours — a `reverse()` or a
+    `get_full_path()` — until `@login_required` started handing us one off the
+    query string. `/\\evil.example` is the case a `startswith("/")` test waves
+    through and browsers then read as `//`.
+    """
+
+    def test_a_safe_path_is_kept(self):
+        self.client.get(f"{reverse('login')}?next=/api/")
+        self.assertEqual(self.client.session[POST_LOGIN_REDIRECT], "/api/")
+
+    def test_hostile_targets_are_dropped(self):
+        for target in (
+            "//evil.example/steal",
+            "https://evil.example/steal",
+            "/\\evil.example/steal",
+            "javascript:alert(1)",
+        ):
+            with self.subTest(target=target):
+                self.client.get(f"{reverse('login')}?next={target}")
+                self.assertNotIn(POST_LOGIN_REDIRECT, self.client.session)
 
 
 class GateDoesNotCoverTheRecoveryDoorsTests(NoRosterMixin, TestCase):

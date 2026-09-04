@@ -339,18 +339,21 @@ receives nothing they were never granted. **GATE-for-Corliss and
 ENTITLE-for-Open-WebUI stay two questions**, which is also how "admin does not
 imply member" is answered without inventing a grant.
 
-Four surfaces ask, and `require_membership` in `corliss/views.py` is the only
-thing that asks:
+Two surfaces ask, both through `membership_denial` in `corliss/views.py`:
 
-| Surface | Why it is gated |
-| ------- | --------------- |
-| `/oidc/authorize` | **the one that matters.** The handoff into Open WebUI, reached on *every* exchange — so it is the only place that can refuse a session established before the gate existed, or one whose owner has been revoked since they signed in. Gating login alone is a gate with a hole in it |
-| the login resume | GATE applies to the **resume, not the login**. A non-member still gets a session — they need one to apply — but not a ride onward into the relying party they came from |
-| `/api/` | gated before it grows a real "create key" button |
+| Surface | How, and why it is gated |
+| ------- | ------------------------ |
+| `/oidc/authorize` | **the one that matters.** The handoff into Open WebUI, reached on *every* exchange — so it is the only place that can refuse a session established before the gate existed, or one whose owner has been revoked since they signed in. Gating login alone is a gate with a hole in it. Asks **inline** rather than by decorator, because the relying-party validation above it has to run first: a decorator would answer an unregistered `client_id` with a login form instead of `unauthorized_client` |
+| `/api/` | `@member_required`, which is the decorator over the same helper |
 
-Two surfaces must **never** be gated, which is why this is a per-view helper and
-not middleware — middleware covers everything by default, and these would have
-to be remembered as exemptions:
+Neither the login nor the hop back from it is gated. A non-member gets their
+session — they need one to apply — and the resume hands them to the surface they
+were heading for, which refuses them itself. One question, asked by the surface
+that owns it, rather than a second copy in the resume.
+
+Two surfaces must **never** be gated, which is why the levels are opt-in per
+view rather than middleware — middleware covers everything by default, and these
+would have to be remembered as exemptions:
 
 - **`/admin/login/`** — `ensure_admin`'s break-glass account (`did:local:admin`)
   is not on the roster and will never have a cache row. A gate across Django's

@@ -12,6 +12,10 @@ ATProto client (people):
   is the only thing a signed-in non-member can do here. It confers nothing:
   the record asks, and only an admin's grant answers. See
   `corliss.membership`'s "Applying" section.
+
+Who may reach each of these is stated at the signature, by one of four levels —
+nothing, `@login_required`, `@member_required`, `@admin_required`. The GATE
+section below defines them and says when to reach for which.
 - `account`: the member's own name and email — the only place either is
   editable, and the reason login fills those fields rather than overwriting
   them. Signed-in, not member-gated: an applicant has a name too.
@@ -50,19 +54,21 @@ import json
 import logging
 import secrets
 from datetime import timedelta
+from functools import wraps
 from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
+from django.contrib.auth.decorators import login_required
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db.models import OuterRef, Subquery
 from django.http import Http404, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
-from django.urls import reverse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
@@ -109,14 +115,34 @@ USAGE_WINDOW_DAYS = 30
 EXAMPLE_MODEL_FALLBACK = "MODEL-NAME"
 
 
-# --- GATE: is this person allowed in? --------------------------------------
+# --- GATE: the four levels of access ---------------------------------------
 #
 # Signing in is not the same as being let in. Anyone with an atproto handle can
 # complete a login here; membership is granted by an admin through the registry
 # and answered by `membership.may_enter`. This is where that answer is enforced.
 #
-# Deliberately a helper each surface opts into, and **not middleware**.
-# Middleware covers every path by default, and two paths must never be covered:
+# There are exactly four levels, and every view sits at one of them:
+#
+# 1. **Signed out** — no decorator. `/`, `/about/*`, `/auth/login`, and the
+#    machine-facing documents. The absence *is* the level.
+# 2. **Signed in** — Django's own `@login_required`, unmodified. **This is the
+#    one to reach for when you only need them authenticated and a non-member is
+#    legitimately welcome**, which is the whole reason `/account/` and
+#    `/membership/apply` carry it: an applicant sitting in the queue is exactly
+#    the person those two pages are for, and gating them on a grant would keep
+#    the name field blank precisely when an admin is about to read it.
+# 3. **A member** — `@member_required`. `/api/`, and `/oidc/authorize` inline.
+# 4. **A cluster admin** — `@admin_required`. `/manage/`, `/manage/unlock`,
+#    `/systems/`.
+#
+# Levels are cumulative for *entry* — `may_enter` passes a roster admin with no
+# grant, so 4 reaches 3's pages — but **entitlement is a separate question**
+# asked inside the view. GATE says who may be here; the tier on the cache row
+# says what they receive. See `api`, where an admin without a grant gets the
+# page and no key.
+#
+# **Decorators, and deliberately not blanket coverage.** Middleware would cover
+# every path by default, and three would have to be remembered as exemptions:
 #
 # - **`/admin/login/`** is the break-glass door. `ensure_admin` creates a local
 #   admin (`did:local:admin`) that is not on the roster and will never have a
@@ -126,13 +152,50 @@ EXAMPLE_MODEL_FALLBACK = "MODEL-NAME"
 #   database — precisely so it opens when the cache is empty. It holds the
 #   reconcile button that refills the cache; gating it on the cache would make
 #   recovery depend on the thing being recovered.
+# - **`/`** is where every refusal lands, so it can never itself refuse.
 #
-# Opting in keeps both of those true by construction, rather than by remembering
-# to write an exemption for them.
+# Opting in per view keeps all three true by construction rather than by
+# remembering to write an exemption. That argument is about *default coverage*
+# and nothing else — a decorator is as opt-in as a call at the top of the body,
+# and states the level at the signature, where the reader is already looking.
 
 
-def require_membership(request):
-    """GATE at an HTTP surface: None to proceed, or where to send them instead.
+def _safe_resume(request, path):
+    """A same-site path we are willing to send someone back to, or None.
+
+    Django's own check rather than a `startswith("/")` test, because `?next=`
+    makes this value **user input**: every writer used to be a `reverse()` or a
+    `get_full_path()` of ours. `/\\evil.com` passes the naive test, and browsers
+    normalise the backslash into exactly the `//` the naive test was looking
+    for. The leading-slash requirement stays on top of it, so the contract
+    remains "a path", not "a URL that happens to be ours".
+    """
+    if not path or not path.startswith("/"):
+        return None
+    if not url_has_allowed_host_and_scheme(
+        path,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return None
+    return path
+
+
+def _bounce_through_login(request):
+    """Level 1 → 2: send an anonymous visitor to sign in, remembering where.
+
+    The resume target rides in the **session**, not in the redirect, because the
+    return leg is `/auth/oauth/callback` coming back from the member's PDS — a
+    `?next=` on the way out is long gone by the time we land. Django's stock
+    `@login_required` still works: `login` translates its `?next=` into this
+    same session key on arrival, so there is one carrier and one resume path.
+    """
+    request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
+    return redirect("login")
+
+
+def membership_denial(request):
+    """GATE as a question: None to proceed, or where to send them instead.
 
     Refusal is a redirect to the home page rather than a 403, because that page
     already holds the state this describes — "you're signed in, but not a member
@@ -143,6 +206,9 @@ def require_membership(request):
     first, since they have a `next` worth preserving; answering "no" rather than
     reaching for `AnonymousUser.did` means a surface that forgets to cannot fail
     open.
+
+    `member_required` is the decorator over this. It stays a callable because
+    `authorize` cannot use the decorator — see there.
     """
     user = request.user
     if user.is_authenticated and membership.may_enter(user.did):
@@ -150,27 +216,74 @@ def require_membership(request):
     return redirect("home")
 
 
+def member_required(view_func):
+    """Level 3: a member (or a roster admin), or you do not reach this view.
+
+    Anonymous is bounced through login rather than refused — they have a `next`
+    worth preserving and have done nothing wrong yet. A signed-in non-member is
+    sent to the home page, which is where the refusal is explained.
+    """
+
+    @wraps(view_func)
+    def _gated(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return _bounce_through_login(request)
+        denial = membership_denial(request)
+        if denial is not None:
+            return denial
+        return view_func(request, *args, **kwargs)
+
+    return _gated
+
+
+def admin_required(view_func):
+    """Level 4: a current cluster admin, or the view does not exist.
+
+    404 rather than 403, deliberately: a non-admin has no business learning the
+    page is there, and the nav never offers it to them.
+
+    **This opens a page. It never authorizes a write.** The check is
+    `User.is_cluster_admin`, the property, which passes `is_superuser` as well
+    as the roster — that clause exists so `did:local:admin` can reach the
+    reconcile button when the roster itself is unreadable. Every path that
+    *writes* re-asks `membership.is_cluster_admin(did)`, the module function
+    with no superuser clause, at action time, because the roster is live and an
+    admin may have been dismissed while the page sat open. Those two spellings
+    are the whole safety argument; do not collapse them into this decorator.
+    """
+
+    @wraps(view_func)
+    def _gated(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return _bounce_through_login(request)
+        if not request.user.is_cluster_admin:
+            raise Http404
+        return view_func(request, *args, **kwargs)
+
+    return _gated
+
+
 def _resume_after_login(request):
     """Where to land once a login completes: back into the flow that sent us
     here, or home.
 
-    **GATE applies to the resume, not to the login.** A non-member still gets
-    their session — they need one to apply, and the home page has a state for
-    them — but not a ride onward into the relying party they arrived from.
-    Resuming would hand them to `authorize`, which refuses them anyway; the only
-    difference is whether they read why on our page or watch Open WebUI render a
-    generic failure.
+    **Not gated.** The target does its own refusing — every gated surface is
+    decorated, and `authorize` asks inline — so checking here would put the same
+    question to the same request twice. A refused member lands on the home page
+    either way; the only difference is one extra redirect.
 
-    Only a safe same-site path is honoured (single leading slash, no scheme or
-    host), so a poisoned session value cannot become an open redirect.
+    Only a safe same-site path is honoured, so a poisoned session value cannot
+    become an open redirect.
     """
-    next_url = request.session.pop(POST_LOGIN_REDIRECT, None)
-    if not next_url or not next_url.startswith("/") or next_url.startswith("//"):
-        return redirect("home")
-    denial = require_membership(request)
-    if denial is not None:
-        return denial
-    return redirect(next_url)
+    next_url = _safe_resume(
+        request, request.session.pop(POST_LOGIN_REDIRECT, None)
+    )
+    return redirect(next_url) if next_url else redirect("home")
+
+
+# ===========================================================================
+#  VIEWS
+# ===========================================================================
 
 
 # --- ATProto OAuth client endpoints ----------------------------------------
@@ -183,6 +296,14 @@ def client_metadata(request):
 
 def login(request):
     if request.method != "POST":
+        # Django's stock `@login_required` (level 2) arrives with `?next=`;
+        # everything else has already written the session directly. Translating
+        # it here is what gives the two doors one carrier — a query parameter
+        # cannot survive the atproto round trip, since the return leg is
+        # `callback` coming back from the member's PDS.
+        next_url = _safe_resume(request, request.GET.get("next"))
+        if next_url:
+            request.session[POST_LOGIN_REDIRECT] = next_url
         return render(request, "login.html")
 
     handle = request.POST.get("handle", "").strip()
@@ -227,7 +348,7 @@ def login(request):
     return redirect(atproto.authorization_url(meta, request_uri))
 
 
-@require_http_methods(["POST"])
+@admin_required
 def manage_unlock(request):
     """Authenticate the service account, without disturbing your own session.
 
@@ -242,14 +363,15 @@ def manage_unlock(request):
     `service_link` branch, where the absence of `auth_login` is the entire
     mechanism.
 
-    POST-only: it starts an authorization redirect, which is a state change, and
-    a GET would let any page on the internet start one by linking to it.
+    Acts on POST only: it starts an authorization redirect, which is a state
+    change, and a GET would let any page on the internet start one by linking to
+    it. A GET is sent back to `/manage/` rather than refused with a 405, because
+    a login bounce resumes as a GET and this endpoint would otherwise be the one
+    place where signing in successfully lands you on an error page. Redirecting
+    performs nothing, so the protection is unchanged.
     """
-    if not request.user.is_authenticated:
-        request.session[POST_LOGIN_REDIRECT] = reverse("manage")
-        return redirect("login")
-    if not request.user.is_cluster_admin:
-        raise Http404
+    if request.method != "POST":
+        return redirect("manage")
 
     service_did = settings.SCN_SERVICE_DID
     if not service_did:
@@ -620,14 +742,20 @@ def home(request):
     )
 
 
-@require_http_methods(["POST"])
+@login_required
 def apply(request):
     """Write the signed-in member's membership application to their own PDS.
 
-    POST only, and Post/Redirect/Get back to `home`: the state this creates is
-    rendered there, and a refresh must not write a second time. The failure
-    message rides one hop in the session for the same reason `api` parks a
-    LiteLLM refusal there.
+    Level 2, not level 3: asking to join is the one thing a signed-in
+    non-member can do here, so gating it on membership would refuse exactly the
+    people it exists for.
+
+    Acts on POST only, and Post/Redirect/Get back to `home`: the state this
+    creates is rendered there, and a refresh must not write a second time. A GET
+    is sent to `home` rather than refused with a 405 — that is where a POST ends
+    up anyway, and it is what a login bounce resumes into. The failure message
+    rides one hop in the session for the same reason `api` parks a LiteLLM
+    refusal there.
 
     **Refuses an existing member.** Not because it would break anything — the
     record is inert and a member who wrote one would simply have a redundant
@@ -637,9 +765,8 @@ def apply(request):
     Nothing here writes to `MembershipCache`, and nothing here decides
     membership. An application asks; a grant answers.
     """
-    if not request.user.is_authenticated:
-        request.session[POST_LOGIN_REDIRECT] = reverse("home")
-        return redirect("login")
+    if request.method != "POST":
+        return redirect("home")
 
     if membership.is_active_member(request.user.did):
         return redirect("home")
@@ -654,10 +781,11 @@ def apply(request):
     return redirect("home")
 
 
+@login_required
 def account(request):
     """The member's own name and email, and the only place either is editable.
 
-    **Signed in is the whole gate — deliberately not `require_membership`.** An
+    **Signed in is the whole gate — deliberately not `@member_required`.** An
     applicant sitting in the queue is exactly the person an admin is about to
     read a name for, so gating this on a grant would keep the field blank
     precisely when it is most worth having. Nothing here is an entitlement:
@@ -678,10 +806,6 @@ def account(request):
     PDS's value again — which is how a member undoes an edit without having to
     remember what the original was. The page says so.
     """
-    if not request.user.is_authenticated:
-        request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
-        return redirect("login")
-
     if request.method == "POST":
         display_name = request.POST.get("display_name", "").strip()
         email = request.POST.get("email", "").strip()
@@ -797,11 +921,12 @@ def about_team(request):
 
 
 @require_http_methods(["GET", "POST"])
+@member_required
 def api(request):
     """The member's own API keys: issue one, see them, revoke one, see usage.
 
     **GATE lets a roster admin in here without a grant; issuing does not.**
-    `require_membership` answers "may this person be in Corliss", and the
+    `@member_required` answers "may this person be in Corliss", and the
     entitlement question is a different one — an admin with no grant receives
     nothing they were never given. So the tier comes from the cache row and an
     inactive or absent row means the form is not offered and a POST is refused,
@@ -817,13 +942,6 @@ def api(request):
     Nothing about keys is stored by Corliss. LiteLLM is asked afresh on every
     render, so a key revoked from the CLI is gone from this page too.
     """
-    if not request.user.is_authenticated:
-        request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
-        return redirect("login")
-    denial = require_membership(request)
-    if denial is not None:
-        return denial
-
     client = litellm.LiteLLM.from_settings()
     row = membership.membership_for(request.user)
     tier = row.tier if row is not None and row.active else ""
@@ -936,6 +1054,7 @@ def _api_action(request, client, tier):
 
 
 @require_http_methods(["GET"])
+@admin_required
 def systems(request):
     """What the cluster is made of, and whether it is up.
 
@@ -948,12 +1067,6 @@ def systems(request):
     Admin-gated the same way `manage` is, and 404 rather than 403 for the same
     reason: a non-admin has no business learning the page exists.
     """
-    if not request.user.is_authenticated:
-        request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
-        return redirect("login")
-    if not request.user.is_cluster_admin:
-        raise Http404
-
     return render(
         request,
         "systems.html",
@@ -967,6 +1080,7 @@ def systems(request):
 
 
 @require_http_methods(["GET", "POST"])
+@admin_required
 def manage(request):
     """The cluster console: who has asked, who is a member, who is an admin,
     and reconcile.
@@ -994,14 +1108,6 @@ def manage(request):
     members are this deployment's cache and can be wrong; admins are a live
     read of a public record and cannot go stale. See `_applications`.
     """
-    if not request.user.is_authenticated:
-        request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
-        return redirect("login")
-    if not request.user.is_cluster_admin:
-        # 404 rather than 403: a non-admin has no business learning that this
-        # page exists, and the nav never offers it to them.
-        raise Http404
-
     registry = membership.MembershipRegistry.from_settings()
     report, reconcile_error = None, None
 
@@ -1638,10 +1744,16 @@ def authorize(request):
     if "openid" not in scope.split():
         return _error("invalid_scope", "missing 'openid' scope")
 
-    # Member must be signed in (atproto). If not, bounce through login and resume.
+    # Member must be signed in (atproto). If not, bounce through login and
+    # resume.
+    #
+    # **Gated inline rather than with `@member_required`**, and that is not an
+    # oversight: the relying-party validation above has to run first. A
+    # decorator runs before the body, so an unregistered `client_id` would be
+    # answered with a login form instead of `unauthorized_client` — an OAuth
+    # error turned into a redirect the RP cannot read.
     if not request.user.is_authenticated:
-        request.session[POST_LOGIN_REDIRECT] = request.get_full_path()
-        return redirect("login")
+        return _bounce_through_login(request)
 
     # GATE, and this is the surface that makes it mean anything. This endpoint
     # is the handoff into Open WebUI and it is reached on *every* exchange, so
@@ -1655,7 +1767,7 @@ def authorize(request):
     # useless — Open WebUI renders its own generic failure and the person is
     # left in the chat app with no idea why and nowhere to go, while the page
     # that explains it is one redirect away.
-    denial = require_membership(request)
+    denial = membership_denial(request)
     if denial is not None:
         return denial
 

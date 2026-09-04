@@ -543,10 +543,6 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(reverse("systems")).status_code, 404)
 
-    def test_an_anonymous_visitor_is_bounced_through_login(self):
-        resp = self.client.get(reverse("systems"))
-        self.assertRedirects(resp, reverse("login"))
-
     def test_the_real_probes_render_with_nothing_reachable(self):
         # Every other test here hands the template a hand-built stack, so a
         # drift between what health.check_all actually returns and what the
@@ -623,13 +619,6 @@ class ManageViewTests(NoRosterMixin, TestCase):
 
         return patch.object(
             membership, "fetch_roster", return_value=membership.Roster(list(entries))
-        )
-
-    def test_anonymous_is_bounced_through_login_and_resumes_here(self):
-        resp = self.client.get(reverse("manage"))
-        self.assertRedirects(resp, reverse("login"))
-        self.assertEqual(
-            self.client.session["post_login_redirect"], reverse("manage")
         )
 
     def test_a_signed_in_non_admin_gets_a_404_not_a_403(self):
@@ -1869,12 +1858,20 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
         self.assertEqual(resp.status_code, 404)
 
     def test_it_is_not_startable_by_a_link(self):
-        """POST-only: it begins an authorization redirect, and a GET would let
-        any page on the internet start one on an admin's behalf."""
+        """Acts on POST only: it begins an authorization redirect, and a GET
+        would let any page on the internet start one on an admin's behalf.
+
+        A GET is sent back to `/manage/` rather than refused with a 405, so a
+        login bounce that resumes here lands on the console instead of an error
+        page. The claim that matters is that nothing was *started*: no PAR, no
+        redirect to a PDS.
+        """
         self._as_cluster_admin()
         self.client.force_login(self.user)
-        resp = self.client.get(reverse("manage_unlock"))
-        self.assertEqual(resp.status_code, 405)
+        with patch.object(atproto, "pushed_authorization_request") as par:
+            resp = self.client.get(reverse("manage_unlock"))
+        self.assertRedirects(resp, reverse("manage"), fetch_redirect_response=False)
+        par.assert_not_called()
 
     def test_completing_it_leaves_you_signed_in_as_yourself(self):
         """The whole point. Before this, authenticating the service account

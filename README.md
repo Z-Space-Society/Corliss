@@ -323,6 +323,21 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Systems — the stack, with live health checks (cluster admins) | `/systems/` |
 | Django admin | `/admin/` |
 
+The parenthesised audiences above are the four access levels, and each is one
+decorator in [`corliss/views.py`](corliss/views.py): nothing (signed out),
+`@login_required` (signed in — for `/account/` and `/membership/apply`, where a
+non-member is exactly who the page is for), `@member_required` (a member or a
+roster admin), `@admin_required` (a cluster admin, refusing with 404 rather than
+403 so a non-admin does not learn the page is there). `/oidc/authorize` asks the
+same question as `@member_required` but inline, because its relying-party
+validation has to run first. Levels are cumulative for *entry*; what a member
+then *receives* is the separate question their tier answers.
+
+`/membership/apply` and `/manage/unlock` act on POST only — a GET performs
+nothing and redirects to `/` and `/manage/` respectively, rather than returning
+405, because a login bounce resumes as a GET and signing in successfully should
+not land on an error page.
+
 Discovery and JWKS sit at the root deliberately: an OIDC issuer of
 `https://example.com` must serve its discovery document at
 `https://example.com/.well-known/openid-configuration`.

@@ -623,10 +623,3 @@ class DecideMembershipViewTests(TokenMixin, TestCase):
         self.assertEqual(resp.status_code, 404)
         approve.assert_not_called()
 
-    def test_an_anonymous_post_decides_nothing(self):
-        self.client.logout()
-        with patch.object(membership.MembershipRegistry, "approve") as approve:
-            resp = self.post(action="approve", did=MEMBER, tier="level-2")
-
-        self.assertRedirects(resp, reverse("login"), fetch_redirect_response=False)
-        approve.assert_not_called()

@@ -150,14 +150,39 @@ so widening one cannot widen the other.
 - **The roster clause buys that admin nothing else.** Entitlements come from
   `membership_for`, so a roster admin with no grant enters and receives nothing
   they were never granted.
-- **`require_membership` is a per-view helper, never middleware.** Middleware
-  covers everything by default and these would have to be remembered as
-  exemptions: `/admin/login/` (the break-glass account is not on the roster and
-  will never have a cache row), `/manage/` (gated on the roster, no database, and
-  it holds the reconcile button), and `/` (where every refusal lands).
+- **There are four levels, and every view sits at exactly one.** Signed out (no
+  decorator), signed in (`@login_required` — Django's own, for the pages where a
+  non-member is legitimately welcome: `/account/` and `/membership/apply`), a
+  member (`@member_required`), a cluster admin (`@admin_required`). The
+  decorators live in `views.py` because they build HTTP responses;
+  `membership.py` answers the question, `views.py` turns the answer into a
+  redirect or a 404.
+- **Opt-in per view, never blanket coverage.** The mechanism is free — a
+  decorator, a helper, a mixin — but middleware is not, because it covers
+  everything by default and these would have to be remembered as exemptions:
+  `/admin/login/` (the break-glass account is not on the roster and will never
+  have a cache row), `/manage/` (gated on the roster, no database, and it holds
+  the reconcile button), and `/` (where every refusal lands). The rule is about
+  *default coverage*; do not read it as a rule about decorators.
+- **`@admin_required` opens a page and never authorizes a write.** It asks
+  `User.is_cluster_admin`, the property, whose `is_superuser` clause is what
+  lets `did:local:admin` reach the reconcile button. Every write re-asks
+  `membership.is_cluster_admin(did)` at action time. See the split below.
 - **Gate at `/oidc/authorize`, not at login.** Only the exchange is reached every
   time, so only it can refuse a session established before the gate existed or
-  one whose owner has since been revoked.
+  one whose owner has since been revoked. It is also the one surface that gates
+  *inline* rather than by decorator, because the relying-party validation has to
+  run first: a decorator would answer an unregistered `client_id` with a login
+  form instead of `unauthorized_client`.
+- **The resume after login does not gate; the target does.** `/auth/login` is
+  never gated and neither is the hop back — a refused member is refused by the
+  page they were heading for, one redirect later, rather than by a second copy
+  of the question in `_resume_after_login`.
+- **`?next=` is user input and is validated as such.** Django's stock
+  `@login_required` hands `login` a target off the query string, where every
+  writer of `post_login_redirect` used to be a `reverse()` of ours.
+  `url_has_allowed_host_and_scheme`, not `startswith("/")`, which
+  `/\evil.example` walks straight through.
 
 ## One admin, and the roster is what says so
 

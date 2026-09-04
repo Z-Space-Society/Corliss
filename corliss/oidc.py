@@ -148,7 +148,7 @@ def mint_id_token(user, *, client_id, nonce="", sid="") -> str:
 #
 # Ending a session Corliss started, rather than waiting for it to expire.
 #
-# The problem this solves is the one place GATE cannot reach. `require_membership`
+# The problem this solves is the one place GATE cannot reach. `membership_denial`
 # runs at /oidc/authorize, which the relying party visits only when it has no
 # valid session of its own — so once Open WebUI mints its own token, Corliss is
 # not asked again until that token expires. Revoke a member and they keep
