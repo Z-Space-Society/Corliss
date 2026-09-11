@@ -1,0 +1,12 @@
+{% comment %}
+The mark and the wordmark, inside base.html's home link. A theme overrides this
+file to change the words. It does not need to for a colour: the mark's fills are
+currentColor under `.nav__brand-mark`, which takes `--brand-accent` along with
+`.nav__brand-accent`, so theme.css can recolour both.
+{% endcomment %}
+<svg class="nav__brand-mark" width="22" height="22" viewBox="0 0 22 22">
+  <rect x="1" y="2" width="20" height="13" rx="2" fill="currentColor"></rect>
+  <rect x="8" y="17" width="6" height="2" rx="1" fill="currentColor"></rect>
+  <rect x="5" y="19" width="12" height="1.5" rx="0.75" fill="currentColor"></rect>
+</svg>
+<span class="nav__brand-text">sharedcomputer<span class="nav__brand-accent">.network</span></span>

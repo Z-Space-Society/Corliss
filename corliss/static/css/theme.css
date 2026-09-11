@@ -1,0 +1,3 @@
+/* Deliberately empty. base.html loads this after base.css, and a theme's own
+   static/css/theme.css replaces it to override the :root tokens. See
+   themes/README.md. */

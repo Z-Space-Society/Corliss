@@ -41,6 +41,10 @@
   --text-disabled: oklch(0.42 0.008 255);
   --accent: oklch(0.62 0.17 255);
   --accent-hover: oklch(0.67 0.17 255);
+  /* The logo and the accented half of the wordmark. A token of its own so a
+     theme can recolour the brand without moving buttons, links and focus
+     rings, which all use --accent. */
+  --brand-accent: var(--accent);
   --success: oklch(0.7 0.16 150);
   --danger: oklch(0.75 0.09 20);
   --danger-hover-bg: oklch(0.24 0.03 20);
@@ -104,8 +108,13 @@ a {
   letter-spacing: -0.01em;
 }
 
+.nav__brand-mark {
+  flex-shrink: 0;
+  color: var(--brand-accent);
+}
+
 .nav__brand-accent {
-  color: var(--accent);
+  color: var(--brand-accent);
 }
 
 /* The two ends of the nav. `.nav` itself is space-between, so each end is one

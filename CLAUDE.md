@@ -364,6 +364,17 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
   second module talking to the same external system is the thing to avoid.
 - **`views.py` is every endpoint and `urls.py` every route, un-namespaced.**
 
+## Themes
+
+- **A theme is templates and static files only.** No Python, no settings, no
+  context of its own. Anything a theme needs from a view is a change to the view,
+  made for every deployment.
+- **Template, partial and token names are an interface once a theme uses them.**
+  Renaming `_brand.html`, `about_system.html` or `--brand-accent` passes every
+  test here and silently un-themes a deployment. Grep `themes/` before renaming.
+- **The theme is chosen by `PUBLIC_BASE_URL`'s host.** Do not add a per-cluster
+  theme setting: the domain already says which deployment this is.
+
 ## Releases and deploy
 
 - **`version` in `pyproject.toml` and the `vX.Y.Z` tag are one fact**, and

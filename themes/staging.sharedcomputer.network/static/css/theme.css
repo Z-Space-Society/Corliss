@@ -1,0 +1,7 @@
+/* staging.sharedcomputer.network: loud enough that nobody mistakes a staging tab
+   for production. Loaded after base.css, so these win. */
+
+:root {
+  --bg: oklch(0.5 0.14 255);
+  --brand-accent: #000;
+}

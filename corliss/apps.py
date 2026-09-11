@@ -60,6 +60,30 @@ def check_dev_admins_require_debug(app_configs, **kwargs):
     return []
 
 
+def check_explicit_theme_exists(app_configs, **kwargs):
+    """Refuse to run with a THEME that names no folder.
+
+    A theme derived from PUBLIC_BASE_URL's host may have no folder, and that is
+    every deployment wearing the default look. A THEME set by hand is a request
+    for one particular look, so a missing folder there is a typo that would
+    otherwise serve the default without a word. Keyed on THEME_FROM_ENV for
+    exactly that distinction.
+    """
+    if settings.THEME_FROM_ENV and not settings.THEME_DIR.is_dir():
+        return [
+            Error(
+                f"THEME is set to {settings.THEME_FROM_ENV!r}, but "
+                f"{settings.THEME_DIR} does not exist.",
+                hint=(
+                    "THEME names a folder under themes/. Fix the name, or unset "
+                    "THEME to use the one matching PUBLIC_BASE_URL's host."
+                ),
+                id="corliss.E003",
+            )
+        ]
+    return []
+
+
 class CorlissConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "corliss"
@@ -67,3 +91,4 @@ class CorlissConfig(AppConfig):
     def ready(self):
         register(check_dev_login_requires_debug)
         register(check_dev_admins_require_debug)
+        register(check_explicit_theme_exists)

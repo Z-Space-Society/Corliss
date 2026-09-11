@@ -8,6 +8,7 @@ documents the full set with placeholders. No secrets live in this file.
 """
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import environ
 
@@ -137,6 +138,29 @@ HAPPYVIEW_URL = env("HAPPYVIEW_URL", default="")
 # cluster it is the host's LAN address on :8006 — which means a self-signed
 # cert warning, and no reachability from outside the LAN.
 PROXMOX_URL = env("PROXMOX_URL", default="")
+
+# Which theme dresses this deployment. A theme is a folder under themes/ named
+# for the domain it serves, holding `templates/` and `static/` that shadow this
+# app's own files by path, one file at a time. Whatever a theme leaves out falls
+# back to the app's copy, so a theme holds only what it changes. See
+# themes/README.md.
+#
+# Derived from PUBLIC_BASE_URL's host, so a deployment is themed by its folder
+# existing and needs no setting of its own, and a host with no folder is the
+# default look. THEME is set by hand only to wear a theme somewhere else, which
+# mostly means locally, where the host is localhost. A hand-set THEME with no
+# folder is a typo, and corliss.E003 fails the deploy over it.
+THEME_FROM_ENV = env("THEME", default="")
+THEME = THEME_FROM_ENV or (urlsplit(PUBLIC_BASE_URL).hostname or "")
+THEME_DIR = BASE_DIR / "themes" / THEME if THEME else None
+
+
+def _theme_dirs(kind):
+    """The theme's `templates` or `static` folder, as a list, if it has one."""
+    if THEME_DIR is None or not (THEME_DIR / kind).is_dir():
+        return []
+    return [THEME_DIR / kind]
+
 
 # --- LiteLLM (the cluster's API service) ------------------------------------
 # Corliss provisions members into LiteLLM and issues them API keys from /api/.
@@ -319,8 +343,10 @@ ROOT_URLCONF = "corliss.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        # Templates live in corliss/templates/ and are found by APP_DIRS.
-        "DIRS": [],
+        # Templates live in corliss/templates/ and are found by APP_DIRS. DIRS
+        # is searched first, which is the whole theming mechanism: a theme's
+        # file wins where it exists and the app's is found where it does not.
+        "DIRS": _theme_dirs("templates"),
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -368,6 +394,10 @@ STATIC_URL = "static/"
 # found by the app-directories finder; STATIC_ROOT is the collectstatic output
 # whitenoise serves from — gitignored, built at deploy time.
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# The theme's static/, searched before the app's for the same reason as the
+# template DIRS above: Django's default finders put FileSystemFinder first, and
+# collectstatic keeps the first file it finds at each path.
+STATICFILES_DIRS = _theme_dirs("static")
 STORAGES = {
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",

@@ -77,6 +77,10 @@ when blank. `PROXMOX_URL` is the odd one out — the Proxmox UI runs on the host
 rather than behind the edge, so it has no subdomain of ours and points at the
 LAN instead (self-signed cert, not reachable from outside).
 
+`THEME` picks the folder under [`themes/`](themes/README.md) that dresses the
+site. It defaults to the host in `PUBLIC_BASE_URL`, so it is normally left
+unset; see [Theming](#theming).
+
 Those three link *other systems'* admin UIs. Each authenticates on its own terms
 with credentials Corliss does not hold, so they open a login rather than a
 session — offered to cluster admins because that is who would have those
@@ -784,6 +788,35 @@ builds it. `views.about`, `views.about_system`, `views.about_team` — each is a
   hover gives no other clue about where the reader already is. Passed by name
   rather than derived from `request.resolver_match`, so the value is visible
   where the page is chosen.
+
+## Theming
+
+A deployment changes its colours, its name and any page by adding a folder under
+[`themes/`](themes/README.md) named for its domain. That README is the manual
+for writing one; what follows is why it works the way it does.
+
+- **Chosen by the host in `PUBLIC_BASE_URL`, not by a setting.** Every
+  deployment already sets that URL, so a theme is on the moment its folder
+  exists, and a cluster holds no second value that could disagree with its
+  domain. `THEME` overrides it, mostly for trying a theme locally.
+- **File by file, through Django's own search order.** The theme's `templates/`
+  goes in `TEMPLATES` `DIRS`, searched before `APP_DIRS`, and its `static/` in
+  `STATICFILES_DIRS`, searched before the app's. A theme holds only what it
+  changes, and everything else falls back to the app's copy.
+- **A missing folder is the default look, unless it was asked for by name.** A
+  derived host with no folder is every unthemed deployment. A hand-set `THEME`
+  with no folder is a typo, which `corliss.E003` turns into a failed
+  `collectstatic`.
+- **`theme.css` exists in the app, empty.** The manifest storage raises on a
+  `{% static %}` it never collected, so the hook has to be there before any
+  theme fills it.
+- **`--brand-accent` is its own token.** The logo and the wordmark's accent
+  shared `--accent` with buttons, links and focus rings, so recolouring the
+  brand would have moved all of them.
+- **`collectstatic` must see the real `PUBLIC_BASE_URL`.** It resolves the theme
+  the way the server does, so running it without that URL collects the default
+  CSS while the server renders the themed templates. The zai-ops role passes it
+  for exactly this.
 
 ## Forms
 
