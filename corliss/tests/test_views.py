@@ -704,6 +704,9 @@ class ManageViewTests(NoRosterMixin, TestCase):
 
         self.assertContains(resp, "did:plc:applicant")
         self.assertContains(resp, "HEYO")
+        # The cell cuts a long note to one line, so the title is the only place
+        # the rest of it can be read.
+        self.assertContains(resp, 'title="HEYO"')
         self.assertContains(resp, "2026-08-17")
         self.assertContains(resp, "1 awaiting a decision")
 

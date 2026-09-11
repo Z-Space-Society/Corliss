@@ -383,7 +383,7 @@ makes it sound otherwise.
                   {% endif %}
                 </td>
                 <td class="data-table__muted">{{ row.created_at|date:"Y-m-d H:i"|default:"—" }}</td>
-                <td class="data-table__note">{{ row.note|default:"—" }}</td>
+                <td>{% if row.note %}<div class="data-table__note" title="{{ row.note }}">{{ row.note }}</div>{% else %}—{% endif %}</td>
                 <td>
                   {% if can_decide %}
                     <form method="post" class="row-form">

@@ -1248,13 +1248,21 @@ th.data-table__count {
 }
 
 /* The one free-text column: an applicant's note, which they wrote and which
-   can be any length. Everything else in these tables is an identifier or a
-   date and is better off refusing to wrap; this wraps inside a bounded width
-   so one long note cannot stretch the table past the card. */
+   can run to 300 characters. It is cut to one line with an ellipsis and the
+   whole note sits on the title, so the queue stays a row per applicant and
+   the Decide column never gets pushed out of the card.
+
+   The rule is on a block inside the cell, not on the td. A table cell ignores
+   max-width, so an ellipsis on the td itself never triggers. The first cut
+   also asked the td to wrap, which never happened either: `.data-table td`
+   sets nowrap and outranks a bare class, so long notes ran on one line and
+   scrolled the table sideways. */
 .data-table__note {
-  white-space: normal;
   max-width: 38ch;
-  min-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: help;
 }
 
 /* State, not decoration: `active`/`current` is the only thing on these rows
