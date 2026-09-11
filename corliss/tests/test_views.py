@@ -306,6 +306,23 @@ class NavMenuTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("home"))
         self.assertNotContains(resp, ">Manage<")
 
+    def test_every_menu_trigger_can_take_focus(self):
+        # A trigger is a span, and a span with no tabindex cannot be focused. On
+        # a touchscreen there is no hover either, so :focus-within never fired
+        # and no menu in the row could be opened at all.
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        html = self.client.get(reverse("about")).content.decode()
+        triggers = re.findall(
+            r'<span class="(?:nav__item nav__item--menu|nav__account)[^"]*"[^>]*>',
+            html,
+        )
+        # About, Tools, Manage and the account chip.
+        self.assertEqual(len(triggers), 4)
+        for tag in triggers:
+            with self.subTest(tag=tag):
+                self.assertIn('tabindex="0"', tag)
+
     def test_plain_member_sees_no_manage_menu(self):
         _grant()
         self.client.force_login(self.user)

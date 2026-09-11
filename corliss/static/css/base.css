@@ -192,7 +192,9 @@ a {
   position: relative;
 }
 
-/* Menu triggers open on hover, so they are labels, not things to click. */
+/* Menu triggers open on hover with a mouse and on focus otherwise (base.html
+   gives each one tabindex="0", so a tap or a Tab focuses it). They are labels
+   rather than links, so the cursor stays an arrow. */
 .nav__menu .nav__account,
 .nav__item--menu {
   cursor: default;
@@ -202,16 +204,28 @@ a {
   display: block;
 }
 
-.nav__menu:hover .nav__account,
 .nav__menu:focus-within .nav__account,
-.nav__menu:hover .nav__item--menu,
 .nav__menu:focus-within .nav__item--menu {
   background: var(--nav-active-bg);
   color: var(--text);
 }
 
+/* Hover only where there is a real pointer. A touchscreen emulates :hover on a
+   tap and then leaves it stuck, which would hold a menu open after focus had
+   moved on and make it impossible to close by tapping away. */
+@media (hover: hover) {
+  .nav__menu:hover .nav__account,
+  .nav__menu:hover .nav__item--menu {
+    background: var(--nav-active-bg);
+    color: var(--text);
+  }
+}
+
+/* Hidden with visibility rather than display, so that closing can be delayed on
+   touch (below). Still out of the tab order and out of hit-testing while
+   hidden, which is all display: none was buying. */
 .nav__dropdown {
-  display: none;
+  visibility: hidden;
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
@@ -247,9 +261,29 @@ a {
   height: 7px;
 }
 
-.nav__menu:hover .nav__dropdown,
 .nav__menu:focus-within .nav__dropdown {
-  display: block;
+  visibility: visible;
+}
+
+@media (hover: hover) {
+  .nav__menu:hover .nav__dropdown {
+    visibility: visible;
+  }
+}
+
+/* On a touchscreen a tap on a link inside the menu takes focus off the trigger
+   before the click lands, because Safari does not focus a link on tap. That
+   ends :focus-within and would hide the menu out from under the finger, so the
+   click hit whatever was behind it. Holding it visible a beat longer lets the
+   click arrive. Opening stays instant: the delay is on the way out only. */
+@media (hover: none) {
+  .nav__dropdown {
+    transition: visibility 0s 0.25s;
+  }
+
+  .nav__menu:focus-within .nav__dropdown {
+    transition-delay: 0s;
+  }
 }
 
 /* Labelled facts, not actions — identity, not controls. One shared row style so
@@ -346,6 +380,54 @@ a {
 
 .nav__status-dot.is-online {
   background: var(--success);
+}
+
+/* Phones. The desktop nav is one 64px line that runs off a narrow screen, so
+   here it wraps: the brand and About on the first line, the member's entries
+   beneath. Menus drop full width under the whole nav instead of hanging from
+   their trigger, where a 220px panel anchored mid-row would run off the edge,
+   and every target grows to something a thumb can hit. */
+@media (max-width: 720px) {
+  .nav {
+    position: relative;
+    flex-wrap: wrap;
+    height: auto;
+    padding: 8px 12px;
+    row-gap: 4px;
+  }
+
+  .nav__items {
+    flex-wrap: wrap;
+  }
+
+  .nav__items .nav__divider {
+    display: none;
+  }
+
+  /* Static, so each dropdown positions against .nav rather than its trigger. */
+  .nav__menu {
+    position: static;
+  }
+
+  .nav__dropdown,
+  .nav__dropdown--left,
+  .nav__dropdown--account {
+    top: 100%;
+    left: 12px;
+    right: 12px;
+    min-width: 0;
+  }
+
+  .nav__item,
+  .nav__account {
+    padding: 12px;
+    font-size: 15px;
+  }
+
+  .nav__dropdown-item {
+    padding: 12px 10px;
+    font-size: 15px;
+  }
 }
 
 /* --- Main / layout ----------------------------------------------------- */

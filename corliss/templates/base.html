@@ -52,7 +52,7 @@
         where the reader already is.
         {% endcomment %}
         <div class="nav__menu">
-          <span class="nav__item nav__item--menu{% if about_page %} is-active{% endif %}">About</span>
+          <span class="nav__item nav__item--menu{% if about_page %} is-active{% endif %}" tabindex="0">About</span>
 
           <div class="nav__dropdown nav__dropdown--left">
             <a class="nav__dropdown-item{% if about_page == 'about' %} is-active{% endif %}"
@@ -119,7 +119,7 @@
         {% endcomment %}
         {% if user.is_authenticated %}
           <div class="nav__menu">
-            <span class="nav__item nav__item--menu">Tools</span>
+            <span class="nav__item nav__item--menu" tabindex="0">Tools</span>
 
             <div class="nav__dropdown nav__dropdown--left">
               {% if CHAT_URL %}
@@ -189,7 +189,7 @@
         {% endcomment %}
         {% if user.is_cluster_admin or user.is_superuser %}
           <div class="nav__menu">
-            <span class="nav__item nav__item--menu">Manage</span>
+            <span class="nav__item nav__item--menu" tabindex="0">Manage</span>
 
             <div class="nav__dropdown nav__dropdown--left">
               {% if user.is_cluster_admin %}
@@ -233,12 +233,16 @@
 
         {% if user.is_authenticated %}
           {% comment %}
-          Opens on hover, and on keyboard focus via :focus-within so it is not
-          mouse-only. Plain divs rather than <details>, which cannot be opened
-          by hover at all — its state lives in an attribute, not in CSS.
+          Every menu in this row opens on hover where there is a mouse, and on
+          focus everywhere else: each trigger carries tabindex="0", so a tap on
+          a phone or a Tab from the keyboard focuses it and :focus-within opens
+          the menu. Without the tabindex a trigger is an unfocusable span, and
+          a touchscreen had no way to open a menu at all. Plain divs rather than
+          <details>, which cannot be opened by hover at all, since its state
+          lives in an attribute, not in CSS.
           {% endcomment %}
           <div class="nav__menu">
-            <span class="nav__account">
+            <span class="nav__account" tabindex="0">
               <span class="nav__status-dot is-online"></span>
               {{ user.username }}
             </span>

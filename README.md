@@ -1002,6 +1002,24 @@ only thing on the left. The `.nav__divider` between it and the brand is the same
 glyph that separates Manage from the account chip: one rule doing one job,
 marking where the nav changes subject.
 
+**Menus open on hover with a mouse and on focus everywhere else, with no
+script.** Each trigger is a `<span>` carrying `tabindex="0"`, so a tap or a Tab
+focuses it and `:focus-within` opens the menu. Without the tabindex a span cannot
+take focus, and on a phone, where there is no hover, no menu in the row could be
+opened at all; `test_every_menu_trigger_can_take_focus` holds that. Three
+touch-specific details follow from it, all in `base.css`:
+
+- **Hover opens a menu only under `(hover: hover)`.** A touchscreen emulates
+  `:hover` on a tap and leaves it stuck, which would pin a menu open.
+- **On touch, a menu stays visible for a quarter second after focus leaves.**
+  Safari does not focus a link on tap, so tapping an item takes focus off the
+  trigger before the click lands, and a menu that closed at once would drop
+  the click on whatever was behind it. That delay is why the dropdown hides with
+  `visibility` rather than `display`.
+- **Under 720px the row wraps and menus drop full width beneath the nav**,
+  instead of hanging from a trigger mid-row where they would run off the screen,
+  and every target grows to thumb size.
+
 ## Wiring up a relying party (Open WebUI shown)
 
 ```bash

@@ -57,6 +57,9 @@ class ThemedTemplateTests(NoRosterMixin, TestCase):
         self.assertContains(self.client.get(reverse("about")), "nav__brand-mark")
 
 
+# No theme, forced rather than assumed: a developer trying a theme locally has
+# THEME in .env, and without this the suite would assert against their theme.
+@override_settings(TEMPLATES=_templates_with([]))
 class UnthemedTemplateTests(NoRosterMixin, TestCase):
     def test_the_default_title_names_the_site(self):
         html = self.client.get(reverse("home")).content.decode()
