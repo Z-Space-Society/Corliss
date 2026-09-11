@@ -2,6 +2,55 @@
    for production. Loaded after base.css, so these win. */
 
 :root {
-  --bg: oklch(0.5 0.14 255);
+  --bg: oklch(0.62 0.12 255);
   --brand-accent: #000;
+}
+
+/* base.css's greys and link blue were picked for a near-black page, and on this
+   blue they vanish. So text sitting straight on the page (nav, footer, lead
+   paragraphs, loose links) goes dark instead. Set on body, so the resets below
+   can win inside anything with its own background. */
+body {
+  --text-secondary: oklch(0.22 0.03 255);
+  --text-muted: oklch(0.28 0.03 255);
+  --text-muted-2: oklch(0.28 0.03 255);
+  --text-disabled: oklch(0.4 0.04 255);
+  --accent: oklch(0.3 0.12 255);
+  --accent-hover: oklch(0.36 0.12 255);
+}
+
+/* Everything that paints its own dark background keeps base.css's values. The
+   list is every rule in base.css that sets a --surface, --inset or
+   --nav-active-bg background. */
+.nav__item:hover,
+.nav__item.is-active,
+.nav__account:hover,
+.nav__account.is-active,
+.nav__menu:hover .nav__account,
+.nav__menu:focus-within .nav__account,
+.nav__menu:hover .nav__item--menu,
+.nav__menu:focus-within .nav__item--menu,
+.nav__dropdown,
+.card,
+.input-row,
+.select,
+.text-input,
+.btn-row,
+.alert--notice,
+.endpoint,
+.modal__panel,
+.modal__facts,
+.pill,
+.code-block,
+.copy-btn,
+.tabs__radio:checked + .tabs__label,
+.key-fill__input,
+.stacked-form input,
+.stacked-form textarea {
+  --text-secondary: oklch(0.68 0.008 255);
+  --text-muted: oklch(0.55 0.008 255);
+  --text-muted-2: oklch(0.5 0.008 255);
+  --text-disabled: oklch(0.42 0.008 255);
+  --accent: oklch(0.62 0.17 255);
+  --accent-hover: oklch(0.67 0.17 255);
 }
