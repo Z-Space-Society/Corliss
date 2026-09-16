@@ -411,29 +411,19 @@ def _manifest(client, key):
 # asked whether it is up.
 STACK = [
     ("Core", [
-        Probe("Garage", "object store — backup target for the control node", _garage,
-              manifest="garage"),
-        Probe("PostgreSQL",
-              "the cluster's database: Corliss, LiteLLM, Open WebUI, HappyView",
-              _postgres, manifest="postgres"),
-        Probe("Redis", "session revocation store, so signing out reaches chat in seconds",
-              _redis, manifest="redis"),
+        Probe("Garage", "S3 object store and system backup target", _garage, manifest="garage"),
+        Probe("PostgreSQL", "Cluster's central database: Corliss, LiteLLM, HappyView", _postgres, manifest="postgres"),
+        Probe("Redis", "In-memory store for sessions, caching, and short-lived data", _redis, manifest="redis"),
     ]),
     ("Platform", [
-        Probe("Caddy", "the edge — the only LAN-facing container, terminates TLS", _caddy,
-              manifest="caddy"),
-        Probe("HappyView", "the membership registry: applications, grants, admin roster",
-              _happyview, manifest="happyview"),
-        Probe("LiteLLM", "the API gateway in front of the models", _litellm,
-              manifest="litellm"),
-        Probe("Sync relay", "the Automerge sync server behind collaborative spaces",
-              _sync_relay, note="liveness only — does not check its storage",
-              manifest="sync-relay"),
+        Probe("Caddy", "The only LAN-facing container, terminates TLS", _caddy, manifest="caddy"),
+        Probe("HappyView", "Membership registry: applications, grants, admin roster", _happyview, manifest="happyview"),
+        Probe("LiteLLM", "API gateway in front of the models", _litellm, manifest="litellm"),
+        Probe("Sync relay", "Automerge sync server", _sync_relay, manifest="sync-relay"),
     ]),
     ("Applications", [
-        Probe("Corliss", "login, membership, OIDC, and members' API keys", _corliss,
-              manifest="corliss"),
-        Probe("Open WebUI", "the chat app", _open_webui, manifest="open-webui"),
+        Probe("Corliss", "Login, membership, OIDC, and API keys", _corliss, manifest="corliss"),
+        Probe("Open WebUI", "Chat app", _open_webui, manifest="open-webui"),
     ]),
 ]
 
