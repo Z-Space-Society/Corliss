@@ -7,6 +7,9 @@ What this cluster is made of and whether each part is answering. The states and
 the probes behind them are `corliss.health` — including why a row can read
 "Unknown" (nothing to measure with) and never "Down" for want of a setting.
 
+The zai-ops and Version columns come from the manifests zai-ops writes to
+Garage, not from the probes. A blank pair means there is no manifest to show.
+
 The grouping is zai-ops' own CTID tiering: core infra is the data foundations,
 platform is what other services consume, applications are what members use.
 {% endcomment %}
@@ -25,6 +28,12 @@ platform is what other services consume, applications are what members use.
   are cached for up to {{ cache_ttl }} seconds, so a dot can lag a service that
   has only just changed state; a reload after that asks again.</p>
 
+  <p class="page-text page-text--note">The zai-ops and version columns are what
+  each service's last provisioning run recorded, not something the service
+  reports. A row whose revision differs from the rest has not been replayed
+  since the blueprint changed. Beside a status other than Up, do not trust the
+  version.</p>
+
   {% for group in groups %}
     <h2 class="section-title">{{ group.name }}</h2>
     <div class="card">
@@ -34,6 +43,8 @@ platform is what other services consume, applications are what members use.
             <tr>
               <th>Service</th>
               <th>What it does</th>
+              <th>zai-ops</th>
+              <th>Version</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -43,6 +54,13 @@ platform is what other services consume, applications are what members use.
                 <td>{{ service.name }}</td>
                 <td class="data-table__muted">{{ service.purpose }}{% if service.note %}
                   <span class="status__note">— {{ service.note }}</span>{% endif %}</td>
+                {% if service.version %}
+                  <td class="data-table__version">{{ service.revision }}</td>
+                  <td class="data-table__version"{% if service.provisioned_at %} title="Provisioned {{ service.provisioned_at }}"{% endif %}>{{ service.version }}</td>
+                {% else %}
+                  <td class="data-table__muted">not recorded</td>
+                  <td class="data-table__muted">not recorded</td>
+                {% endif %}
                 <td>
                   <span class="status">
                     <span class="status__dot status__dot--{{ service.state }}"></span>

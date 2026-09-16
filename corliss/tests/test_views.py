@@ -472,6 +472,7 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         # which without this would dial eight addresses off the developer's own
         # settings and pay the timeout for each.
         self._states = {}
+        self._manifests = {}
         self._health_patcher = patch("corliss.health.check_all",
                                      side_effect=self._fake_check)
         self._health_patcher.start()
@@ -491,6 +492,9 @@ class SystemsViewTests(NoRosterMixin, TestCase):
                         "label": health._LABELS[
                             self._states.get(probe.name, health.UNKNOWN)
                         ],
+                        **self._manifests.get(probe.name, {
+                            "version": None, "revision": None, "provisioned_at": "",
+                        }),
                     }
                     for probe in probes
                 ],
@@ -553,6 +557,36 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("systems"))
         self.assertContains(resp, "does not check its storage")
 
+    def test_the_version_columns_sit_between_the_purpose_and_the_status(self):
+        # zai-ops before Version, so the rightmost version is the interesting
+        # one rather than a column of identical revisions (zai-ops #6).
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("systems"))
+        headings = re.findall(r"<th>([^<]+)</th>", resp.content.decode())
+        self.assertEqual(headings[:5], ["Service", "What it does", "zai-ops", "Version", "Status"])
+
+    def test_a_manifest_renders_its_revision_and_version(self):
+        self._manifests = {"Redis": {
+            "version": "5:8.0.2-3+deb13u2",
+            "revision": "v0.7.0-dirty",
+            "provisioned_at": "2026-09-16T16:57:26Z",
+        }}
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("systems"))
+        self.assertContains(resp, "5:8.0.2-3+deb13u2")
+        # -dirty means the blueprint was hand-edited on the control node, and
+        # the page is where that should be seen, so it is rendered as written.
+        self.assertContains(resp, "v0.7.0-dirty")
+        self.assertContains(resp, 'title="Provisioned 2026-09-16T16:57:26Z"')
+
+    def test_a_row_without_a_manifest_says_so_rather_than_guessing(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("systems"))
+        self.assertContains(resp, "not recorded")
+
     def test_a_non_admin_gets_404_not_403(self):
         # A non-admin has no business learning the page exists — same posture
         # as /manage/.
@@ -560,6 +594,7 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(reverse("systems")).status_code, 404)
 
+    @override_settings(GARAGE_S3_URL="", MANIFEST_BUCKET="")
     def test_the_real_probes_render_with_nothing_reachable(self):
         # Every other test here hands the template a hand-built stack, so a
         # drift between what health.check_all actually returns and what the

@@ -23,6 +23,7 @@ dependencies = [
     "pyjwt==2.14.0",           # JWT sign/verify for DPoP, client assertion, id_token
     "cryptography==50.0.1",    # EC (P-256) + RSA key handling, backs PyJWT
     "requests==2.34.2",        # HTTP to the PDS / DID resolution
+    "boto3==1.43.95",          # reads zai-ops' service manifests from Garage for /systems/
     "dnspython==2.8.0",        # DNS TXT handle resolution (_atproto.<handle>) for make_admin
     "gunicorn==26.2.0",        # production WSGI server (deployment; not used by runserver)
     "whitenoise==6.12.0",      # serves collected static straight from gunicorn

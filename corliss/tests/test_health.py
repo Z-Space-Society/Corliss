@@ -14,12 +14,18 @@ What is worth asserting, in order of what would actually bite:
    page an admin opens *because* something is already wrong.
 3. Redis's `-NOAUTH` counts as up, which is not obvious and is the reason there
    is no redis dependency in this project.
+4. A manifest that cannot be read blanks its two cells and changes nothing
+   else. The version columns must never be able to move a dot or the cache
+   window; the Status column is what qualifies them, not the other way round.
 """
 
+import io
+import json
 import socket
 from unittest.mock import MagicMock, patch
 
 import requests
+from botocore.exceptions import ClientError, EndpointConnectionError
 from django.core.cache import cache
 from django.test import TestCase, override_settings
 
@@ -207,6 +213,84 @@ class PostgresTests(TestCase):
             self.assertEqual(health._postgres(), health.DOWN)
 
 
+_MANIFEST_SETTINGS = dict(
+    GARAGE_S3_URL="http://10.1.1.101:3900",
+    MANIFEST_BUCKET="zai-manifests",
+    MANIFEST_ACCESS_KEY="GKreader",
+    MANIFEST_SECRET_KEY="secret",
+    GARAGE_S3_REGION="garage",
+)
+
+
+def _manifest_body(**fields):
+    body = {"service": "redis", "version": "5:8.0.2-3+deb13u2",
+            "zai_ops": "v0.7.0", "provisioned_at": "2026-09-16T16:57:26Z"}
+    body.update(fields)
+    return {"Body": io.BytesIO(json.dumps(body).encode())}
+
+
+@override_settings(**_MANIFEST_SETTINGS)
+class ManifestTests(TestCase):
+    """The zai-ops and Version columns: read from Garage, never guessed."""
+
+    def test_a_manifest_becomes_the_rows_revision_and_version(self):
+        client = MagicMock()
+        client.get_object.return_value = _manifest_body()
+        self.assertEqual(health._manifest(client, "redis"), {
+            "version": "5:8.0.2-3+deb13u2",
+            "revision": "v0.7.0",
+            "provisioned_at": "2026-09-16T16:57:26Z",
+        })
+        client.get_object.assert_called_once_with(Bucket="zai-manifests", Key="redis.json")
+
+    def test_a_missing_manifest_is_none(self):
+        # The normal case for a service whose play has not run since zai-ops
+        # started writing manifests.
+        client = MagicMock()
+        client.get_object.side_effect = ClientError(
+            {"Error": {"Code": "NoSuchKey", "Message": "not found"}}, "GetObject")
+        self.assertIsNone(health._manifest(client, "redis"))
+
+    def test_an_unreachable_garage_is_none_not_an_exception(self):
+        client = MagicMock()
+        client.get_object.side_effect = EndpointConnectionError(
+            endpoint_url="http://10.1.1.101:3900")
+        self.assertIsNone(health._manifest(client, "redis"))
+
+    def test_a_body_that_is_not_what_zai_ops_writes_is_none(self):
+        client = MagicMock()
+        for body in ({"Body": io.BytesIO(b"not json")},
+                     _manifest_body(zai_ops=None),
+                     {"Body": io.BytesIO(b'{"service": "redis"}')}):
+            client.get_object.return_value = body
+            self.assertIsNone(health._manifest(client, "redis"))
+
+    @override_settings(MANIFEST_SECRET_KEY="")
+    def test_no_client_is_built_without_a_complete_key(self):
+        with patch("corliss.health.boto3.session.Session") as session:
+            self.assertIsNone(health._manifest_client())
+        session.assert_not_called()
+
+    @override_settings(GARAGE_S3_URL="")
+    def test_no_client_is_built_without_an_endpoint(self):
+        with patch("corliss.health.boto3.session.Session") as session:
+            self.assertIsNone(health._manifest_client())
+        session.assert_not_called()
+
+    def test_the_client_makes_one_attempt_on_the_probes_timeout(self):
+        # botocore's default retries would multiply HEALTH_TIMEOUT per row on a
+        # page someone opens because something is already down.
+        with patch("corliss.health.boto3.session.Session") as session:
+            health._manifest_client()
+        kwargs = session.return_value.client.call_args.kwargs
+        self.assertEqual(kwargs["endpoint_url"], "http://10.1.1.101:3900")
+        self.assertEqual(kwargs["region_name"], "garage")
+        config = kwargs["config"]
+        self.assertEqual(config.connect_timeout, health.HEALTH_TIMEOUT)
+        self.assertEqual(config.read_timeout, health.HEALTH_TIMEOUT)
+        self.assertEqual(config.retries, {"total_max_attempts": 1})
+
+
 class BrokenProbeTests(TestCase):
     """Our bug is not their outage."""
 
@@ -325,3 +409,59 @@ class CheckAllTests(TestCase):
         self.assertEqual(states["Corliss"], health.UP)
         self.assertEqual(states["PostgreSQL"], health.UP)
         self.assertEqual(states["Sync relay"], health.DOWN)
+
+    @override_settings(MANIFEST_BUCKET="")
+    def test_without_manifest_settings_every_row_has_blank_versions(self):
+        with patch("corliss.health.requests.get", return_value=_response(200)), \
+                patch("corliss.health.socket.create_connection") as connect, \
+                patch("corliss.health.boto3.session.Session") as session:
+            connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
+            groups = health.check_all()
+
+        session.assert_not_called()
+        for group in groups:
+            for service in group["services"]:
+                self.assertIsNone(service["version"], service["name"])
+                self.assertIsNone(service["revision"], service["name"])
+
+    @override_settings(**_MANIFEST_SETTINGS)
+    def test_each_row_reads_its_own_manifest_key(self):
+        def get_object(Bucket, Key):
+            return _manifest_body(service=Key[:-5], version=f"{Key[:-5]}-1")
+
+        with patch("corliss.health.requests.get", return_value=_response(200)), \
+                patch("corliss.health.socket.create_connection") as connect, \
+                patch("corliss.health.boto3.session.Session") as session:
+            connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
+            session.return_value.client.return_value.get_object.side_effect = get_object
+            groups = health.check_all()
+
+        versions = {s["name"]: s["version"] for g in groups for s in g["services"]}
+        self.assertEqual(versions, {
+            p.name: f"{p.manifest}-1" for _, ps in health.STACK for p in ps
+        })
+
+    def test_every_row_names_a_manifest_key(self):
+        # A row with no key would render blank forever and read as a service
+        # zai-ops never provisioned.
+        for _, probes in health.STACK:
+            for probe in probes:
+                self.assertTrue(probe.manifest, probe.name)
+
+    @override_settings(**_MANIFEST_SETTINGS)
+    def test_an_unreadable_garage_changes_no_state_and_no_cache_window(self):
+        # A Garage outage must grey the version columns and nothing else. In
+        # particular it must not shorten the all-clear, or every page view on
+        # a healthy cluster would re-probe everything because of metadata.
+        with patch("corliss.health.cache.set") as cache_set, \
+                patch("corliss.health.requests.get", return_value=_response(200)), \
+                patch("corliss.health.socket.create_connection") as connect, \
+                patch("corliss.health.boto3.session.Session") as session:
+            connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
+            session.return_value.client.return_value.get_object.side_effect = \
+                EndpointConnectionError(endpoint_url="http://10.1.1.101:3900")
+            groups = health.check_all()
+
+        states = [s["state"] for g in groups for s in g["services"]]
+        self.assertEqual(set(states), {health.UP})
+        self.assertEqual(cache_set.call_args.args[2], health.HEALTH_CACHE_TTL)
