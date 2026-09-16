@@ -210,8 +210,8 @@ LITELLM_MAX_KEYS_PER_MEMBER = env.int("LITELLM_MAX_KEYS_PER_MEMBER", default=5)
 # can change anything. That is what makes handing this list to a page safe.
 
 # The Automerge sync server behind collaborative spaces (its CT, port 7030).
-# Probed at /health, which reports liveness WITHOUT touching Postgres — so "up"
-# here is narrower than it looks and `corliss.health` says so on the page.
+# Probed at /health, which reports liveness WITHOUT touching Postgres, so "up"
+# here means the process is serving, not that its storage works.
 SYNC_RELAY_URL = env("SYNC_RELAY_URL", default="")
 
 # Redis, as something to dial — NOT as a cache backend. Corliss holds no Redis

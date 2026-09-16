@@ -725,7 +725,8 @@ outage; the traceback goes to the log, where it is ours to fix.
 - **The sync relay's `/health` is liveness only** and deliberately never touches
   Postgres — asking it to would let a database blip restart the relay out from
   under live sync connections. `up` means the process is serving, not that its
-  storage works. The page says so on the row.
+  storage works. The row itself does not say so, so this is where it is
+  recorded.
 - **Garage is asked on its S3 port, not its admin API**, which binds to
   `127.0.0.1:3903` on the object-store CT and is unreachable from here. An
   unauthenticated `GET /` on an S3 endpoint answers an XML error, so a 403 from

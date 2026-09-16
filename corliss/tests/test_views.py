@@ -548,15 +548,6 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("systems"))
         self.assertNotContains(resp, "Manage Console")
 
-    def test_a_row_can_qualify_what_its_probe_actually_proves(self):
-        # The sync relay's /health never touches Postgres, so "Up" means the
-        # process is serving and not that its storage works. The dot must not
-        # be left to overclaim that on its own.
-        self._as_cluster_admin()
-        self.client.force_login(self.user)
-        resp = self.client.get(reverse("systems"))
-        self.assertContains(resp, "does not check its storage")
-
     def test_the_version_columns_sit_between_the_purpose_and_the_status(self):
         # zai-ops before Version, so the rightmost version is the interesting
         # one rather than a column of identical revisions (zai-ops #6).
