@@ -298,6 +298,28 @@ class ModelTests(TestCase):
             found = client().models("level-2")
         self.assertEqual([m.name for m in found], ["qwen3-coder", "nomic-embed-text"])
 
+    def test_a_model_switched_off_in_litellm_is_not_listed(self):
+        # The GX10 models, after being toggled off in the admin UI: still in
+        # `/model/info`, marked `blocked`, and absent from `/v1/models`. Listed
+        # here they would be models a member's key cannot call.
+        blocked = model_row("GX10/northmini", mode=None)
+        blocked["model_info"] = {"id": "4c9a85b5", "db_model": True, "blocked": True}
+        router = self._router([blocked, model_row("Qwen3.8-27B")])
+        with patch("corliss.litellm.requests.request", router):
+            found = client().models("level-2")
+        self.assertEqual([m.name for m in found], ["Qwen3.8-27B"])
+
+    def test_a_blocked_deployment_does_not_hide_a_live_one_of_the_same_name(self):
+        # `blocked` sits beside the deployment's `id`, so it is per deployment.
+        # First-entry-wins dedupe must not let the blocked one claim the name.
+        blocked = model_row("qwen3-coder", api_base="http://10.1.1.113:8080/v1")
+        blocked["model_info"]["blocked"] = True
+        live = model_row("qwen3-coder", api_base="http://10.1.1.114:8080/v1")
+        router = self._router([blocked, live])
+        with patch("corliss.litellm.requests.request", router):
+            found = client().models("level-2")
+        self.assertEqual([m.name for m in found], ["qwen3-coder"])
+
     def test_a_model_declaring_no_mode_is_treated_as_chat(self):
         # Both GX10 models on the cluster carry an empty `model_info`, and both
         # are things to talk to.

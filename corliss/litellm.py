@@ -418,6 +418,13 @@ class LiteLLM:
             info = entry.get("model_info") or {}
             if not isinstance(info, dict):
                 info = {}
+            # The admin UI's enable toggle writes `model_info.blocked`, and a
+            # blocked model stays in `/model/info` while `/v1/models` leaves it
+            # out (checked against the proxy, 2026-09-16). Skipped before the
+            # name is claimed, because the flag is per deployment: a blocked
+            # first entry must not hide a live second one of the same name.
+            if info.get("blocked") is True:
+                continue
             context = info.get("max_input_tokens") or info.get("max_tokens") or 0
             found[name] = {
                 "name": name,

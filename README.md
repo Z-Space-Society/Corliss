@@ -459,6 +459,19 @@ Pruning is keyed on the team, not on "did the tier change", which the hook has
 no way to know. A key already on the right team is left alone, which is what
 keeps a reconcile replay on a rebuilt cluster quiet.
 
+### The model list
+
+`/api/` lists the models the member's tier can reach, read from LiteLLM's
+`/model/info` and cached for five minutes. That endpoint is used over
+`/v1/models` because only it says which mode a model is in.
+
+- **A model switched off in LiteLLM is left out.** The admin UI's toggle sets
+  `model_info.blocked`, and a blocked model is still returned by `/model/info`
+  while `/v1/models` drops it. Reading `/model/info` without checking the flag
+  showed disabled models as callable, which production found on 2026-09-16; the
+  test that would have caught it is a blocked entry in the fixture. Toggling a
+  model can take up to the cache TTL to reach the page.
+
 ### Revocation reaches LiteLLM
 
 The same `apply_event` hook that ends a chat session ends API access, for the
