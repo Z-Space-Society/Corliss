@@ -328,7 +328,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | About — what this is, the system, the team (public) | `/about/`, `/about/system/`, `/about/team/` |
 | Console — applications, members, admins, invite, reconcile (cluster admins) | `/manage/` |
 | Authenticate the service account so roster edits can be made (POST, cluster admins; returns through `/auth/callback`) | `/manage/unlock` |
-| Systems — the stack, with live health checks (cluster admins) | `/systems/` |
+| Systems — the stack, with live health checks and each service's provisioned version (cluster admins) | `/systems/` |
 | Django admin | `/admin/` |
 
 The parenthesised audiences above are the four access levels, and each is one
@@ -662,6 +662,52 @@ along with the `manage_console` role — `/manage/` replaced it, which is also w
 guess has no business listing what is not there, so a service earns a row here
 only if there is something to probe.
 
+### The zai-ops and Version columns
+
+Which zai-ops revision provisioned each service, and which version that service
+runs. **Neither comes from the probes.** A liveness endpoint cannot say what
+blueprint built it, and Redis cannot say anything over HTTP at all. Ansible knows
+both at the moment it installs a service, so every zai-ops service play ends by
+writing a manifest to a Garage bucket (zai-ops ADR-0009):
+
+```json
+{"service": "redis", "version": "5:8.0.2-3+deb13u2", "zai_ops": "v0.7.0", "provisioned_at": "2026-09-16T16:57:26Z"}
+```
+
+`corliss.health` reads one per row, in the same thread pool as the probes, with
+boto3 on the S3 port the Garage probe already dials.
+
+- **Uniformity is the signal.** On a healthy cluster the zai-ops column is the
+  same value all the way down, and that is the all-clear. A row whose revision
+  differs was provisioned against a different blueprint and has not been replayed
+  since. Corliss does not need to know the repo's current HEAD to show that.
+- **A `-dirty` revision is rendered as written.** It means the blueprint was
+  hand-edited on the control node, which the page should show rather than tidy.
+- **A manifest records what was installed, not what is running.** A CT rebuilt
+  without replaying its play keeps its old manifest. The Status column is what
+  qualifies the version beside it, which makes **the probes load-bearing for
+  these columns**: do not weaken one on the grounds that the page "has the
+  version anyway".
+- **A missing manifest is a blank pair of cells and nothing else.** No such
+  object, Garage down, or a malformed body all render "not recorded", and none of
+  them can change a state or shorten the cache window. A Garage outage greys two
+  columns on a page that otherwise still works.
+- **It holds a credential, which the probes deliberately do not.** Garage has no
+  anonymous access on its S3 API. The key is read-only and scoped to the manifest
+  bucket, so it cannot read the backups or write anything. Its settings sit in
+  their own block for that reason.
+- **One attempt, on the probes' timeout.** botocore retries by default, which
+  would multiply the two-second timeout per row on a page opened because
+  something is already down.
+- **The key names are an interface with zai-ops.** Each `Probe` in `STACK` names
+  its `manifest` key, and zai-ops lists the same names in
+  `docs/roles/manifest.md`. Rename one side alone and that row goes blank without
+  anything failing.
+
+**Adding a service** means a probe *and* a manifest key here, plus a manifest
+step in its zai-ops role. zai-ops' `docs/adding-a-service.md` is the checklist
+for both repos.
+
 ### Three states, and the third one is load-bearing
 
 `up` and `down` are measurements. **`unknown` is the honest answer when there is
@@ -738,6 +784,19 @@ services that answer in milliseconds. Do not add Redis for it.
 
 All four are blank-tolerant, and **blank means `unknown`, never `down`**. Local
 development sets none of them and the page is correct with every row grey.
+
+The version columns have settings of their own, kept apart because they carry a
+credential:
+
+| Setting | Meaning |
+| ------- | ------- |
+| `MANIFEST_BUCKET` | The Garage bucket zai-ops writes manifests to (`zai-manifests`). |
+| `MANIFEST_ACCESS_KEY` / `MANIFEST_SECRET_KEY` | A read-only key scoped to that bucket. Never the backup key. |
+| `GARAGE_S3_REGION` | Must match `s3_region` in `garage.toml`, because SigV4 signs it. Defaults to `garage`, which is what zai-ops sets. |
+
+The endpoint is `GARAGE_S3_URL`, shared with the Garage probe. With any of the
+bucket or key settings blank the version columns read "not recorded" and nothing
+else on the page changes.
 
 Only these four need settings: HappyView, LiteLLM and Open WebUI are already
 reached by address elsewhere and their probes reuse `MEMBERSHIP_REGISTRY_URL`

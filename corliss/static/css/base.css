@@ -1122,12 +1122,16 @@ a.btn-primary {
    is what the console shows; the DID it stands for is on the element's title,
    which the dotted underline is there to advertise. */
 .data-table__did,
-.data-table__handle {
+.data-table__handle,
+.data-table__version {
   font-family: var(--font-mono);
   font-size: 12px;
 }
 
-.data-table__handle[title] {
+/* On /systems/ the provisioning time rides the version cell's title, for the
+   same reason the DID rides a handle's: it is looked up, not scanned. */
+.data-table__handle[title],
+.data-table__version[title] {
   cursor: help;
   text-decoration: underline dotted var(--border);
   text-underline-offset: 3px;

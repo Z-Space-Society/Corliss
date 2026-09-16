@@ -32,18 +32,38 @@ admits it does not know, and that principle survives the probes being real.
   endpoint answers an XML error, so *any* HTTP status is proof it is serving —
   a 403 from Garage is a working Garage.
 
+**Two more columns come from somewhere else entirely: the manifests.** Which
+zai-ops revision provisioned a service, and which version it runs, are not
+things a liveness endpoint can say: Redis speaks RESP, and most of these are
+upstream software we do not control. Ansible knows both at the moment it
+installs a service, so each zai-ops service play writes `<service>.json` into a
+Garage bucket as its last step (zai-ops ADR-0009), and this module reads them
+back with a read-only key. That is the second relationship this module has with
+Garage, and it lives here for the same reason as the first.
+
+A manifest records what was *installed*, not what is *running*: a CT rebuilt
+without replaying its play keeps its old manifest. **The Status column is what
+qualifies the version beside it**, so the probes are load-bearing for these
+columns and must not be weakened on the grounds that the page now "has the
+version anyway". And a missing manifest is a blank cell, never a state change:
+a Garage outage greys two columns and leaves every dot where it was.
+
 **No probe may raise, and none may block a page render for long.** They fan out
 across a thread pool with a short timeout so the wall clock is one timeout
 rather than eight, and the result is cached so a dead service does not cost
 that timeout on every load.
 """
 
+import json
 import logging
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
+import boto3
 import requests
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
 from django.core.cache import cache
 from django.db import Error as DatabaseError
@@ -87,15 +107,20 @@ class Probe:
     `check` returns a state and takes no arguments — it reads whatever setting
     it needs itself, so an unconfigured service is that probe's own business
     rather than a special case in the runner.
+
+    `manifest` is the object key zai-ops writes for this service, without
+    `.json`. It is an interface with zai-ops' `docs/roles/manifest.md`: rename
+    one side and the row's version columns go blank without anything failing.
     """
 
-    __slots__ = ("name", "purpose", "check", "note")
+    __slots__ = ("name", "purpose", "check", "note", "manifest")
 
-    def __init__(self, name, purpose, check, note=""):
+    def __init__(self, name, purpose, check, note="", manifest=""):
         self.name = name
         self.purpose = purpose
         self.check = check
         self.note = note
+        self.manifest = manifest
 
 
 # --- transport ---------------------------------------------------------------
@@ -294,6 +319,77 @@ def _open_webui():
     return _http("open-webui", origin + "/health" if origin else "")
 
 
+# --- the manifests ------------------------------------------------------------
+
+
+def _manifest_client():
+    """An S3 client for the manifest bucket, or None when it is not configured.
+
+    Built once per measurement on the request thread and shared by the pool:
+    a boto3 client is thread-safe, a boto3 session is not, so the session never
+    crosses into a worker.
+
+    One attempt and the same two-second timeouts as the probes. botocore's
+    default retries would turn one unreachable Garage into several multiples of
+    HEALTH_TIMEOUT per row, on a page an admin opens because something is
+    already wrong. Path-style addressing because the endpoint is a bare internal
+    IP, which has no subdomain to put a bucket name in.
+    """
+    origin = _origin(settings.GARAGE_S3_URL)
+    if not (origin and settings.MANIFEST_BUCKET
+            and settings.MANIFEST_ACCESS_KEY and settings.MANIFEST_SECRET_KEY):
+        return None
+
+    try:
+        return boto3.session.Session().client(
+            "s3",
+            endpoint_url=origin,
+            region_name=settings.GARAGE_S3_REGION,
+            aws_access_key_id=settings.MANIFEST_ACCESS_KEY,
+            aws_secret_access_key=settings.MANIFEST_SECRET_KEY,
+            config=Config(
+                connect_timeout=HEALTH_TIMEOUT,
+                read_timeout=HEALTH_TIMEOUT,
+                retries={"total_max_attempts": 1},
+                s3={"addressing_style": "path"},
+            ),
+        )
+    except (BotoCoreError, ValueError) as exc:
+        log.warning("health: cannot build the manifest client: %s", exc)
+        return None
+
+
+def _manifest(client, key):
+    """One service's manifest as the row shows it, or None. Never raises.
+
+    None covers every way of not knowing. No such object (the play has not
+    run since zai-ops started writing them), Garage unreachable, a body that
+    is not the shape zai-ops writes: all of them render the same blank
+    cells. The reason goes to the log; the page does not guess at it.
+    """
+    try:
+        response = client.get_object(Bucket=settings.MANIFEST_BUCKET, Key=f"{key}.json")
+        data = json.loads(response["Body"].read())
+        version, revision = data["version"], data["zai_ops"]
+        if not (isinstance(version, str) and isinstance(revision, str)):
+            raise TypeError("version and zai_ops must be strings")
+    except (BotoCoreError, ClientError) as exc:
+        log.warning("health: manifest %s.json unavailable: %s", key, exc)
+        return None
+    except (ValueError, KeyError, TypeError) as exc:
+        log.warning("health: manifest %s.json is malformed: %s", key, exc)
+        return None
+    except Exception:  # noqa: BLE001 (same reasoning as _safely below)
+        log.exception("health: reading manifest %s.json raised", key)
+        return None
+
+    return {
+        "version": version,
+        "revision": revision,
+        "provisioned_at": data.get("provisioned_at") or "",
+    }
+
+
 # --- the stack ----------------------------------------------------------------
 #
 # What this cluster is made of, grouped the way zai-ops groups its CTIDs: core
@@ -315,24 +411,19 @@ def _open_webui():
 # asked whether it is up.
 STACK = [
     ("Core", [
-        Probe("Garage", "object store — backup target for the control node", _garage),
-        Probe("PostgreSQL",
-              "the cluster's database: Corliss, LiteLLM, Open WebUI, HappyView",
-              _postgres),
-        Probe("Redis", "session revocation store, so signing out reaches chat in seconds",
-              _redis),
+        Probe("Garage", "S3 object store and system backup target", _garage, manifest="garage"),
+        Probe("PostgreSQL", "Cluster's central database: Corliss, LiteLLM, HappyView", _postgres, manifest="postgres"),
+        Probe("Redis", "In-memory store for sessions, caching, and short-lived data", _redis, manifest="redis"),
     ]),
     ("Platform", [
-        Probe("Caddy", "the edge — the only LAN-facing container, terminates TLS", _caddy),
-        Probe("HappyView", "the membership registry: applications, grants, admin roster",
-              _happyview),
-        Probe("LiteLLM", "the API gateway in front of the models", _litellm),
-        Probe("Sync relay", "the Automerge sync server behind collaborative spaces",
-              _sync_relay, note="liveness only — does not check its storage"),
+        Probe("Caddy", "The only LAN-facing container, terminates TLS", _caddy, manifest="caddy"),
+        Probe("HappyView", "Membership registry: applications, grants, admin roster", _happyview, manifest="happyview"),
+        Probe("LiteLLM", "API gateway in front of the models", _litellm, manifest="litellm"),
+        Probe("Sync relay", "Automerge sync server", _sync_relay, manifest="sync-relay"),
     ]),
     ("Applications", [
-        Probe("Corliss", "login, membership, OIDC, and members' API keys", _corliss),
-        Probe("Open WebUI", "the chat app", _open_webui),
+        Probe("Corliss", "Login, membership, OIDC, and API keys", _corliss, manifest="corliss"),
+        Probe("Open WebUI", "Chat app", _open_webui, manifest="open-webui"),
     ]),
 ]
 
@@ -360,19 +451,30 @@ def _safely(probe):
 
 
 def _measure():
-    """Every probe, run once. The network-bound ones concurrently."""
-    remote = [p for group in STACK for p in group[1] if p.check not in _INLINE]
+    """Every probe and every manifest, run once. The network-bound ones concurrently.
 
-    states = {}
-    for group in STACK:
-        for probe in group[1]:
-            if probe.check in _INLINE:
-                states[probe.name] = _safely(probe)
+    The manifest reads share the probes' pool rather than following them, so
+    the page still costs one timeout of wall clock, not two.
+    """
+    probes = [p for group in STACK for p in group[1]]
+    remote = [p for p in probes if p.check not in _INLINE]
 
-    if remote:
-        with ThreadPoolExecutor(max_workers=len(remote)) as pool:
-            for probe, state in zip(remote, pool.map(_safely, remote)):
-                states[probe.name] = state
+    states = {p.name: _safely(p) for p in probes if p.check in _INLINE}
+
+    client = _manifest_client()
+    manifested = [p for p in probes if p.manifest] if client else []
+    manifests = {}
+
+    if remote or manifested:
+        with ThreadPoolExecutor(max_workers=len(remote) + len(manifested)) as pool:
+            pending_states = {p.name: pool.submit(_safely, p) for p in remote}
+            pending_manifests = {
+                p.name: pool.submit(_manifest, client, p.manifest) for p in manifested
+            }
+            for name, future in pending_states.items():
+                states[name] = future.result()
+            for name, future in pending_manifests.items():
+                manifests[name] = future.result()
 
     return [
         {
@@ -384,6 +486,10 @@ def _measure():
                     "note": probe.note,
                     "state": states[probe.name],
                     "label": _LABELS[states[probe.name]],
+                    # None when there is no manifest to show; the template
+                    # renders that as a blank, never as a guess.
+                    **(manifests.get(probe.name)
+                       or {"version": None, "revision": None, "provisioned_at": ""}),
                 }
                 for probe in probes
             ],
@@ -396,7 +502,10 @@ def check_all(*, refresh=False):
     """The whole stack with a measured state, ready to render. Never raises.
 
     Returns the same shape the template has always been handed — groups of
-    services — so the view stays a gate and a render.
+    services — so the view stays a gate and a render. Each service also carries
+    `version`, `revision` and `provisioned_at` from its manifest, None/"" when
+    there is none. The cache window still follows the states alone: a missing
+    manifest is not an outage, and must not shorten the all-clear.
     """
     if not refresh:
         cached = cache.get(_CACHE_KEY)

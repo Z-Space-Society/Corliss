@@ -233,6 +233,27 @@ GARAGE_S3_URL = env("GARAGE_S3_URL", default="")
 # names an endpoint Caddy publishes rather than the root of a service.
 CADDY_HEALTH_URL = env("CADDY_HEALTH_URL", default="")
 
+# --- Service manifests (/systems/) -------------------------------------------
+# Which zai-ops revision provisioned each service, and which version it runs.
+# Each zai-ops service play writes `<service>.json` into a Garage bucket as its
+# last step, and `corliss.health` reads them over the S3 API at GARAGE_S3_URL.
+#
+# **A separate block from the probes above, because this one holds a
+# credential** and that block's promise is that it holds none. The key is
+# read-only and scoped to the manifest bucket: it cannot read the backups, and
+# it cannot write anything at all. Garage has no anonymous access on its S3
+# API, so a key is the price of reading these at all.
+#
+# All blank-tolerant: with any of the three unset the version columns render
+# blank, and no state on the page changes.
+MANIFEST_BUCKET = env("MANIFEST_BUCKET", default="")
+MANIFEST_ACCESS_KEY = env("MANIFEST_ACCESS_KEY", default="")
+MANIFEST_SECRET_KEY = env("MANIFEST_SECRET_KEY", default="")
+
+# Garage does not care what the region is called, but SigV4 signs it, so it
+# must match the `s3_region` in garage.toml. zai-ops sets `garage`.
+GARAGE_S3_REGION = env("GARAGE_S3_REGION", default="garage")
+
 # --- Registry membership push ----------------------------------------------
 # Shared bearer token the SCN registry presents when POSTing a grant or
 # revocation to /membership/events. Blank disables the endpoint outright (503)
