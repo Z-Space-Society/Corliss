@@ -20,7 +20,7 @@ dependencies = [
     "django==6.1.1",           # current stable; 6.2 LTS lands Dec 2026
     "psycopg[binary]==3.3.5",  # Postgres driver (psycopg 3)
     "django-environ==0.14.0",  # 12-factor env-driven settings
-    "pyjwt==2.13.0",           # JWT sign/verify for DPoP, client assertion, id_token
+    "pyjwt==2.14.0",           # JWT sign/verify for DPoP, client assertion, id_token
     "cryptography==50.0.1",    # EC (P-256) + RSA key handling, backs PyJWT
     "requests==2.34.2",        # HTTP to the PDS / DID resolution
     "dnspython==2.8.0",        # DNS TXT handle resolution (_atproto.<handle>) for make_admin
