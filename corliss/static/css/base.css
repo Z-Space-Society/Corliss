@@ -1547,7 +1547,10 @@ th.data-table__count {
   border-color: color-mix(in oklch, var(--success) 35%, var(--border));
 }
 
-/* --- Quickstart tabs ----------------------------------------------------- */
+/* --- Code tabs ----------------------------------------------------------- */
+
+/* Keyed by language class rather than id, so a page can hold several groups.
+   A new language is one more line in the `:has()` rule below. */
 
 .tabs__bar {
   display: flex;
@@ -1605,9 +1608,9 @@ th.data-table__count {
     display: none;
   }
 
-  .tabs:has(#qs-bash:checked) .tabs__pane--bash,
-  .tabs:has(#qs-python:checked) .tabs__pane--python,
-  .tabs:has(#qs-node:checked) .tabs__pane--node {
+  .tabs:has(.tabs__radio--bash:checked) .tabs__pane--bash,
+  .tabs:has(.tabs__radio--python:checked) .tabs__pane--python,
+  .tabs:has(.tabs__radio--node:checked) .tabs__pane--node {
     display: block;
   }
 }

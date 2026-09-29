@@ -2118,3 +2118,92 @@ class InviteAndCascadeTests(NoRosterMixin, TestCase):
 
         revoke.assert_not_called()
         self.assertIn("locked", self.client.session[views.MANAGE_ERROR_SESSION_KEY])
+
+
+class ParascribeViewTests(NoRosterMixin, TestCase):
+    """`/tools/parascribe/`, the transcription quickstart."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+
+    def _get(self, models=()):
+        with patch.object(litellm.LiteLLM, "models", return_value=list(models)) as call:
+            resp = self.client.get(reverse("parascribe"))
+        return resp, call
+
+    def test_signed_out_is_sent_to_login(self):
+        resp = self.client.get(reverse("parascribe"))
+        self.assertRedirects(
+            resp, f"{reverse('login')}?next={reverse('parascribe')}"
+        )
+
+    @override_settings(API_URL="https://api.example.com", **LITELLM_SETTINGS)
+    def test_a_non_member_is_welcome_and_asks_for_no_tier(self):
+        self.client.force_login(self.user)
+        resp, call = self._get()
+        self.assertEqual(resp.status_code, 200)
+        call.assert_called_once_with("")
+        self.assertEqual(resp.context["example_model"], views.EXAMPLE_MODEL_FALLBACK)
+
+    @override_settings(API_URL="https://api.example.com", **LITELLM_SETTINGS)
+    def test_the_examples_name_a_transcription_model_from_the_members_tier(self):
+        _grant()
+        self.client.force_login(self.user)
+        resp, call = self._get([
+            _model("GX10/northmini"),
+            _model("GTX1080/parakeet-v2", mode="audio_transcription"),
+        ])
+        call.assert_called_once_with("level-2")
+        self.assertEqual(resp.context["example_model"], "GTX1080/parakeet-v2")
+        # A chat model would answer the transcription endpoint with a 400.
+        self.assertEqual(
+            [model.name for model in resp.context["models"]], ["GTX1080/parakeet-v2"]
+        )
+
+    @override_settings(API_URL="https://api.example.com", **LITELLM_SETTINGS)
+    def test_every_tab_group_switches_on_its_own(self):
+        # Two groups sharing a radio name would be one group across the page:
+        # picking Python in one example would clear the other.
+        self.client.force_login(self.user)
+        html = self._get()[0].content.decode()
+        groups = re.findall(r'<div class="tabs__bar">(.*?)</div>', html, re.S)
+        names = [set(re.findall(r'name="([^"]+)"', bar)) for bar in groups]
+        self.assertGreater(len(names), 1)
+        self.assertTrue(all(len(group) == 1 for group in names))
+        self.assertEqual(len({n for group in names for n in group}), len(names))
+
+    @override_settings(API_URL="https://api.example.com", **LITELLM_SETTINGS)
+    def test_an_unreadable_catalogue_falls_back_to_the_placeholder(self):
+        _grant()
+        self.client.force_login(self.user)
+        with patch.object(
+            litellm.LiteLLM, "models", side_effect=litellm.LiteLLMError("proxy down")
+        ):
+            resp = self.client.get(reverse("parascribe"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context["models_error"], "proxy down")
+        self.assertEqual(resp.context["example_model"], views.EXAMPLE_MODEL_FALLBACK)
+
+    @override_settings(API_URL="https://api.example.com", LITELLM_URL="", LITELLM_PROVISIONER_KEY="")
+    def test_no_litellm_still_shows_the_examples_and_asks_nothing(self):
+        self.client.force_login(self.user)
+        resp, call = self._get()
+        self.assertEqual(resp.status_code, 200)
+        self.assertContains(resp, "tabs__bar")
+        self.assertEqual(resp.context["example_model"], views.EXAMPLE_MODEL_FALLBACK)
+        call.assert_not_called()
+
+    @override_settings(API_URL="", **LITELLM_SETTINGS)
+    def test_no_api_url_shows_no_examples(self):
+        # With no address, every snippet would point at nothing.
+        self.client.force_login(self.user)
+        resp, _ = self._get()
+        self.assertEqual(resp.status_code, 200)
+        self.assertNotContains(resp, "tabs__bar")
+
+    @override_settings(CHAT_URL="")
+    def test_the_tools_menu_links_it_for_a_non_member(self):
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertContains(resp, f'<a class="nav__dropdown-item" href="{reverse("parascribe")}">')

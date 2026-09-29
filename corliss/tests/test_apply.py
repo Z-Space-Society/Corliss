@@ -567,11 +567,9 @@ class NavForANonMemberTests(ClearsCache):
     @override_settings(CHAT_URL="")
     def test_chat_stays_hidden_when_it_is_not_deployed(self):
         # A closed door says "not for you yet". On a cluster with no chat, that
-        # would be a different statement, and a false one. The group heading
-        # goes with it: a "Hosted apps" label over nothing is the same lie.
+        # would be a different statement, and a false one.
         html = self.client.get(reverse("home")).content.decode()
         self.assertNotIn("Open WebUI", html)
-        self.assertNotIn("Hosted apps", html)
         self.assertIn(">API</span>", html)
 
 
