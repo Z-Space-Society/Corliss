@@ -152,8 +152,9 @@ so widening one cannot widen the other.
   they were never granted.
 - **There are four levels, and every view sits at exactly one.** Signed out (no
   decorator), signed in (`@login_required` — Django's own, for the pages where a
-  non-member is legitimately welcome: `/account/` and `/membership/apply`), a
-  member (`@member_required`), a cluster admin (`@admin_required`). The
+  non-member is legitimately welcome: `/account/`, `/membership/apply` and
+  `/tools/parascribe/`), a member (`@member_required`), a cluster admin
+  (`@admin_required`). The
   decorators live in `views.py` because they build HTTP responses;
   `membership.py` answers the question, `views.py` turns the answer into a
   redirect or a 404.

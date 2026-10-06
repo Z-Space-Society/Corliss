@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Parascribe - Backend transcription service{% endblock %}
+
+{% block content %}
+<div class="account-view console-view">
+  <h1>Parascribe</h1>
+
+  <p class="page-text">
+    We run <a href="https://github.com/hadsie/parascribe">parascribe</a> internally so our SCN users can manage their own audio transcriptions. Send an audio or video file and the system will return a transcript complete with segment and word timestamps.
+  </p>
+
+  {% if not API_URL %}
+    <div class="card">
+      <p class="alert alert--notice" role="status">
+        <strong>Not configured.</strong> This deployment has no API service
+        connected, so there is nothing to transcribe with yet.
+      </p>
+    </div>
+  {% else %}
+    <h2 class="section-title">Quickstart</h2>
+    <div class="card">
+      <p class="step-label">1 &middot; Set your key</p>
+      <p class="hint-text">Any key from <a href="{% url 'api' %}">API</a> works. Export it as <code class="inline-code">SCN_API_KEY</code> as is done in the examples.</p>
+
+      <p class="step-label">2 &middot; Transcribe a file</p>
+      <div class="tabs">
+        <div class="tabs__bar">
+          <input class="tabs__radio tabs__radio--bash" type="radio" name="qs-lang" id="qs-bash" checked>
+          <label class="tabs__label" for="qs-bash">curl</label>
+          <input class="tabs__radio tabs__radio--python" type="radio" name="qs-lang" id="qs-python">
+          <label class="tabs__label" for="qs-python">Python</label>
+        </div>
+
+        <div class="tabs__panes">
+          <div class="tabs__pane tabs__pane--bash">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="qs-code-bash" hidden>Copy</button>
+              <pre id="qs-code-bash"><code>curl {{ API_URL }}/v1/audio/transcriptions \
+  -H "Authorization: Bearer $SCN_API_KEY" \
+  -F file=@meeting.mp3 \
+  -F model={{ example_model }}</code></pre>
+            </div>
+          </div>
+
+          <div class="tabs__pane tabs__pane--python">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="qs-code-python" hidden>Copy</button>
+              <pre id="qs-code-python"><code>import os
+from openai import OpenAI  # pip install openai
+
+client = OpenAI(
+    base_url="{{ API_URL }}/v1",
+    api_key=os.environ["SCN_API_KEY"],
+)
+
+with open("meeting.mp3", "rb") as audio:
+    transcript = client.audio.transcriptions.create(
+        model="{{ example_model }}",
+        file=audio,
+    )
+print(transcript.text)</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="hint-text">Transcription runs on the GPU at roughly 60 times real time, so an hour of audio comes back in about a minute.</p>
+    </div>
+
+    <h2 class="section-title">Output</h2>
+    <div class="card">
+      <p class="page-text">Pass <code class="inline-code">response_format</code> to choose an appropriate data type for your use-case.</p>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th>Format</th><th>Returns</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="data-table__did">json</td><td class="data-table__muted">Transcription text only (default).</td></tr>
+            <tr><td class="data-table__did">text</td><td class="data-table__muted">Transcription text as a plain string.</td></tr>
+            <tr><td class="data-table__did">verbose_json</td><td class="data-table__muted">Transcription text with timestamped segments and words (when requested).</td></tr>
+            <tr><td class="data-table__did">srt, vtt</td><td class="data-table__muted">Subtitle files.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="hint-text">
+        Word timings need <code class="inline-code">timestamp_granularities[]=word</code> alongside <code class="inline-code">verbose_json</code>:
+      </p>
+      <div class="tabs">
+        <div class="tabs__bar">
+          <input class="tabs__radio tabs__radio--bash" type="radio" name="words-lang" id="words-bash" checked>
+          <label class="tabs__label" for="words-bash">curl</label>
+          <input class="tabs__radio tabs__radio--python" type="radio" name="words-lang" id="words-python">
+          <label class="tabs__label" for="words-python">Python</label>
+        </div>
+
+        <div class="tabs__panes">
+          <div class="tabs__pane tabs__pane--bash">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="words-code-bash" hidden>Copy</button>
+              <pre id="words-code-bash"><code>curl {{ API_URL }}/v1/audio/transcriptions \
+  -H "Authorization: Bearer $SCN_API_KEY" \
+  -F file=@meeting.mp3 \
+  -F model={{ example_model }} \
+  -F response_format=verbose_json \
+  -F 'timestamp_granularities[]=word'</code></pre>
+            </div>
+          </div>
+
+          <div class="tabs__pane tabs__pane--python">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="words-code-python" hidden>Copy</button>
+              <pre id="words-code-python"><code>with open("meeting.mp3", "rb") as audio:
+    transcript = client.audio.transcriptions.create(
+        model="{{ example_model }}",
+        file=audio,
+        response_format="verbose_json",
+        timestamp_granularities=["word"],
+    )
+for word in transcript.words:
+    print(f"{word.start:8.2f}  {word.word}")</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="hint-text">A short recording comes back like this:</p>
+      <div class="code-block">
+        <pre><code>{
+  "task": "transcribe",
+  "language": null,
+  "duration": 2.4,
+  "text": "Morning, everyone. Let's start.",
+  "segments": [
+    {"id": 0, "start": 0.08, "end": 1.12, "text": "Morning, everyone.", "speaker": null, "avg_logprob": -0.21},
+    {"id": 1, "start": 1.44, "end": 2.32, "text": "Let's start.", "speaker": null, "avg_logprob": -0.17}
+  ],
+  "words": [
+    {"word": "Morning,", "start": 0.08, "end": 0.56},
+    {"word": "everyone.", "start": 0.64, "end": 1.12},
+    {"word": "Let's", "start": 1.44, "end": 1.76},
+    {"word": "start.", "start": 1.84, "end": 2.32}
+  ],
+  "usage": {...}
+}</code></pre>
+      </div>
+      <p class="hint-text">
+        <code class="inline-code">words</code> is only returned when timings were asked for, and <code class="inline-code">speaker</code> is <code class="inline-code">null</code> when diarization is not enabled. <code class="inline-code">language</code> is used as a hint to detect the audio language.
+      </p>
+      <p class="hint-text">
+        The language is detected from the audio, so <code class="inline-code">language</code> and <code class="inline-code">prompt</code> are accepted and ignored.
+      </p>
+    </div>
+
+    <h2 class="section-title">Usage examples</h2>
+    <div class="card">
+      <h3 class="card__title">Large files</h3>
+      <p class="page-text">If your files are large-ish (~10MB or bigger) they may be refused. For large files drop them somewhere publicly accessible and send their URL <em>as the file</em>: the upload's content is the link, and parascribe will fetch the audio itself.</p>
+      <div class="tabs">
+        <div class="tabs__bar">
+          <input class="tabs__radio tabs__radio--bash" type="radio" name="url-lang" id="url-bash" checked>
+          <label class="tabs__label" for="url-bash">curl</label>
+          <input class="tabs__radio tabs__radio--python" type="radio" name="url-lang" id="url-python">
+          <label class="tabs__label" for="url-python">Python</label>
+        </div>
+
+        <div class="tabs__panes">
+          <div class="tabs__pane tabs__pane--bash">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="url-code-bash" hidden>Copy</button>
+              <pre id="url-code-bash"><code>printf 'https://media.example.com/meeting.mp3' | \
+  curl {{ API_URL }}/v1/audio/transcriptions \
+  -H "Authorization: Bearer $SCN_API_KEY" \
+  -F 'file=@-;filename=source.url' \
+  -F model={{ example_model }}</code></pre>
+            </div>
+          </div>
+
+          <div class="tabs__pane tabs__pane--python">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="url-code-python" hidden>Copy</button>
+              <pre id="url-code-python"><code>transcript = client.audio.transcriptions.create(
+    model="{{ example_model }}",
+    file=("source.url", b"https://media.example.com/meeting.mp3"),
+)
+print(transcript.text)</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="hint-text">The link has to be direct without redirects. A share page that bounces to a download will fail and addresses on a private network are refused.</p>
+    </div>
+
+    <div class="card">
+      <h3 class="card__title">Speakers</h3>
+      <p class="page-text">
+        Pass <code class="inline-code">diarization=true</code> for speaker / diarization support. Each segment in <code class="inline-code">verbose_json</code> will have a <code class="inline-code">speaker</code> such as <code class="inline-code">SPEAKER_00</code>, as well as words when using word timings.
+      </p>
+      <div class="tabs">
+        <div class="tabs__bar">
+          <input class="tabs__radio tabs__radio--bash" type="radio" name="spk-lang" id="spk-bash" checked>
+          <label class="tabs__label" for="spk-bash">curl</label>
+          <input class="tabs__radio tabs__radio--python" type="radio" name="spk-lang" id="spk-python">
+          <label class="tabs__label" for="spk-python">Python</label>
+        </div>
+
+        <div class="tabs__panes">
+          <div class="tabs__pane tabs__pane--bash">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="spk-code-bash" hidden>Copy</button>
+              <pre id="spk-code-bash"><code>curl {{ API_URL }}/v1/audio/transcriptions \
+  -H "Authorization: Bearer $SCN_API_KEY" \
+  -F file=@meeting.mp3 \
+  -F model={{ example_model }} \
+  -F response_format=verbose_json \
+  -F diarization=true</code></pre>
+            </div>
+          </div>
+
+          <div class="tabs__pane tabs__pane--python">
+            <div class="code-block">
+              <button type="button" class="copy-btn" data-copy="spk-code-python" hidden>Copy</button>
+              <pre id="spk-code-python"><code>with open("meeting.mp3", "rb") as audio:
+    transcript = client.audio.transcriptions.create(
+        model="{{ example_model }}",
+        file=audio,
+        response_format="verbose_json",
+        # Not part of the OpenAI API, so it rides in extra_body.
+        extra_body={"diarization": "true"},
+    )
+for segment in transcript.segments:
+    print(f"{segment.speaker}: {segment.text}")</code></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="hint-text">
+        The speaker count is determined automatically, but <code class="inline-code">num_speakers</code>, <code class="inline-code">min_speakers</code>, and <code class="inline-code">max_speakers</code> can all be used to set the value or used as hints to the diarizer.
+      </p>
+      <p class="alert alert--notice" role="status">
+        <strong>Slow for now.</strong> Diarization runs on the CPU and takes about as long as the recording itself, so an hour of audio will take just under an hour to get the results. <code class="inline-code">stream=true</code> is ignored when using diarization.
+      </p>
+    </div>
+
+    <h2 class="section-title">Some OSS apps that (might) work with parascribe</h2>
+    <div class="card">
+      <p class="page-text">The below meeting recorders / note taking apps all accept a custom OpenAI-compatible endpoint for transcriptions (BYOK). To setup pass it your API key, model (i.e. parakeet-v2, parakeet-v3), and the address in the last column.</p>
+      <p class="alert alert--notice" role="status">
+        <strong>Not supported by SCN.</strong> These are third-party apps we've found that can talk to the cluster. They're suggestions to get you started, and the SCN team doesn't maintain or support them.
+      </p>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th>App</th><th>Platform(s)</th><th>Function</th><th>Endpoint</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><a href="https://screenpipe.com/" target="_blank" rel="noopener">screenpipe</a></td>
+              <td class="data-table__muted">macOS, Windows, Linux</td>
+              <td class="data-table__muted">Records meetings and labels speakers itself</td>
+              <td class="data-table__muted">Transcription, OpenAI Compatible: <strong>Endpoint</strong> <code class="inline-code">{{ API_URL }}</code></td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/fastrepl/anarlog" target="_blank" rel="noopener">anarlog</a></td>
+              <td class="data-table__muted">macOS</td>
+              <td class="data-table__muted">Meeting notes, transcribed after the call</td>
+              <td class="data-table__muted">OpenAI provider, Advanced: <strong>Base URL</strong> <code class="inline-code">{{ API_URL }}/v1</code></td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/chidiwilliams/buzz" target="_blank" rel="noopener">Buzz</a></td>
+              <td class="data-table__muted">macOS, Windows, Linux</td>
+              <td class="data-table__muted">Transcribes recordings you already have</td>
+              <td class="data-table__muted">Preferences: <strong>Base URL</strong> <code class="inline-code">{{ API_URL }}/v1/</code></td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/nikdanilov/whisper-obsidian-plugin" target="_blank" rel="noopener">Whisper for Obsidian</a></td>
+              <td class="data-table__muted">Obsidian, including iOS and Android</td>
+              <td class="data-table__muted">Records or imports audio into a note</td>
+              <td class="data-table__muted"><strong>API URL</strong> <code class="inline-code">{{ API_URL }}/v1/audio/transcriptions</code></td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/murtaza-nasir/speakr" target="_blank" rel="noopener">Speakr</a></td>
+              <td class="data-table__muted">Self-hosted web app</td>
+              <td class="data-table__muted">Recording library with transcripts and summaries</td>
+              <td class="data-table__muted"><code class="inline-code">TRANSCRIPTION_BASE_URL={{ API_URL }}/v1/</code></td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/nextcloud/integration_openai" target="_blank" rel="noopener">Nextcloud OpenAI integration</a></td>
+              <td class="data-table__muted">Self-hosted Nextcloud</td>
+              <td class="data-table__muted">Transcribes Talk call recordings</td>
+              <td class="data-table__muted"><strong>Service URL</strong> <code class="inline-code">{{ API_URL }}/v1</code></td>
+            </tr>
+            <tr>
+              <td><a href="https://github.com/Vexa-ai/vexa" target="_blank" rel="noopener">Vexa</a></td>
+              <td class="data-table__muted">Self-hosted</td>
+              <td class="data-table__muted">Meeting bot for Meet, Teams and Zoom, with speaker labels</td>
+              <td class="data-table__muted"><code class="inline-code">TRANSCRIPTION_SERVICE_URL={{ API_URL }}</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="hint-text">
+        screenpipe and Vexa handle speakers on their own. For the rest they'll need to support an authenticated <code class="inline-code">/asr</code> endpoint.
+      </p>
+    </div>
+
+    <h2 class="section-title">Models</h2>
+    <div class="card">
+      {% if not litellm_configured %}
+        <p class="hint-text">
+          No API service connected: model list unavailable. Fill in a transcription model name from <a href="{% url 'api' %}">API</a>.</p>
+      {% elif models_error %}
+        <p class="hint-text">
+          Model list unavailable: Fill in a transcription model name from <a href="{% url 'api' %}">API</a>.
+        </p>
+      {% elif models %}
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr><th>Model</th></tr>
+            </thead>
+            <tbody>
+              {% for model in models %}
+                <tr><td class="data-table__did">{{ model.name }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="hint-text">
+          Pass the name as the <code class="inline-code">model</code> field.
+        </p>
+      {% elif user.may_enter %}
+        <p class="hint-text">
+          No transcription models available for your tier.
+        </p>
+      {% else %}
+        <p class="hint-text">
+          Become a members to see available transcription models.
+        </p>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{% static 'js/api.js' %}" defer></script>
+{% endblock %}

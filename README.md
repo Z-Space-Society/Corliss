@@ -332,6 +332,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Home | `/` |
 | Account — your own name and email (signed in) | `/account/` |
 | API keys — issue, revoke, usage (members) | `/api/` |
+| Parascribe — transcription quickstart (signed in) | `/tools/parascribe/` |
 | Workspaces — the ones you are in (members) | `/workspaces/` |
 | New workspace (members) | `/workspaces/new` |
 | A workspace — rename, add/remove members (its own members) | `/workspaces/<id>/` |
@@ -1069,9 +1070,16 @@ Left of the divider: the brand, then **About**. Right of it: **Workspaces**,
 
 **Tools has two groups, and they are not one list with a rule in it.** *Hosted
 apps* run on this cluster and answer to GATE — Open WebUI is closed to a
-non-member exactly the way the API is, and the whole group (heading included)
-disappears when `CHAT_URL` is unset, since a "Hosted apps" label over nothing is
-the same false statement a disabled entry would be. *Useful tools* is somebody
+non-member exactly the way the API is, and disappears when `CHAT_URL` is unset,
+since a disabled entry for something not deployed would be a false statement.
+Parascribe has no UI of its own, so its entry is `/tools/parascribe/`, a
+quickstart for the transcription endpoint. That page is signed-in rather than
+member-gated because it is documentation: the key it needs is behind GATE on
+`/api/`, and it names only the transcription models the reader's own tier
+reaches, so a non-member sees a placeholder rather than a model they cannot
+call. Its table of apps is hard-coded for the same reason as Useful tools below,
+and lists only apps that take a custom base URL for transcription: one that
+takes an OpenAI key but not an address cannot reach this cluster at all. *Useful tools* is somebody
 else's software, listed because it speaks the API this cluster serves; there is
 nothing to gate, because what makes such a tool useful is a key, and the key is
 behind GATE on `/api/`. The entries are hard-coded rather than settings: they

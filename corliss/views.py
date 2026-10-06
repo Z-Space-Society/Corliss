@@ -26,6 +26,8 @@ section below defines them and says when to reach for which.
 - `api`: the member's own API keys — issue, list, revoke, and usage, read live
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
+- `parascribe`: how to call the cluster's transcription models. Signed-in, and
+  names only the models the reader's own tier reaches.
 - `manage`: the cluster console — applications, members, admins, and
   reconciliation. Gated on the atproto roster, not on any Django flag, so it
   survives a rebuild. Read-only about applications: approving one is a write to
@@ -139,6 +141,8 @@ EXAMPLE_MODEL_FALLBACK = "MODEL-NAME"
 #    `/membership/apply` carry it: an applicant sitting in the queue is exactly
 #    the person those two pages are for, and gating them on a grant would keep
 #    the name field blank precisely when an admin is about to read it.
+#    `/tools/parascribe/` carries it too, being documentation whose key is
+#    already behind GATE.
 # 3. **A member** — `@member_required`. `/api/`, and `/oidc/authorize` inline.
 # 4. **A cluster admin** — `@admin_required`. `/manage/`, `/manage/unlock`,
 #    `/systems/`.
@@ -1166,8 +1170,7 @@ def api(request):
     render, so a key revoked from the CLI is gone from this page too.
     """
     client = litellm.LiteLLM.from_settings()
-    row = membership.membership_for(request.user)
-    tier = row.tier if row is not None and row.active else ""
+    tier = _active_tier(request.user)
 
     if request.method == "POST":
         return _api_action(request, client, tier)
@@ -1274,6 +1277,44 @@ def _api_action(request, client, tier):
         request.session[API_ERROR_SESSION_KEY] = str(exc)
 
     return redirect("api")
+
+
+def _active_tier(user):
+    """The tier on the user's grant, or blank when they hold no active one."""
+    row = membership.membership_for(user)
+    return row.tier if row is not None and row.active else ""
+
+
+@require_http_methods(["GET"])
+@login_required
+def parascribe(request):
+    """How to transcribe audio through the cluster's API.
+
+    Signed-in rather than member-gated: it is documentation, and the key it
+    needs is behind GATE on `/api/`. The model names come from the reader's own
+    tier, so a non-member sees the placeholder.
+    """
+    client = litellm.LiteLLM.from_settings()
+    models, models_error = [], None
+    if client.is_configured:
+        try:
+            models = [
+                model for model in client.models(_active_tier(request.user))
+                if model.is_transcription
+            ]
+        except litellm.LiteLLMError as exc:
+            models_error = str(exc)
+
+    return render(
+        request,
+        "parascribe.html",
+        {
+            "litellm_configured": client.is_configured,
+            "models": models,
+            "models_error": models_error,
+            "example_model": models[0].name if models else EXAMPLE_MODEL_FALLBACK,
+        },
+    )
 
 
 @require_http_methods(["GET"])

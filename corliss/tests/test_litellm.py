@@ -341,6 +341,7 @@ class ModelTests(TestCase):
             found = {m.name: m for m in client().models("level-2")}
         parakeet = found["GTX1080/parakeet-v2"]
         self.assertFalse(parakeet.is_chat)
+        self.assertTrue(parakeet.is_transcription)
         self.assertEqual(parakeet.type_label, "audio transcription")
 
     def test_the_cluster_catalogue_sorts_chat_first_then_the_rest(self):

@@ -105,7 +105,9 @@
 
         **Hosted apps run here and answer to GATE.** Open WebUI is on our
         machines, signs the member in as themselves, and is closed to a
-        non-member exactly the way the API is.
+        non-member exactly the way the API is. Parascribe has no UI, so its
+        entry is our own page about it, open to anyone signed in; the key it
+        needs is what answers to GATE.
 
         **Useful tools are somebody else's software**, listed because they speak
         the API this cluster serves. Nothing here grants them anything and there
@@ -122,8 +124,8 @@
             <span class="nav__item nav__item--menu" tabindex="0">Tools</span>
 
             <div class="nav__dropdown nav__dropdown--left">
+              <div class="nav__dropdown-label">Hosted apps</div>
               {% if CHAT_URL %}
-                <div class="nav__dropdown-label">Hosted apps</div>
                 {% if user.may_enter %}
                   <a class="nav__dropdown-item" href="{{ CHAT_URL }}">Open WebUI</a>
                 {% else %}
@@ -131,8 +133,9 @@
                         aria-disabled="true"
                         title="Members only. A cluster admin has to let you in first.">Open WebUI</span>
                 {% endif %}
-                <div class="nav__dropdown-rule"></div>
               {% endif %}
+              <a class="nav__dropdown-item" href="{% url 'parascribe' %}">Transcriptions (Parascribe)</a>
+              <div class="nav__dropdown-rule"></div>
 
               <div class="nav__dropdown-label">Useful tools</div>
               {% comment %}

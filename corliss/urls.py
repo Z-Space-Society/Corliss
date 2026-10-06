@@ -69,6 +69,7 @@ urlpatterns = [
     path("workspaces/new", views.workspace_new, name="workspace_new"),
     path("workspaces/<int:pk>/", views.workspace_edit, name="workspace_edit"),
     path("api/", views.api, name="api"),
+    path("tools/parascribe/", views.parascribe, name="parascribe"),
     # The cluster console. Gated on the atproto admin roster, not on a Django
     # flag — see `views.manage`.
     path("manage/", views.manage, name="manage"),

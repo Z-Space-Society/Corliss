@@ -177,6 +177,10 @@ class Model:
         return self.mode in _CHAT_MODES
 
     @property
+    def is_transcription(self):
+        return self.mode == "audio_transcription"
+
+    @property
     def type_label(self):
         """The mode as a member reads it, not as LiteLLM stores it.
 
