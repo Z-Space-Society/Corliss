@@ -44,6 +44,7 @@ class UnconfiguredTests(TestCase):
 
     @override_settings(
         SYNC_RELAY_URL="",
+        PDS_URL="",
         REDIS_URL="",
         GARAGE_S3_URL="",
         CADDY_HEALTH_URL="",
@@ -52,7 +53,7 @@ class UnconfiguredTests(TestCase):
         OIDC_BACKCHANNEL_LOGOUT_URI="",
     )
     def test_every_unset_probe_reads_unknown_and_dials_nothing(self):
-        probes = (health._sync_relay, health._redis, health._garage,
+        probes = (health._sync_relay, health._pds, health._redis, health._garage,
                   health._caddy, health._litellm, health._happyview,
                   health._open_webui)
         with patch("corliss.health.requests.get") as get, \
@@ -72,6 +73,38 @@ class UnconfiguredTests(TestCase):
         with patch("corliss.health.requests.get") as get:
             self.assertEqual(health._garage(), health.UNKNOWN)
         get.assert_not_called()
+
+
+@override_settings(PDS_URL="http://10.1.1.114:3000")
+class PdsProbeTests(TestCase):
+    """The PDS is asked for readiness, not liveness, at its internal address."""
+
+    def test_it_asks_the_readiness_endpoint(self):
+        with patch("corliss.health.requests.get", return_value=_response(200)) as get:
+            self.assertEqual(health._pds(), health.UP)
+        self.assertEqual(
+            get.call_args.args[0], "http://10.1.1.114:3000/xrpc/_health"
+        )
+
+    def test_storage_failing_readiness_is_down(self):
+        # The process is serving and its storage is not: /_alive would say up.
+        with patch("corliss.health.requests.get", return_value=_response(503)):
+            self.assertEqual(health._pds(), health.DOWN)
+
+    def test_an_unreachable_pds_is_down(self):
+        with patch("corliss.health.requests.get",
+                   side_effect=requests.ConnectionError("no route to host")):
+            self.assertEqual(health._pds(), health.DOWN)
+
+    @override_settings(PDS_URL="")
+    def test_a_cluster_with_no_pds_reads_unknown(self):
+        with patch("corliss.health.requests.get") as get:
+            self.assertEqual(health._pds(), health.UNKNOWN)
+        get.assert_not_called()
+
+    def test_its_row_reads_the_pds_manifest(self):
+        rows = {p.name: p for _, probes in health.STACK for p in probes}
+        self.assertEqual(rows["PDS"].manifest, "pds")
 
 
 @override_settings(SYNC_RELAY_URL="http://10.1.1.113:7030")
@@ -302,6 +335,7 @@ class BrokenProbeTests(TestCase):
 
 @override_settings(
     SYNC_RELAY_URL="http://10.1.1.113:7030",
+    PDS_URL="http://10.1.1.114:3000",
     REDIS_URL="redis://10.1.1.103:6379",
     GARAGE_S3_URL="http://10.1.1.101:3900",
     CADDY_HEALTH_URL="http://10.1.1.110/healthz",

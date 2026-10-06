@@ -196,12 +196,12 @@ LITELLM_MAX_KEYS_PER_MEMBER = env.int("LITELLM_MAX_KEYS_PER_MEMBER", default=5)
 # because it is the mistake this section invites: a probe pointed at a public
 # origin measures Cloudflare, not the service.
 #
-# **All four are blank-tolerant and blank means "unknown", never "down".** A
+# **All five are blank-tolerant and blank means "unknown", never "down".** A
 # deployment that has not been told where Redis lives has not discovered an
 # outage; it has been asked a question it cannot answer. Local development sets
 # none of them and the page is correct with every row grey.
 #
-# The four services below need settings at all only because Corliss has no other
+# The five services below need settings at all only because Corliss has no other
 # relationship with them. HappyView, LiteLLM and Open WebUI are already reached
 # by address elsewhere in this file and their probes reuse those — a second
 # setting naming the same host is a second thing to get wrong.
@@ -213,6 +213,13 @@ LITELLM_MAX_KEYS_PER_MEMBER = env.int("LITELLM_MAX_KEYS_PER_MEMBER", default=5)
 # Probed at /health, which reports liveness WITHOUT touching Postgres, so "up"
 # here means the process is serving, not that its storage works.
 SYNC_RELAY_URL = env("SYNC_RELAY_URL", default="")
+
+# The in-house AT Protocol PDS (its CT, port 3000), at its INTERNAL address like
+# the rest: its public hostname is behind the edge and would measure that
+# instead. Probed at /xrpc/_health, its readiness endpoint, so "up" means the
+# process is serving and its storage answered. A cluster with no PDS leaves this
+# blank and the row reads "unknown".
+PDS_URL = env("PDS_URL", default="")
 
 # Redis, as something to dial — NOT as a cache backend. Corliss holds no Redis
 # client and no redis dependency; the probe writes `PING` to a socket and reads

@@ -668,6 +668,7 @@ any one service, and nothing else in Corliss has business knowing Garage exists.
 | HappyView | `GET /`, carrying `MEMBERSHIP_REGISTRY_HOST` — see below. |
 | LiteLLM | `GET /health/liveliness`. |
 | Sync relay | `GET /health`. |
+| PDS | `GET /xrpc/_health`, its readiness endpoint: "up" means its storage answered too. |
 | Open WebUI | `GET /health`. |
 
 Every row is something that can be asked. The list carried a **Manage Console**
@@ -794,11 +795,12 @@ services that answer in milliseconds. Do not add Redis for it.
 | Setting | Meaning |
 | ------- | ------- |
 | `SYNC_RELAY_URL` | The Automerge sync server's **internal** origin (`http://10.1.1.<ctid>:7030`). |
+| `PDS_URL` | The in-house PDS's **internal** origin (`http://10.1.1.<ctid>:3000`). Blank on a cluster with no PDS. |
 | `REDIS_URL` | Redis as something to **dial** — not a cache backend. See below. |
 | `GARAGE_S3_URL` | Garage's S3 port (`http://10.1.1.<ctid>:3900`), not its admin API. |
 | `CADDY_HEALTH_URL` | Caddy's health endpoint (`http://10.1.1.<ctid>/healthz`). |
 
-All four are blank-tolerant, and **blank means `unknown`, never `down`**. Local
+All five are blank-tolerant, and **blank means `unknown`, never `down`**. Local
 development sets none of them and the page is correct with every row grey.
 
 The version columns have settings of their own, kept apart because they carry a
@@ -814,7 +816,7 @@ The endpoint is `GARAGE_S3_URL`, shared with the Garage probe. With any of the
 bucket or key settings blank the version columns read "not recorded" and nothing
 else on the page changes.
 
-Only these four need settings: HappyView, LiteLLM and Open WebUI are already
+Only these five need settings: HappyView, LiteLLM and Open WebUI are already
 reached by address elsewhere and their probes reuse `MEMBERSHIP_REGISTRY_URL`
 (with `MEMBERSHIP_REGISTRY_HOST`), `LITELLM_URL` and
 `OIDC_BACKCHANNEL_LOGOUT_URI`. A second setting naming the same host is a second

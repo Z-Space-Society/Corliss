@@ -308,6 +308,18 @@ def _sync_relay():
     return _http("sync-relay", origin + "/health" if origin else "")
 
 
+def _pds():
+    """`/xrpc/_health` — readiness, so "up" means its storage answered too.
+
+    Not `/_alive`, the PDS's liveness endpoint, which only says the process is
+    serving. The PDS is SQLite on its own disk with no other service behind it,
+    so a storage failure is the outage worth showing and readiness costs no
+    more to ask.
+    """
+    origin = _origin(settings.PDS_URL)
+    return _http("pds", origin + "/xrpc/_health" if origin else "")
+
+
 def _open_webui():
     """`/health`, at the internal address back-channel logout already names.
 
@@ -420,6 +432,7 @@ STACK = [
         Probe("HappyView", "Membership registry: applications, grants, admin roster", _happyview, manifest="happyview"),
         Probe("LiteLLM", "API gateway in front of the models", _litellm, manifest="litellm"),
         Probe("Sync relay", "Automerge sync server", _sync_relay, manifest="sync-relay"),
+        Probe("PDS", "AT Protocol personal data server: accounts and their repos", _pds, manifest="pds"),
     ]),
     ("Applications", [
         Probe("Corliss", "Login, membership, OIDC, and API keys", _corliss, manifest="corliss"),

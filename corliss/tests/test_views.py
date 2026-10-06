@@ -513,7 +513,7 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("systems"))
         self.assertEqual(resp.status_code, 200)
         for service in ("Garage", "PostgreSQL", "Redis", "Caddy", "HappyView",
-                        "LiteLLM", "Sync relay", "Corliss", "Open WebUI"):
+                        "LiteLLM", "Sync relay", "PDS", "Corliss", "Open WebUI"):
             self.assertContains(resp, service)
 
     def test_each_state_renders_its_own_word_and_dot(self):
