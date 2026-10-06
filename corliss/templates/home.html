@@ -40,7 +40,7 @@ every page, so this page cannot drift from them.
       The member's landing. Two ways in, and they are genuinely different
       things rather than one feature described twice: chat is the app, the API
       is your own tools talking to the same models. Each block links the thing
-      it describes, and the chat one hides itself when CHAT_URL is unset — the
+      it describes, and the chat one hides itself when OPENWEBUI_URL is unset — the
       same rule the nav follows, so the page can't offer what isn't deployed.
       {% endcomment %}
       {% comment %}
@@ -67,14 +67,14 @@ every page, so this page cannot drift from them.
       </div>
 
 
-      {% if CHAT_URL %}
+      {% if OPENWEBUI_URL %}
         <h2 class="section-title">Open Web UI</h2>
         <div class="card">
           <p class="page-text">The quickest way in: a chat window in your
           browser, already signed in as you. Ask questions, work through a
           problem, hand it a document to read.</p>
           <p>
-            <a class="btn-primary" href="{{ CHAT_URL }}">Open Web UI</a>
+            <a class="btn-primary" href="{{ OPENWEBUI_URL }}">Open Web UI</a>
           </p>
         </div>
       {% endif %}

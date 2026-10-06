@@ -532,7 +532,7 @@ class NavForANonMemberTests(ClearsCache):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    @override_settings(CHAT_URL="https://chat.example.com")
+    @override_settings(OPENWEBUI_URL="https://owui.example.com")
     def test_a_non_member_sees_both_entries_and_can_open_neither(self):
         resp = self.client.get(reverse("home"))
         html = resp.content.decode()
@@ -543,10 +543,10 @@ class NavForANonMemberTests(ClearsCache):
         self.assertIn(">API</span>", html)
         # The claim that matters: no way through. A span has no href, so this
         # also fails if either ever reverts to a bare <a>.
-        self.assertNotIn('href="https://chat.example.com"', html)
+        self.assertNotIn('href="https://owui.example.com"', html)
         self.assertNotIn(f'href="{reverse("api")}"', html)
 
-    @override_settings(CHAT_URL="https://chat.example.com")
+    @override_settings(OPENWEBUI_URL="https://owui.example.com")
     def test_a_member_gets_real_links(self):
         MembershipCache.objects.create(
             did=DID,
@@ -557,14 +557,14 @@ class NavForANonMemberTests(ClearsCache):
             author_did="did:plc:admin",
         )
         html = self.client.get(reverse("home")).content.decode()
-        self.assertIn('href="https://chat.example.com"', html)
+        self.assertIn('href="https://owui.example.com"', html)
         self.assertIn(f'href="{reverse("api")}"', html)
         self.assertNotIn("nav__item--closed", html)
         # The dropdown's own closed state is a separate class, so a nav row with
         # no closed entries is not on its own proof that the menu has none.
         self.assertNotIn("nav__dropdown-item--closed", html)
 
-    @override_settings(CHAT_URL="")
+    @override_settings(OPENWEBUI_URL="")
     def test_chat_stays_hidden_when_it_is_not_deployed(self):
         # A closed door says "not for you yet". On a cluster with no chat, that
         # would be a different statement, and a false one.

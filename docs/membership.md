@@ -377,7 +377,7 @@ what membership is *for* — the home page explains the refusal, but the nav is
 where the cluster says what it has — while a live link is a promise broken on
 the next click. They are `<span>`s rather
 than `<a>`s without an `href`, so there is nothing to click, focus, or
-middle-click into a tab. Chat still vanishes entirely when `CHAT_URL` is unset:
+middle-click into a tab. Chat still vanishes entirely when `OPENWEBUI_URL` is unset:
 a closed door says "not for you yet", which on a cluster with no chat deployed
 would be a different statement, and a false one.
 

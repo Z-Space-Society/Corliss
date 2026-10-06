@@ -102,9 +102,9 @@ OIDC_REDIRECT_URIS = env.list("OIDC_REDIRECT_URIS", default=[])
 OIDC_BACKCHANNEL_LOGOUT_URI = env("OIDC_BACKCHANNEL_LOGOUT_URI", default="")
 
 # --- UI ---------------------------------------------------------------------
-# Public origin of the cluster's chat app (Open WebUI). Blank hides the nav's
-# "Chat" link entirely — e.g. local dev with no Open WebUI configured.
-CHAT_URL = env("CHAT_URL", default="")
+# Public origin of the cluster's Open WebUI. Blank hides the nav's "Open WebUI"
+# entry and the home page block entirely — e.g. local dev with none configured.
+OPENWEBUI_URL = env("OPENWEBUI_URL", default="")
 
 # Public origin of the cluster's API service (api.<domain>, served from heron).
 # Shown on /api/ as the endpoint to point a client at. Blank leaves that page's

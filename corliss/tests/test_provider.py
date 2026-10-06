@@ -21,7 +21,7 @@ DID = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
 ADMIN_DID = "did:plc:hhyrsndukexwr6qucdngcf4r"
 CLIENT_ID = "open-webui"
 CLIENT_SECRET = "test-secret"
-REDIRECT_URI = "https://chat.example.test/oauth/oidc/callback"
+REDIRECT_URI = "https://owui.example.test/oauth/oidc/callback"
 
 
 def _grant(did, *, tier="level-2"):

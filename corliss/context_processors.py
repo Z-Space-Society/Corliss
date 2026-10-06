@@ -5,7 +5,7 @@ from django.conf import settings
 
 def ui(request):
     return {
-        "CHAT_URL": settings.CHAT_URL,
+        "OPENWEBUI_URL": settings.OPENWEBUI_URL,
         # The endpoint /api/ tells people to point their client at.
         "API_URL": settings.API_URL,
         # The nav's Manage menu links here, for cluster admins only and only

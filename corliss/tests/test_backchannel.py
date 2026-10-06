@@ -43,7 +43,7 @@ DID = "did:plc:ewvi7nxzyoun6zhxrhs64oiz"
 ADMIN_DID = "did:plc:hhyrsndukexwr6qucdngcf4r"
 CLIENT_ID = "open-webui"
 CLIENT_SECRET = "test-secret"
-REDIRECT_URI = "https://chat.example.test/oauth/oidc/callback"
+REDIRECT_URI = "https://owui.example.test/oauth/oidc/callback"
 LOGOUT_URI = "http://10.1.1.121:8080/oauth/backchannel-logout"
 
 ISSUER = "https://auth.zai.test"

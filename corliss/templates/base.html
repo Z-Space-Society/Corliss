@@ -83,7 +83,7 @@
         same thing to a screen reader that the colour says to everyone else, and
         the title answers the question the closed door raises.
 
-        Open WebUI still hides entirely when CHAT_URL is unset. A disabled entry
+        Open WebUI still hides entirely when OPENWEBUI_URL is unset. A disabled entry
         says "not for you yet"; on a cluster with no chat deployed, that would be
         a different and false statement.
         {% endcomment %}
@@ -125,9 +125,9 @@
 
             <div class="nav__dropdown nav__dropdown--left">
               <div class="nav__dropdown-label">Hosted apps</div>
-              {% if CHAT_URL %}
+              {% if OPENWEBUI_URL %}
                 {% if user.may_enter %}
-                  <a class="nav__dropdown-item" href="{{ CHAT_URL }}">Open WebUI</a>
+                  <a class="nav__dropdown-item" href="{{ OPENWEBUI_URL }}">Open WebUI</a>
                 {% else %}
                   <span class="nav__dropdown-item nav__dropdown-item--closed"
                         aria-disabled="true"
@@ -141,7 +141,7 @@
               {% comment %}
               Hard-coded rather than settings: these are third-party software,
               the same on every cluster, so per-cluster values could only ever
-              be the same values written twice. Contrast CHAT_URL, which is this
+              be the same values written twice. Contrast OPENWEBUI_URL, which is this
               cluster's own deployment and genuinely differs.
 
               Ordered by how much a reader has to install before the tool does

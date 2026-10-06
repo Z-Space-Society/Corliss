@@ -63,7 +63,7 @@ to activate. `uv run python manage.py …` is the explicit equivalent.
 
 Configuration is entirely env-driven — see [`.env.example`](.env.example) for
 the full list. `.env` is git-ignored; **never commit secrets or private keys**.
-`CHAT_URL` drives the nav's "Open WebUI" entry under Tools, `MANAGE_URL` the one remaining link to
+`OPENWEBUI_URL` drives the nav's "Open WebUI" entry under Tools, `MANAGE_URL` the one remaining link to
 the Manage Console — the fallback offered on `/manage/` to an admin whose
 sign-in picked up no registry session (the nav entry is **gone**: `/manage/`
 covers everything that console did, roster editing included, and the setting
@@ -829,7 +829,7 @@ thing to get wrong.
 **Every address is internal, without exception.** Server-side Python cannot
 fetch our own public origin — Cloudflare's Browser Integrity Check answers
 `error code: 1010` — so a probe pointed at a public origin measures Cloudflare
-rather than the service. `API_URL`, `CHAT_URL` and `MANAGE_URL` are hrefs for a
+rather than the service. `API_URL`, `OPENWEBUI_URL` and `MANAGE_URL` are hrefs for a
 browser and are never probe targets.
 
 **`REDIS_URL` is a probe target and nothing else.** Corliss holds no Redis
@@ -1070,7 +1070,7 @@ Left of the divider: the brand, then **About**. Right of it: **Workspaces**,
 
 **Tools has two groups, and they are not one list with a rule in it.** *Hosted
 apps* run on this cluster and answer to GATE — Open WebUI is closed to a
-non-member exactly the way the API is, and disappears when `CHAT_URL` is unset,
+non-member exactly the way the API is, and disappears when `OPENWEBUI_URL` is unset,
 since a disabled entry for something not deployed would be a false statement.
 Parascribe has no UI of its own, so its entry is `/tools/parascribe/`, a
 quickstart for the transcription endpoint. That page is signed-in rather than
@@ -1136,7 +1136,7 @@ REDIS_URL=redis://…                              # required, or the RP cannot 
 ```
 
 Register the RP's redirect URI in Corliss's `OIDC_REDIRECT_URIS`
-(e.g. `https://chat.example.com/oauth/oidc/callback`), and its back-channel
+(e.g. `https://owui.example.com/oauth/oidc/callback`), and its back-channel
 logout endpoint in `OIDC_BACKCHANNEL_LOGOUT_URI` — its *internal* address, since
 that call is service-to-service and has no business routing out through public
 DNS and back in through the edge.

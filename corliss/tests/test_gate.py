@@ -33,7 +33,7 @@ ADMIN = "did:plc:hhyrsndukexwr6qucdngcf4r"
 STRANGER = "did:plc:n4mzxx6z4ehnswc7znswtfr2"
 
 CLIENT_ID = "open-webui"
-REDIRECT_URI = "https://chat.example.test/oauth/oidc/callback"
+REDIRECT_URI = "https://owui.example.test/oauth/oidc/callback"
 
 
 def _grant(did=MEMBER, *, tier="level-2", active=True):

@@ -161,16 +161,16 @@ class HomeViewTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("home"))
         self.assertNotContains(resp, "Apply for membership")
 
-    @override_settings(CHAT_URL="https://chat.example.com")
+    @override_settings(OPENWEBUI_URL="https://owui.example.com")
     def test_member_is_welcomed_and_pointed_at_both_ways_in(self):
         _grant()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
         self.assertContains(resp, "Welcome to the cluster")
-        self.assertContains(resp, "https://chat.example.com")
+        self.assertContains(resp, "https://owui.example.com")
         self.assertContains(resp, reverse("api"))
 
-    @override_settings(CHAT_URL="")
+    @override_settings(OPENWEBUI_URL="")
     def test_no_chat_url_drops_the_chat_block_but_keeps_the_api_one(self):
         # Same rule the nav follows: the page must not offer what is not
         # deployed. The API half is served by this app and always there.
@@ -2202,7 +2202,7 @@ class ParascribeViewTests(NoRosterMixin, TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertNotContains(resp, "tabs__bar")
 
-    @override_settings(CHAT_URL="")
+    @override_settings(OPENWEBUI_URL="")
     def test_the_tools_menu_links_it_for_a_non_member(self):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
