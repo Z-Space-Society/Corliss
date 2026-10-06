@@ -299,3 +299,90 @@ class ServiceSessionTests(RosterWriteMixin, TestCase):
 
         refresh.assert_called_once()
         self.assertIn("refreshed", note)
+
+
+@override_settings(SCN_SERVICE_DID=SERVICE_DID)
+class AdmitMemberTests(RosterWriteMixin, TestCase):
+    """Admitting from the command line: a grant authored by the service account.
+
+    The load-bearing test is that the cache row is never written here. It
+    arrives the way every grant does, by the registry's push, and this only
+    waits for it — so the stub for `approve` plays the push, and a test that
+    wants the push to be late simply leaves it out.
+    """
+
+    def setUp(self):
+        super().setUp()
+        approve = patch.object(
+            membership.MembershipRegistry, "approve", side_effect=self._approve
+        )
+        self.approve = approve.start()
+        self.addCleanup(approve.stop)
+        self.push_arrives = True
+
+    def _approve(self, token, did, tier):
+        if self.push_arrives:
+            self.grant(did, tier=tier)
+        return {}
+
+    def test_it_writes_the_grant_as_the_service_account(self):
+        membership.admit_member(STRANGER, "level-3")
+
+        token, did, tier = self.approve.call_args.args
+        self.assertEqual(token.user.did, SERVICE_DID)
+        self.assertEqual((did, tier), (STRANGER, "level-3"))
+
+    def test_they_are_a_member_when_it_returns(self):
+        """What the caller needs: `appoint_admin` reads the cache next."""
+        note = membership.admit_member(STRANGER, "level-3")
+
+        self.assertTrue(membership.is_active_member(STRANGER))
+        self.assertIn("level-3", note)
+
+    def test_the_tier_defaults_to_the_lowest(self):
+        membership.admit_member(STRANGER)
+
+        self.assertEqual(self.approve.call_args.args[2], membership.DEFAULT_TIER)
+
+    def test_it_creates_the_local_row(self):
+        membership.admit_member(STRANGER)
+
+        self.assertTrue(User.objects.filter(did=STRANGER).exists())
+
+    def test_an_existing_member_keeps_their_tier(self):
+        """Re-approving is how a tier is changed, so admitting someone who is
+        already in must not do it: 'make them an admin' would also demote them."""
+        self.grant(BORIS, tier="level-5")
+
+        note = membership.admit_member(BORIS, "level-0")
+
+        self.approve.assert_not_called()
+        self.assertIn("already a member", note)
+
+    def test_a_late_push_is_reported_with_the_fix(self):
+        """The grant is written and the cache has not caught up. It must not
+        write the row itself, and it must say that running again is safe."""
+        self.push_arrives = False
+
+        with patch.object(membership, "ADMIT_WAIT_SECONDS", 0):
+            with self.assertRaisesMessage(
+                membership.RegistryError, "run the same command again"
+            ):
+                membership.admit_member(STRANGER)
+
+        self.approve.assert_called_once()
+        self.assertFalse(membership.is_active_member(STRANGER))
+
+    def test_it_needs_the_service_account_registry_session(self):
+        AtprotoToken.objects.update(registry_session_at=None)
+
+        with self.assertRaises(membership.RosterError):
+            membership.admit_member(STRANGER)
+
+        self.approve.assert_not_called()
+
+    def test_it_refuses_a_value_that_is_not_a_did(self):
+        with self.assertRaises(membership.RosterError):
+            membership.admit_member("alice.bsky.social")
+
+        self.approve.assert_not_called()

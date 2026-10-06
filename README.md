@@ -288,9 +288,24 @@ manage.py make_admin alice.bsky.social   # cluster admin: roster entry + is_staf
                                          #   --remove reverses it; --superuser opts in
                                          #   to the flag that bypasses every check.
                                          #   Needs the service account's session.
+                                         #   --admit [--tier level-N] first grants
+                                         #   membership to someone who has none.
+manage.py list_admins                    # the current admins, and the service
+                                         #   session, as JSON for tooling
 manage.py ensure_admin                   # idempotent break-glass local admin;
                                          #   reads CORLISS_ADMIN_PASSWORD
 ```
+
+**`--admit` is opt-in, and the grant it writes is a real one.** Admins are
+members, so `make_admin` refuses a non-member unless told otherwise. With
+`--admit` it grants membership first, authored by the service account through
+the registry like any console approval, then waits for that grant to arrive in
+`MembershipCache` by the ordinary push before appointing. It never writes the
+cache row itself: a row no event backs is the state the cache exists to rule
+out. If the push is slow the command stops with the grant written and says to
+run it again, which is safe because approving twice is harmless. Someone who is
+already a member keeps their tier, because re-approving is how a tier is
+changed and "make them an admin" must not also demote them.
 
 **The member form shows what this app stores, and nothing it doesn't.**
 `CorlissUserAdmin` declares its `fieldsets` outright rather than appending to

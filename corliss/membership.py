@@ -53,6 +53,7 @@ that does not contradict the first invariant above.
 import json
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone as dt_timezone
 
 import requests
@@ -864,6 +865,57 @@ def ensure_user(did, handle=None):
         user.username = handle
         user.save(update_fields=["username"])
     return user
+
+
+# How long `admit_member` waits for the registry's push to land a grant it has
+# just written. The push is what clears a row from the application queue and it
+# normally arrives within a second or two; this is a ceiling, not a guess at it.
+ADMIT_WAIT_SECONDS = 10
+ADMIT_POLL_SECONDS = 0.5
+
+
+def admit_member(subject_did, tier=None):
+    """Grant `subject_did` membership from the command line. Returns a note.
+
+    The console's Approve, without a signed-in admin behind it: there is nobody
+    at a shell to spend a session for, so the grant is authored by the service
+    account, with the registry session it already keeps for
+    `_sync_space_access`. That is a legitimate author — genesis seeds the
+    service account onto its own roster, and the registry accepts a grant from
+    any current admin.
+
+    **Returns only once the grant is in the cache**, because the caller's next
+    move is `appoint_admin`, which reads `is_active_member` and nothing else.
+    The grant reaches the cache the same way every grant does — the registry
+    pushes the event and `apply_event` records it — so this waits for that
+    rather than writing the row itself: a cache row no event backs is exactly
+    the state `MembershipCache` exists to make impossible.
+
+    If the push has not landed in time this raises with the grant already
+    written. Running the same thing again is safe and is the fix: approving
+    twice is harmless (see `MembershipRegistry.approve`) and the second run
+    finds the row.
+    """
+    _require_did(subject_did)
+    tier = tier or DEFAULT_TIER
+    if is_active_member(subject_did):
+        return "already a member; their tier was left as it is"
+    registry = MembershipRegistry.from_settings()
+    registry.approve(_service_token(for_registry=True), subject_did, tier)
+    # The same follow-up the console's Approve makes, so they have a row — and
+    # a readable handle — from now rather than from their first sign-in.
+    ensure_user(subject_did)
+
+    deadline = time.monotonic() + ADMIT_WAIT_SECONDS
+    while not is_active_member(subject_did):
+        if time.monotonic() >= deadline:
+            raise RegistryError(
+                f"the grant at {tier} was written, but it has not reached "
+                f"Corliss's membership cache after {ADMIT_WAIT_SECONDS}s. "
+                f"Nothing is lost: run the same command again."
+            )
+        time.sleep(ADMIT_POLL_SECONDS)
+    return f"admitted as a member at {tier}"
 
 
 def appoint_admin(actor_did, subject_did):

@@ -9,6 +9,7 @@ backs. Anything that re-opens add/change/delete on it should break these.
 here at all, and — just as much — what that does *not* grant them.
 """
 
+import json
 from io import StringIO
 from unittest.mock import patch
 
@@ -19,7 +20,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from corliss import atproto
+from corliss import atproto, membership
 from corliss.models import AtprotoToken, MembershipCache
 from corliss.tests.roster_fixtures import (
     OTHER_ADMIN as OTHER,
@@ -285,3 +286,125 @@ class MakeAdminCommandTests(RosterWriteMixin, TestCase):
         self._run("alice.bsky.social", did=DID)
 
         self.assertEqual(MembershipCache.objects.get(did=DID).last_rkey, before)
+
+
+@override_settings(SCN_SERVICE_DID=SERVICE_DID)
+class MakeAdminAdmitTests(RosterWriteMixin, TestCase):
+    """`make_admin --admit` — admitting and appointing in one command.
+
+    Opt-in on purpose. Without the flag the member-first refusal stands (see
+    `MakeAdminCommandTests`), so "make them an admin" never quietly also means
+    "let them in".
+    """
+
+    def setUp(self):
+        super().setUp()
+        approve = patch.object(
+            membership.MembershipRegistry,
+            "approve",
+            side_effect=lambda token, did, tier: self.grant(did, tier=tier),
+        )
+        self.approve = approve.start()
+        self.addCleanup(approve.stop)
+
+    def _run(self, *args, **opts):
+        out = StringIO()
+        call_command("make_admin", *args, stdout=out, **opts)
+        return out.getvalue()
+
+    def test_it_admits_then_appoints(self):
+        out = self._run("alice.bsky.social", did=DID, admit=True, tier="level-2")
+
+        self.assertEqual(self.approve.call_args.args[1:], (DID, "level-2"))
+        self.assertIsNotNone(self._written_entry(DID))
+        self.assertIn("admitted as a member at level-2", out)
+        # zai-ops reads this word to decide whether the run changed anything.
+        self.assertIn("promoted", out)
+
+    def test_an_existing_member_is_not_re_granted(self):
+        self.grant(DID, tier="level-5")
+
+        self._run("alice.bsky.social", did=DID, admit=True)
+
+        self.approve.assert_not_called()
+        self.assertEqual(MembershipCache.objects.get(did=DID).tier, "level-5")
+        self.assertIsNotNone(self._written_entry(DID))
+
+    def test_a_tier_the_network_does_not_issue_is_refused(self):
+        self.approve.side_effect = membership.RegistryError("not a tier")
+
+        with self.assertRaisesMessage(CommandError, "not a tier"):
+            self._run("alice.bsky.social", did=DID, admit=True, tier="level-99")
+
+        self.write_record.assert_not_called()
+
+    def test_remove_never_admits(self):
+        self.grant(DID)
+        self.roster_entries = self.roster_entries + [
+            {"did": DID, "addedAt": "2026-01-01T00:00:00Z"}
+        ]
+
+        self._run("alice.bsky.social", did=DID, remove=True, admit=True)
+
+        self.approve.assert_not_called()
+
+
+@override_settings(SCN_SERVICE_DID=SERVICE_DID)
+class ListAdminsCommandTests(RosterWriteMixin, TestCase):
+    """`manage.py list_admins` — the roster as JSON, for tooling."""
+
+    def setUp(self):
+        super().setUp()
+        handles = patch.object(
+            membership,
+            "handles_for",
+            side_effect=lambda dids: {SERVICE_DID: "sharedcomputer.network"},
+        )
+        handles.start()
+        self.addCleanup(handles.stop)
+
+    def _run(self):
+        out = StringIO()
+        call_command("list_admins", stdout=out)
+        return json.loads(out.getvalue())
+
+    def test_it_lists_the_current_admins(self):
+        report = self._run()
+
+        self.assertTrue(report["roster_exists"])
+        self.assertEqual(
+            {a["did"] for a in report["admins"]}, {SERVICE_DID, OTHER}
+        )
+
+    def test_a_departed_admin_is_left_out(self):
+        self.roster_entries[1]["removedAt"] = "2026-02-01T00:00:00Z"
+
+        self.assertEqual([a["did"] for a in self._run()["admins"]], [SERVICE_DID])
+
+    def test_it_shows_a_handle_and_falls_back_to_the_did(self):
+        by_did = {a["did"]: a for a in self._run()["admins"]}
+
+        self.assertEqual(by_did[SERVICE_DID]["handle"], "sharedcomputer.network")
+        self.assertEqual(by_did[OTHER]["handle"], OTHER)
+
+    def test_it_reports_membership_and_the_local_mirror(self):
+        """Both can lag the roster, so they are reported, not assumed."""
+        User.objects.create_user(username="other.test", did=OTHER, is_staff=True)
+
+        by_did = {a["did"]: a for a in self._run()["admins"]}
+
+        self.assertTrue(by_did[OTHER]["member"])
+        self.assertTrue(by_did[OTHER]["is_staff"])
+        # The service account holds authority and no grant.
+        self.assertFalse(by_did[SERVICE_DID]["member"])
+
+    def test_it_reports_the_service_session(self):
+        self.assertTrue(self._run()["service"]["can_write_registry"])
+
+    def test_no_roster_record_is_an_answer_not_an_error(self):
+        self.roster_entries = None
+
+        report = self._run()
+
+        self.assertFalse(report["roster_exists"])
+        self.assertEqual(report["admins"], [])

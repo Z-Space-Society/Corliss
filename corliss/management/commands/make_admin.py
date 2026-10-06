@@ -3,6 +3,8 @@
   manage.py make_admin alice.bsky.social
   manage.py make_admin alice.bsky.social --did did:plc:abc123   # skip resolution
   manage.py make_admin alice.bsky.social --remove
+  manage.py make_admin alice.bsky.social --admit            # not a member yet
+  manage.py make_admin alice.bsky.social --admit --tier level-2
 
 **One "admin", two halves, written together.** Being an admin means a current
 entry on the registry's public roster — that is the authority, the thing
@@ -33,6 +35,13 @@ Two doors this does *not* open, listed because they look like this one:
 - **Member** — `MembershipCache`, written only by the registry's events. Admin
   does not imply member and never has: an admin with no grant reaches Corliss
   and receives no tier and no API key.
+
+Admins are members, so by default this refuses anyone who is not one. `--admit`
+is the one way to do both from a shell: it first grants membership at `--tier`,
+authored by the service account (see `membership.admit_member`), and only then
+appoints. It is opt-in because admitting someone is a decision of its own, and
+a command that did it silently would make "make them an admin" also mean "let
+them in". Someone who is already a member is left at the tier they have.
 
 Resolves the handle to a DID (DNS TXT, then HTTPS well-known — see
 corliss.atproto.resolve_handle_for_admin) and verifies it by checking the DID
@@ -75,6 +84,23 @@ class Command(BaseCommand):
             ),
         )
         parser.add_argument(
+            "--admit",
+            action="store_true",
+            help=(
+                "If they are not a member yet, grant membership first (at "
+                "--tier), authored by the service account. Without this, a "
+                "non-member is refused."
+            ),
+        )
+        parser.add_argument(
+            "--tier",
+            default=membership.DEFAULT_TIER,
+            help=(
+                "The tier --admit grants. Ignored for someone who is already "
+                f"a member. Default: {membership.DEFAULT_TIER}."
+            ),
+        )
+        parser.add_argument(
             "--superuser",
             action="store_true",
             help=(
@@ -95,11 +121,18 @@ class Command(BaseCommand):
 
         actor_did = settings.SCN_SERVICE_DID
 
+        admitted = ""
         try:
             if opts["remove"]:
                 note = membership.dismiss_admin(actor_did, did)
                 verb = "removed"
             else:
+                if opts["admit"]:
+                    # Before the roster write, and reported on its own line: if
+                    # the appointment then fails, the operator still learns the
+                    # membership half happened.
+                    admitted = membership.admit_member(did, opts["tier"])
+                    self.stdout.write(f"{handle!r} ({did}) — {admitted}")
                 note = membership.appoint_admin(actor_did, did)
                 verb = "promoted"
         except (membership.RosterError, membership.RegistryError) as exc:
