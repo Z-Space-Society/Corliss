@@ -292,6 +292,9 @@ manage.py make_admin alice.bsky.social   # cluster admin: roster entry + is_staf
                                          #   membership to someone who has none.
 manage.py list_admins                    # the current admins, and the service
                                          #   session, as JSON for tooling
+manage.py sync_admins                    # re-derive every is_staff flag from the
+                                         #   roster; changes no admins, needs no
+                                         #   service session
 manage.py ensure_admin                   # idempotent break-glass local admin;
                                          #   reads CORLISS_ADMIN_PASSWORD
 ```

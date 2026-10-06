@@ -840,6 +840,46 @@ def _set_staff(did, value):
     User.objects.filter(did=did, is_superuser=False).update(is_staff=value)
 
 
+def sync_staff_mirror():
+    """Make every local `is_staff` flag agree with the roster. Returns
+    `(granted, cleared)`, the DIDs whose flag changed in each direction.
+
+    `_heal_staff_flag` does this for one person at their next sign-in. This
+    does it for everyone at once, without waiting for anybody to sign in: the
+    case is a database restored from before an appointment, or a rebuilt one,
+    where the console would otherwise show the wrong people as admins until
+    each of them happened to come back.
+
+    A current admin with no local row gets one, for the reason `appoint_admin`
+    ensures it: the console reads admin status off `is_staff`. With no roster
+    record at all the service account is the sole admin, the same bootstrap
+    rule `is_cluster_admin` applies.
+
+    Superusers are skipped in both directions, as everywhere else — which is
+    also what leaves the break-glass row alone.
+
+    Raises `RosterError` rather than guessing: clearing every flag because the
+    PDS was unreachable would be the wrong answer written to disk.
+    """
+    roster = fetch_roster(refresh=True)
+    if roster.exists:
+        current = {e.did for e in roster.entries if e.is_current}
+    else:
+        current = {settings.SCN_SERVICE_DID} if settings.SCN_SERVICE_DID else set()
+
+    for did in current:
+        ensure_user(did)
+    grant = User.objects.filter(did__in=current, is_staff=False, is_superuser=False)
+    clear = User.objects.filter(is_staff=True, is_superuser=False).exclude(
+        did__in=current
+    )
+    granted = sorted(grant.values_list("did", flat=True))
+    cleared = sorted(clear.values_list("did", flat=True))
+    User.objects.filter(did__in=granted).update(is_staff=True)
+    User.objects.filter(did__in=cleared).update(is_staff=False)
+    return granted, cleared
+
+
 def ensure_user(did, handle=None):
     """The local row for a DID, created if this is the first we have seen of it.
 

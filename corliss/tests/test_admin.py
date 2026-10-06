@@ -408,3 +408,85 @@ class ListAdminsCommandTests(RosterWriteMixin, TestCase):
 
         self.assertFalse(report["roster_exists"])
         self.assertEqual(report["admins"], [])
+
+
+@override_settings(SCN_SERVICE_DID=SERVICE_DID)
+class SyncAdminsCommandTests(RosterWriteMixin, TestCase):
+    """`manage.py sync_admins` — the `is_staff` mirror, re-derived for everyone."""
+
+    def setUp(self):
+        super().setUp()
+        handles = patch.object(membership, "handles_for", side_effect=lambda dids: {})
+        handles.start()
+        self.addCleanup(handles.stop)
+
+    def _run(self):
+        out = StringIO()
+        call_command("sync_admins", stdout=out)
+        return out.getvalue()
+
+    def _staff(self, did):
+        return User.objects.get(did=did).is_staff
+
+    def test_a_current_admin_gets_the_flag_and_a_row(self):
+        """OTHER has never signed in: no row at all, and still an admin."""
+        out = self._run()
+
+        self.assertTrue(self._staff(OTHER))
+        self.assertTrue(self._staff(SERVICE_DID))
+        self.assertIn(f"{OTHER}: marked as an admin", out)
+
+    def test_a_departed_admin_loses_the_flag(self):
+        User.objects.create_user(username="other.test", did=OTHER, is_staff=True)
+        self.roster_entries[1]["removedAt"] = "2026-02-01T00:00:00Z"
+
+        out = self._run()
+
+        self.assertFalse(self._staff(OTHER))
+        self.assertIn(f"{OTHER}: no longer marked as an admin", out)
+
+    def test_staff_who_were_never_on_the_roster_lose_the_flag(self):
+        User.objects.create_user(username="stray.test", did=DID, is_staff=True)
+
+        self._run()
+
+        self.assertFalse(self._staff(DID))
+
+    def test_superusers_are_left_alone(self):
+        """Which is also what keeps the break-glass row out of this."""
+        User.objects.create_user(
+            username="admin", did="did:local:admin", is_staff=True, is_superuser=True
+        )
+
+        self._run()
+
+        self.assertTrue(self._staff("did:local:admin"))
+
+    def test_a_second_run_changes_nothing(self):
+        self._run()
+
+        self.assertIn("already matches the roster", self._run())
+
+    def test_no_roster_record_means_the_service_account_alone(self):
+        User.objects.create_user(username="other.test", did=OTHER, is_staff=True)
+        self.roster_entries = None
+
+        self._run()
+
+        self.assertTrue(self._staff(SERVICE_DID))
+        self.assertFalse(self._staff(OTHER))
+
+    def test_an_unreadable_roster_changes_nothing(self):
+        User.objects.create_user(username="other.test", did=OTHER, is_staff=True)
+        self.find_record.side_effect = atproto.OAuthError("PDS unreachable")
+
+        with self.assertRaises(CommandError):
+            self._run()
+
+        self.assertTrue(self._staff(OTHER))
+
+    def test_it_does_not_touch_the_roster_or_space_access(self):
+        self._run()
+
+        self.assertEqual(self.written, [])
+        self.set_space_access.assert_not_called()
