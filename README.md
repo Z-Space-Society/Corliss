@@ -414,11 +414,10 @@ absent.
 
 **`LITELLM_URL` is not `API_URL`, and conflating them breaks this quietly.**
 `API_URL` is the public origin a *member* points their client at. `LITELLM_URL`
-is a service-to-service call between two CTs on one bridge — and server-side
-Python **cannot** fetch our own public origin, because Cloudflare's Browser
-Integrity Check refuses non-browser user agents with `error code: 1010`. That is
-the defect that shipped back-channel logout fully built and completely inert; it
-is set for this call too.
+is a service-to-service call between two CTs on one bridge. It has no business
+depending on public DNS and the edge, and the provisioner key has no business
+crossing them. Pointed at the public origin the call may still work, which is
+what makes the mistake quiet.
 
 ### What is stored
 
@@ -826,10 +825,8 @@ reached by address elsewhere and their probes reuse `MEMBERSHIP_REGISTRY_URL`
 `OIDC_BACKCHANNEL_LOGOUT_URI`. A second setting naming the same host is a second
 thing to get wrong.
 
-**Every address is internal, without exception.** Server-side Python cannot
-fetch our own public origin — Cloudflare's Browser Integrity Check answers
-`error code: 1010` — so a probe pointed at a public origin measures Cloudflare
-rather than the service. `API_URL`, `OPENWEBUI_URL` and `MANAGE_URL` are hrefs for a
+**Every address is internal, without exception.** A probe pointed at a public
+origin measures the edge in front of the service rather than the service. `API_URL`, `OPENWEBUI_URL` and `MANAGE_URL` are hrefs for a
 browser and are never probe targets.
 
 **`REDIS_URL` is a probe target and nothing else.** Corliss holds no Redis

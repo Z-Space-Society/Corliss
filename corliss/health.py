@@ -9,9 +9,9 @@ knowing that Garage exists.
 **Corliss can reach all of this, and that is the whole reason the page can stop
 guessing.** It runs in its own CT on `vmbr1`, the same bridge as every service
 below, so each probe is one hop to a neighbour. The addresses are therefore
-INTERNAL without exception — server-side Python cannot fetch our own public
-origin (Cloudflare's Browser Integrity Check answers `error code: 1010`), and
-`API_URL`/`OPENWEBUI_URL`/`MANAGE_URL` are hrefs for a browser, never probe targets.
+INTERNAL without exception: a probe pointed at a public origin measures the
+edge rather than the service, and `API_URL`/`OPENWEBUI_URL`/`MANAGE_URL` are
+hrefs for a browser, never probe targets.
 
 **Three states, and the third one is load-bearing.** `up` and `down` are
 measurements. `unknown` is the honest answer when there is nothing to measure

@@ -123,17 +123,19 @@ so widening one cannot widen the other.
 
 ## Reaching other services
 
-- **Server-side Python cannot fetch our own public origin.** Cloudflare's
-  Browser Integrity Check refuses non-browser user agents with `error code:
-  1010`. **The split is by HTTP library, not by endpoint** — `requests` and
-  `httpx` get 200, bare `urllib` gets 403 — and it is invisible from a shell
-  where `curl` passes. This shipped back-channel logout fully built and
-  completely inert.
-- **So every service-to-service call takes the internal address.**
+- **Every service-to-service call takes the internal address.**
   `LITELLM_URL` is not `API_URL`; the registry URL is internal; the relying
-  party's back-channel endpoint is internal. Conflating a public origin with an
-  internal one breaks things *quietly*, which is why it is an invariant rather
-  than a preference.
+  party's back-channel endpoint is internal. A call between two CTs on one
+  bridge has no business depending on public DNS and the edge, and a credential
+  sent that way has no business crossing them. Conflating a public origin with
+  an internal one breaks things *quietly*, which is why it is an invariant
+  rather than a preference.
+- **The edge used to enforce this, and no longer does.** The cluster sat behind
+  Cloudflare until 2026-10-06, whose Browser Integrity Check refused
+  server-side requests to our own public origin. That shipped back-channel
+  logout fully built and completely inert. The check is gone with Cloudflare,
+  so a public-origin call now works, which makes the mistake easier to make
+  and no more correct.
 - **The one leg that cannot be made internal is the return.** A relying party
   validates our `logout_token` by fetching our discovery document and JWKS at
   the *public* origin, because `iss` must match. Delivery therefore still depends

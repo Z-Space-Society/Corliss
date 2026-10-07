@@ -169,12 +169,9 @@ def _theme_dirs(kind):
 # registry settings below take.
 #
 # Point URL at LiteLLM's **internal** address (http://10.1.1.<ctid>:4000), not
-# at API_URL above. Three reasons, and the first is the one that bites:
-# server-side Python cannot fetch our own public origin, because Cloudflare's
-# Browser Integrity Check refuses non-browser user agents with error 1010 —
-# the defect that shipped back-channel logout fully built and inert. Beyond
-# that, this is a service-to-service call between two CTs on one bridge, and
-# the provisioner key has no business crossing an edge to reach a neighbour.
+# at API_URL above. This is a service-to-service call between two CTs on one
+# bridge: it has no business depending on public DNS and the edge, and the
+# provisioner key has no business crossing an edge to reach a neighbour.
 #
 # Unlike the registry there is no HOST setting: LiteLLM does not route by
 # virtual host, so a bare-IP Host needs no compensating header.
@@ -194,7 +191,7 @@ LITELLM_MAX_KEYS_PER_MEMBER = env.int("LITELLM_MAX_KEYS_PER_MEMBER", default=5)
 # Addresses `corliss.health` dials to answer whether the cluster is up. Every
 # one is INTERNAL, for the reason stated above LITELLM_URL and repeated here
 # because it is the mistake this section invites: a probe pointed at a public
-# origin measures Cloudflare, not the service.
+# origin measures the edge, not the service.
 #
 # **All five are blank-tolerant and blank means "unknown", never "down".** A
 # deployment that has not been told where Redis lives has not discovered an
