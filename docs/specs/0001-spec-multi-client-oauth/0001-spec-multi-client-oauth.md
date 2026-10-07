@@ -89,11 +89,16 @@ The work is labelled C1 to C7:
 | Open WebUI | confidential | `open-webui` (`OIDC_CLIENT_ID`) | `OIDC_REDIRECT_URIS` | exact, unchanged |
 | Claude web, iOS, Desktop | public, CIMD | a document Anthropic hosts under `https://claude.ai` | `https://claude.ai/api/mcp/auth_callback` | exact |
 | Claude Code | public, CIMD | `https://claude.ai/oauth/claude-code-client-metadata` | `http://localhost:<port>/callback`, `http://127.0.0.1:<port>/callback` | loopback, port ignored |
-| scn-obsidian plugin | public, CIMD hosted by Corliss | `<PUBLIC_BASE_URL>/clients/scn-obsidian.json` | `obsidian://scn-obsidian/auth` | exact |
+| scn-obsidian plugin | public, CIMD hosted by Corliss | `<PUBLIC_BASE_URL>/clients/scn-obsidian.json` | `obsidian://scn-obsidian` | exact |
 
 Claude Code's document declares `http://localhost/callback` and
 `http://127.0.0.1/callback` with no port, and grant types
 `authorization_code` and `refresh_token`.
+
+The plugin is one client on every platform. Obsidian on desktop and on iOS
+send the same `client_id` and the same redirect URI, which Obsidian hands to
+the plugin's protocol handler. The plugin asks for `offline_access` and the
+sync resource.
 
 The exact `client_id` URL the hosted Claude apps send is not published. See
 open question 1.
@@ -196,7 +201,7 @@ anonymous request could make Corliss fetch any URL.
   "client_id": "<PUBLIC_BASE_URL>/clients/scn-obsidian.json",
   "client_name": "SCN Obsidian",
   "client_uri": "<PUBLIC_BASE_URL>",
-  "redirect_uris": ["obsidian://scn-obsidian/auth"],
+  "redirect_uris": ["obsidian://scn-obsidian"],
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
   "token_endpoint_auth_method": "none"
@@ -385,9 +390,15 @@ The `refresh_token` grant, in order:
 
 1. Look up the hash. Unknown is `invalid_grant`.
 2. `client_id` must equal the token's client. Otherwise `invalid_grant`.
-3. **Reuse.** A token that was already used: delete the whole family and
-   return `invalid_grant`. A replayed refresh token means it leaked, or a
-   client lost a response. Either way the member signs in again.
+3. **Reuse.** A token that was already used, or that was superseded, is a
+   replay.
+   - **Lost response.** If it was used no more than 60 seconds ago and no
+     token issued from it has been used, the client is retrying after a
+     response it never received. Mark the unused tokens issued from it as
+     superseded and continue from step 4, issuing a new pair. iOS suspending
+     Obsidian in the middle of a refresh is the ordinary case.
+   - **Anything else:** delete the whole family and return `invalid_grant`.
+     The member signs in again.
 4. Expired is `invalid_grant`.
 5. `resource`, when sent, must match. Otherwise `invalid_target`.
 6. **Membership.** `membership.may_enter(did)`. If false, delete the family
@@ -395,7 +406,9 @@ The `refresh_token` grant, in order:
    client.
 7. Claim the token with a conditional update, so that of two concurrent
    requests only one wins, the way codes are claimed today
-   (`corliss/views.py:2145-2149`). The loser is treated as reuse.
+   (`corliss/views.py:2145-2149`). The loser is handled as a replay under
+   step 3, which inside the window gives it its own pair and supersedes the
+   winner's.
 8. Issue a new access token and a new refresh token in the same family, with
    the same resource and scope, in the same response.
 
@@ -495,6 +508,8 @@ Blank defaults, so codes in flight at deploy time still redeem.
 | `family` | `UUIDField`, indexed |
 | `created_at`, `expires_at` | |
 | `used_at` | null until rotated |
+| `parent` | FK to self, null. The token this one was issued from. |
+| `superseded_at` | null unless replaced during the grace window. A superseded token is never accepted. |
 
 **`OidcClientDocument`, new.** `client_id` (unique), `document` (JSON),
 `fetched_at`, `expires_at`, `last_error` (blank).
@@ -521,7 +536,8 @@ client.
 | `SYNC_RELAY_SERVICE_TOKEN` | empty | Shared credential for the relay's `/internal/vaults`. Empty shows "not configured" on the vaults page. |
 
 Token lifetimes are constants in `oidc.py` beside `CODE_TTL_SECONDS` and
-`ID_TOKEN_TTL_SECONDS`: access 900 seconds, refresh 30 days.
+`ID_TOKEN_TTL_SECONDS`: access 900 seconds, refresh 30 days, and
+`REFRESH_REUSE_GRACE_SECONDS = 60`.
 
 `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URIS` and
 `OIDC_BACKCHANNEL_LOGOUT_URI` keep their meaning.
@@ -593,7 +609,7 @@ New test modules: `test_public_clients.py` (C1, C3, C4, C6, consent),
 | 1. Claude web: add the MCP URL as a custom connector, sign in, a tool call succeeds | Discovery at both paths carries the CIMD and PKCE fields. Authorize with an allowlisted `client_id`, the `claude.ai` callback, S256 and the MCP resource, with no `openid`, reaches consent and issues a code. Exchange returns an access token whose claims match the token contract and which verifies against the JWKS. | Yes |
 | 2. Claude iOS: the same connector works from the phone | Same as check 1. Nothing differs on Corliss's side. | Yes |
 | 3. Claude Code completes OAuth through the loopback redirect | Loopback match ignores the port for `localhost` and `127.0.0.1`. The two hosts do not match each other. A different path does not match. Consent is shown every time and includes the redirect host. | Yes |
-| 4. scn-obsidian sign-in returns to the plugin and the relay accepts the token | Corliss's own document is served and resolves without a fetch. Authorize redirects to `obsidian://scn-obsidian/auth` with code and state. The token's `aud` is the sync resource. | Yes, laptop and iPhone |
+| 4. scn-obsidian sign-in returns to the plugin and the relay accepts the token | Corliss's own document is served and resolves without a fetch. Authorize redirects to `obsidian://scn-obsidian` with code and state. The token's `aud` is the sync resource. | Yes, laptop and iPhone |
 | 5. A removed DID: the next refresh fails with `invalid_grant` | Revoke through `apply_event`, then refresh: `invalid_grant`, family gone. The same with the delete skipped, to show the membership check alone is enough. | Yes |
 | 6. Open WebUI sign-in still works | The three existing modules, unchanged. Plus: Open WebUI still receives the ID token as its access token, still needs `openid`, gets no consent screen, and is refused when the secret is blank. | Yes |
 | 7. "Your vaults" shows the member's vaults and only theirs | The relay is called with the signed-in DID only. A `did` in the query string is ignored. Not configured, unreachable and empty each render. A non-member is refused. | Yes |
@@ -602,9 +618,11 @@ Further unit coverage:
 
 - PKCE: missing challenge, `plain`, wrong verifier, verifier out of length.
 - Resource: missing, unknown, repeated, trailing slash, mismatch at `token`.
-- Refresh: rotation returns a new token, reuse kills the family, a concurrent
-  pair yields one winner, expiry, wrong client, resource mismatch, scope
-  cannot widen.
+- Refresh: rotation returns a new token, a replay inside the window returns a
+  new pair and supersedes the first, a superseded token kills the family, a
+  replay after the window kills the family, a replay after its successor was
+  used kills the family, a concurrent pair both succeed and one result is
+  superseded, expiry, wrong client, resource mismatch, scope cannot widen.
 - CIMD fetch: non-https, private and loopback addresses, a redirect, an
   oversized body, a slow server, `client_id` mismatch, a bad redirect scheme,
   a URL outside the allowlist that is never fetched, cache hit, stale served
@@ -642,18 +660,18 @@ Suggested releases:
 1. **The hosted Claude `client_id` URL.** Not published. The allowlist
    default is the `https://claude.ai` origin. Read the exact URL from the
    first real authorize request and decide whether to pin it.
-2. **Refresh reuse with no grace period.** A client that loses a refresh
-   response and retries with the old token is signed out. Strict is proposed.
-   If the phone on a poor connection trips it, add a short window in which
-   the previous token is answered with the same new pair.
+2. **Grace window length.** 60 seconds is proposed. Confirm against Obsidian
+   on iOS on a poor connection.
 3. **The reconcile timer.** Needed for the freshness bound and not built.
    Confirm it lands with this work, and the interval.
 4. **`/internal/vaults` response shape.** The relay's spec names the fields
    (name, created, last change) and not the JSON. Pin it before C7.
-5. **Custom-scheme redirect on iOS.** Whether Safari hands
-   `obsidian://scn-obsidian/auth` back to Obsidian after a POST and a
-   redirect is not verified. If it does not, the consent step ends on a page
-   with a link the member taps.
+5. **Custom-scheme redirect, desktop and iOS.** Whether the browser hands
+   `obsidian://scn-obsidian` back to Obsidian is not verified in two cases:
+   after the consent POST and redirect, and when consent is remembered and
+   `authorize` redirects with no tap at all. Check both on macOS and iOS. If
+   either fails, a custom-scheme redirect ends on a page with a link the
+   member taps.
 6. **Whether public clients should get an ID token at all.** Allowed here
    when `openid` is requested. No current client needs it.
 
