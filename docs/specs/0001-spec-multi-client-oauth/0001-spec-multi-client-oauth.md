@@ -11,7 +11,9 @@ page where a member sees their vaults.
 
 1. Public clients identified by a Client ID Metadata Document (CIMD), with
    PKCE, refresh tokens and audience-bound access tokens.
-2. A members-only "Your vaults" page, read from the relay.
+2. A members-only Obsidian page: what the service is, how to connect
+   Obsidian and Claude, the member's vaults, and a way to create one. The
+   vaults live on the relay.
 
 The rule for all of it: access works while you are an SCN member and stops
 when you are not.
@@ -26,7 +28,7 @@ The work is labelled C1 to C7:
 | C4 | Redirect URI matching: exact, loopback without the port, custom scheme |
 | C5 | Refresh tokens: rotation, reuse rule, membership check on every use |
 | C6 | Access tokens for SCN resources, audience from the `resource` parameter |
-| C7 | "Your vaults" page |
+| C7 | Obsidian page: setup instructions, the member's vaults, create a vault |
 
 ## Non-goals
 
@@ -37,7 +39,10 @@ The work is labelled C1 to C7:
   again at their PDS.
 - Signing key rotation. One RSA key, as today.
 - Token introspection or a revocation endpoint.
-- Sharing, or any vault write from Corliss.
+- Sharing.
+- Renaming or deleting a vault.
+- Storing anything about vaults in Corliss. Corliss asks the relay to
+  create a vault and to list them; the relay holds the records.
 
 ## Current state (v1.3.4)
 
@@ -199,7 +204,7 @@ anonymous request could make Corliss fetch any URL.
 ```json
 {
   "client_id": "<PUBLIC_BASE_URL>/clients/scn-obsidian.json",
-  "client_name": "SCN Obsidian",
+  "client_name": "SCN Sync",
   "client_uri": "<PUBLIC_BASE_URL>",
   "redirect_uris": ["obsidian://scn-obsidian"],
   "grant_types": ["authorization_code", "refresh_token"],
@@ -530,10 +535,10 @@ client.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `OIDC_RESOURCES` | empty | Resource URLs tokens may be issued for. Empty refuses every public client. |
+| `OIDC_RESOURCES` | empty | Resource URLs tokens may be issued for, each with a label and a kind (`sync` or `mcp`). Empty refuses every public client. |
 | `OIDC_CLIENT_METADATA_ALLOWLIST` | empty | Exact URLs or origins. Empty accepts only Corliss's own documents. |
 | `SYNC_RELAY_URL` | exists | Internal relay address. Already used by `/systems/`. Reused for C7. |
-| `SYNC_RELAY_SERVICE_TOKEN` | empty | Shared credential for the relay's `/internal/vaults`. Empty shows "not configured" on the vaults page. |
+| `SYNC_RELAY_SERVICE_TOKEN` | empty | Shared credential for the relay's `/internal/vaults`, used to list and to create. Empty shows "not configured" on the Obsidian page. |
 
 Token lifetimes are constants in `oidc.py` beside `CODE_TTL_SECONDS` and
 `ID_TOKEN_TTL_SECONDS`: access 900 seconds, refresh 30 days, and
@@ -571,26 +576,58 @@ the same change, and each new route in the Endpoints table.
 - `corliss_version` bump, and `docs/roles/corliss.md` updated for the new
   variables and the secret.
 
-## C7. "Your vaults"
+## C7. Obsidian page
 
-- Route `vaults/`, `@member_required`, GET only. A nav entry for members.
+One page for members that explains the service and holds their vaults.
+
+- Route `vaults/`, `@member_required`. GET shows the page. POST creates a
+  vault. A nav entry for members, labelled **Obsidian**.
 - `corliss/sync_relay.py`, a new module, because the relay is an external
-  system. An underscore, since a hyphen cannot be imported.
-  One function that calls `GET <SYNC_RELAY_URL>/internal/vaults?did=<did>`
-  with `Authorization: Bearer <SYNC_RELAY_SERVICE_TOKEN>`, a 5 second timeout
-  and no redirects. `health.py` keeps its own liveness probe.
-- The DID is always `request.user.did`. No request parameter chooses whose
-  vaults are listed.
-- The page shows name, created and last change for each vault.
+  system. An underscore, since a hyphen cannot be imported. Two functions,
+  both with `Authorization: Bearer <SYNC_RELAY_SERVICE_TOKEN>`, a 5 second
+  timeout and no redirects:
+  - list: `GET <SYNC_RELAY_URL>/internal/vaults?did=<did>`
+  - create: `POST <SYNC_RELAY_URL>/internal/vaults` with `{did, name}`
+
+  `health.py` keeps its own liveness probe.
+- The DID is always `request.user.did`, for list and for create. No request
+  parameter chooses whose vaults are listed or who owns a new one.
 - Nothing is stored in Corliss.
 
-Three states, following `/systems/`:
+What the page shows, top to bottom:
+
+1. **What this is.** Notes kept on SCN, readable and editable from Obsidian
+   and from Claude, for as long as you are a member. That SCN's operators
+   can read them.
+2. **Your vaults.** Name, created and last change for each, and a form to
+   create one: a name and a button. A member can have any number.
+3. **Connect Claude.** The public MCP URL, with the steps to add it as a
+   connector.
+4. **Connect Obsidian.** Create a new empty vault in Obsidian, install SCN
+   Sync, paste the public sync URL, sign in, pick a vault. On iPhone, leave
+   **Store in iCloud** off.
+
+The two URLs come from `OIDC_RESOURCES`. Each entry gains a kind (`sync` or
+`mcp`) beside its label so the page can tell them apart.
+
+Creating a vault:
+
+- A POST with CSRF protection. The name is trimmed and must be 1 to 100
+  characters.
+- The membership gate that guards the page guards the POST.
+- On success, redirect to the page, which now lists the vault.
+- A `409` from the relay shows "you already have a vault with that name"
+  beside the form, with the name kept.
+- Any other failure shows that the vault could not be created right now.
+  Nothing is retried.
+
+Page states, following `/systems/`:
 
 | State | Page shows |
 |---|---|
-| URL or token not configured | That the vault list is not set up on this deployment |
-| Relay unreachable, or a non-200 answer | That the relay cannot be reached right now |
-| Answered | The list, or that the member has no vaults yet |
+| URL or token not configured | The instructions, and that vaults are not set up on this deployment. No form. |
+| Relay unreachable, or a non-200 answer | The instructions, and that the relay cannot be reached right now. No form. |
+| Answered | The list and the form, or that the member has no vaults yet and the form |
 
 No state raises, and nothing else on the site depends on this page.
 
@@ -612,7 +649,7 @@ New test modules: `test_public_clients.py` (C1, C3, C4, C6, consent),
 | 4. scn-obsidian sign-in returns to the plugin and the relay accepts the token | Corliss's own document is served and resolves without a fetch. Authorize redirects to `obsidian://scn-obsidian` with code and state. The token's `aud` is the sync resource. | Yes, laptop and iPhone |
 | 5. A removed DID: the next refresh fails with `invalid_grant` | Revoke through `apply_event`, then refresh: `invalid_grant`, family gone. The same with the delete skipped, to show the membership check alone is enough. | Yes |
 | 6. Open WebUI sign-in still works | The three existing modules, unchanged. Plus: Open WebUI still receives the ID token as its access token, still needs `openid`, gets no consent screen, and is refused when the secret is blank. | Yes |
-| 7. "Your vaults" shows the member's vaults and only theirs | The relay is called with the signed-in DID only. A `did` in the query string is ignored. Not configured, unreachable and empty each render. A non-member is refused. | Yes |
+| 7. The Obsidian page shows the member's vaults and only theirs, and creates one | The relay is called with the signed-in DID only, for list and for create. A `did` in the query string or the form is ignored. Create needs CSRF, refuses an empty or overlong name, shows the duplicate-name message on `409`, and shows a failure when the relay is down. Not configured, unreachable and empty each render. A non-member is refused on GET and on POST. | Yes |
 
 Further unit coverage:
 
@@ -644,16 +681,20 @@ Further unit coverage:
 2. **C1 to C5**, before any real client can reach the relay: client lookup,
    CIMD, PKCE, redirect matching, refresh.
 
-**Corliss is blocked on the relay** for C7 only. It needs the relay's
-`/internal/vaults` endpoint and its response shape. C7 ships after the
-relay's Phase B and holds up nothing else.
+**Corliss is blocked on the relay** for C7 only. It needs the relay's two
+`/internal/vaults` endpoints and their shapes. C7 ships after the relay's
+Phase B.
+
+**C7 now gates first use.** A vault can only be created here, so no member
+can use Claude or Obsidian with SCN until release B is deployed. Releases A
+and B are both on the path to the first working connection.
 
 Suggested releases:
 
 | Release | Contains | Unblocks |
 |---|---|---|
 | A | C1 to C6, discovery, consent, migration `0007` | The relay's verifier, then acceptance checks 1 to 6 |
-| B | C7 | Acceptance check 7 |
+| B | C7 | Acceptance check 7, and every member's first vault |
 
 ## Open questions
 
@@ -664,8 +705,9 @@ Suggested releases:
    on iOS on a poor connection.
 3. **The reconcile timer.** Needed for the freshness bound and not built.
    Confirm it lands with this work, and the interval.
-4. **`/internal/vaults` response shape.** The relay's spec names the fields
-   (name, created, last change) and not the JSON. Pin it before C7.
+4. **`/internal/vaults` shapes.** The relay's spec names the fields (root
+   document ID, name, created, last change) and not the JSON, for the list
+   and for the create response. Pin both before C7.
 5. **Custom-scheme redirect, desktop and iOS.** Whether the browser hands
    `obsidian://scn-obsidian` back to Obsidian is not verified in two cases:
    after the consent POST and redirect, and when consent is remembered and
