@@ -344,6 +344,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | SCN Sync plugin client metadata (**is** the plugin's `client_id`) | `/clients/scn-obsidian.json` |
 | JWKS | `/.well-known/jwks.json` |
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
+| Consent — allow or refuse a public client (POST, members; reached from authorize) | `/oidc/consent` |
 | Membership push (from the registry) | `/membership/events` |
 | Apply for membership (signed-in non-members) | `/membership/apply` |
 | About — what this is, the system, the team (public) | `/about/`, `/about/system/`, `/about/team/` |
@@ -1147,6 +1148,53 @@ where the member's notes live. The design is in
 - **A blank `OIDC_CLIENT_SECRET` refuses Open WebUI at the token endpoint.**
   It used to compare equal to a request that sent no secret. With `none` now
   advertised, that comparison could not stand.
+
+### Signing in and consent
+
+What a public client's member meets at `/oidc/authorize`, in order:
+
+1. **The client and its redirect URI are checked first.** A failure here is
+   an error page, never a redirect: sending the browser to an address nobody
+   vouched for is the thing the check exists to prevent.
+2. **Every later fault goes back to the client** as a redirect carrying
+   `error` and `state`. Open WebUI keeps its JSON errors.
+3. **Not signed in:** the usual round trip through `/auth/login`. A request
+   longer than 2048 characters is refused with `invalid_request` instead,
+   because Django's own safe-URL check drops anything longer and the member
+   would land on the home page with no explanation.
+4. **Not a member:** the home page, as for every other gated surface.
+5. **Consent**, then the code.
+
+Rules with a plausible wrong answer:
+
+- **PKCE is required, S256 only.** There is no secret, so the verifier is the
+  only proof that the caller redeeming a code is the one that asked for it.
+- **Redirect URIs match exactly, except a loopback port.** `https` and custom
+  schemes are compared as strings. `http` is accepted only on `localhost`,
+  `127.0.0.1` or `[::1]`, with the port ignored on both sides, because a
+  native app cannot know its port ahead of time. `localhost` and `127.0.0.1`
+  do not match each other.
+- **`resource` is required and names exactly one configured resource.** One
+  token, one audience. It is matched after lowercasing the scheme and host
+  and dropping a bare trailing slash, and the token is issued for the
+  configured spelling, never the client's.
+- **The consent screen names the app by the host of its `client_id`.** The
+  `client_name` is the app's own claim about itself and is shown as that.
+- **The consent form posts a ticket, not the request.** The validated request
+  waits in the session. Nothing the browser sends back is read as a request
+  parameter, and a ticket answers once.
+- **Consent is remembered per member, client and resource, except for a
+  loopback client**, which is asked every time: any program on the machine
+  can present another client's `client_id`.
+- **GATE is asked at `authorize` and again when the form is posted.** The
+  screen can sit open while a member is revoked.
+- **The redirect to `obsidian://` uses a response class that allows exactly
+  that scheme.** Django refuses anything but http, https and ftp. The scheme
+  allowed is the one on a URI already matched against the client's list.
+- **A public client gets no `OidcSession` row** and no `sid`. That row exists
+  for back-channel logout and a public client has no endpoint to notify.
+- **An `id_token` is issued only when `openid` was granted.** Its `aud` is the
+  `client_id`, never a resource.
 
 ### Access tokens
 

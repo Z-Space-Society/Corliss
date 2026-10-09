@@ -366,7 +366,19 @@ def discovery_document() -> dict:
     }
 
 
-def issue_code(user, *, client_id, redirect_uri, nonce="", scope="") -> str:
+def issue_code(
+    user,
+    *,
+    client_id,
+    redirect_uri,
+    nonce="",
+    scope="",
+    code_challenge="",
+    resource="",
+) -> str:
+    # The only cleanup codes get. There is no scheduled job, and one that is
+    # issued is the natural moment to drop the ones nobody redeemed.
+    OidcAuthCode.purge_expired()
     code = secrets.token_urlsafe(48)
     OidcAuthCode.objects.create(
         code=code,
@@ -375,6 +387,8 @@ def issue_code(user, *, client_id, redirect_uri, nonce="", scope="") -> str:
         redirect_uri=redirect_uri,
         nonce=nonce,
         scope=scope,
+        code_challenge=code_challenge,
+        resource=resource,
         expires_at=timezone.now() + timedelta(seconds=CODE_TTL_SECONDS),
     )
     return code

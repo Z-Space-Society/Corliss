@@ -58,6 +58,8 @@ urlpatterns = [
         name="plugin_client_metadata",
     ),
     path("oidc/authorize", views.authorize, name="authorize"),
+    # Where the consent screen posts. Reached only from `authorize`.
+    path("oidc/consent", views.consent, name="consent"),
     path("oidc/token", views.token, name="token"),
     # Registry (the SCN membership push)
     path(

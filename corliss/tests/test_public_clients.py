@@ -11,15 +11,20 @@ import hashlib
 import json
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import jwt
 from django.contrib.auth import get_user_model
+from django.test import Client as HttpClient
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 
 from corliss import oidc, signing
 from corliss.apps import check_oidc_resources_parse
-from corliss.tests.test_provider import _write_keys
+from corliss.models import MembershipCache, OidcAuthCode, OidcConsent, OidcSession
+from corliss.tests.test_provider import _grant, _write_keys
+from corliss.views import CONSENT_SESSION_KEY, POST_LOGIN_REDIRECT
 
 User = get_user_model()
 
@@ -508,3 +513,515 @@ class ScopeTests(SimpleTestCase):
 
     def test_repeats_collapse(self):
         self.assertEqual(oidc.grant_scope("openid openid"), "openid")
+
+
+PLUGIN_REDIRECT = "obsidian://scn-obsidian"
+CLAUDE = "https://claude.ai/oauth/mcp-client-metadata"
+CLAUDE_REDIRECT = "https://claude.ai/api/mcp/auth_callback"
+CLAUDE_CODE = "https://claude.ai/oauth/claude-code-client-metadata"
+
+# Stand-ins for the two clients whose documents Corliss fetches. Resolving
+# them over HTTP is `test_cimd`'s subject; here they are handed over whole.
+_FETCHED = {
+    CLAUDE: oidc.Client(
+        client_id=CLAUDE,
+        kind=oidc.PUBLIC,
+        redirect_uris=(CLAUDE_REDIRECT,),
+        name="Claude",
+        host="claude.ai",
+        grant_types=("authorization_code", "refresh_token"),
+    ),
+    CLAUDE_CODE: oidc.Client(
+        client_id=CLAUDE_CODE,
+        kind=oidc.PUBLIC,
+        redirect_uris=("http://localhost/callback", "http://127.0.0.1/callback"),
+        name="Claude Code",
+        host="claude.ai",
+        grant_types=("authorization_code", "refresh_token"),
+    ),
+}
+_resolve = oidc.resolve_client
+
+
+def _resolve_with_fetched(client_id):
+    return _FETCHED.get(client_id) or _resolve(client_id)
+
+
+@override_settings(
+    PUBLIC_BASE_URL=BASE,
+    OIDC_RESOURCES=RESOURCES,
+    OIDC_CLIENT_ID=OWUI,
+    OIDC_CLIENT_SECRET="owui-secret",
+    OIDC_REDIRECT_URIS=[OWUI_REDIRECT],
+)
+class PublicFlowCase(KeysMixin, TestCase):
+    """A member, and the requests a public client makes on their behalf."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+        _grant(DID)
+        patcher = patch("corliss.oidc.resolve_client", _resolve_with_fetched)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def params(self, **overrides):
+        params = {
+            "client_id": PLUGIN,
+            "redirect_uri": PLUGIN_REDIRECT,
+            "response_type": "code",
+            "code_challenge": challenge_for(VERIFIER),
+            "code_challenge_method": "S256",
+            "resource": SYNC,
+            "state": "client-state",
+            "scope": "offline_access",
+        }
+        params.update(overrides)
+        return {k: v for k, v in params.items() if v is not None}
+
+    def authorize(self, **overrides):
+        return self.client.get(reverse("authorize"), self.params(**overrides))
+
+    def decide(self, ticket, decision="allow"):
+        return self.client.post(
+            reverse("consent"), {"ticket": ticket, "decision": decision}
+        )
+
+    def query(self, response):
+        return parse_qs(urlsplit(response["Location"]).query)
+
+    def code_for(self, **overrides):
+        """Sign in, allow, and return the code the client receives."""
+        self.client.force_login(self.user)
+        screen = self.authorize(**overrides)
+        self.assertEqual(screen.status_code, 200, screen.content[:300])
+        answer = self.decide(screen.context["ticket"])
+        return self.query(answer)["code"][0]
+
+    def exchange(self, code, **overrides):
+        data = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": PLUGIN_REDIRECT,
+            "client_id": PLUGIN,
+            "code_verifier": VERIFIER,
+        }
+        data.update(overrides)
+        return self.client.post(
+            reverse("token"), {k: v for k, v in data.items() if v is not None}
+        )
+
+
+class PublicAuthorizeTests(PublicFlowCase):
+    # --- the client and where it wants the answer sent ---------------------
+
+    def test_a_redirect_the_client_did_not_declare_is_an_error_page_not_a_redirect(self):
+        self.client.force_login(self.user)
+        resp = self.authorize(redirect_uri="obsidian://somewhere-else")
+        self.assertEqual(resp.status_code, 400)
+        self.assertTemplateUsed(resp, "oauth_error.html")
+        self.assertFalse(OidcAuthCode.objects.exists())
+
+    def test_the_client_is_checked_before_anyone_is_asked_to_sign_in(self):
+        resp = self.authorize(redirect_uri="https://evil.test/cb")
+        self.assertEqual(resp.status_code, 400)
+
+    # --- request faults go back to the client ------------------------------
+
+    def test_request_faults_are_redirected_to_the_client_with_its_state(self):
+        cases = {
+            "unsupported_response_type": {"response_type": "token"},
+            "invalid_request": {"code_challenge": None},
+            "invalid_target": {"resource": None},
+        }
+        more = [
+            ("invalid_request", {"code_challenge_method": "plain"}),
+            ("invalid_request", {"code_challenge_method": None}),
+            ("invalid_request", {"code_challenge": "too-short"}),
+            ("invalid_target", {"resource": "https://elsewhere.test"}),
+            ("invalid_target", {"resource": [SYNC, MCP]}),
+            ("invalid_target", {"resource": [SYNC, SYNC]}),
+        ]
+        for error, overrides in list(cases.items()) + more:
+            with self.subTest(error=error, overrides=overrides):
+                resp = self.authorize(**overrides)
+                self.assertEqual(resp.status_code, 302)
+                self.assertTrue(resp["Location"].startswith(PLUGIN_REDIRECT + "?"))
+                query = self.query(resp)
+                self.assertEqual(query["error"], [error])
+                self.assertEqual(query["state"], ["client-state"])
+        self.assertFalse(OidcAuthCode.objects.exists())
+
+    @override_settings(OIDC_RESOURCES="")
+    def test_an_unconfigured_deployment_issues_nothing(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.query(self.authorize())["error"], ["invalid_target"])
+
+    # --- signing in ---------------------------------------------------------
+
+    def test_an_anonymous_request_resumes_after_sign_in_with_everything_intact(self):
+        resp = self.authorize()
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], reverse("login"))
+
+        stored = self.client.session[POST_LOGIN_REDIRECT]
+        carried = parse_qs(urlsplit(stored).query)
+        for name in ("client_id", "redirect_uri", "state", "code_challenge", "resource"):
+            self.assertEqual(carried[name], [self.params()[name]], name)
+
+        self.client.force_login(self.user)
+        resumed = self.client.get(stored)
+        self.assertEqual(resumed.status_code, 200)
+        self.assertTemplateUsed(resumed, "consent.html")
+
+    def test_a_request_too_long_to_resume_is_refused_rather_than_dropped(self):
+        resp = self.authorize(state="s" * 2100)
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(resp["Location"].startswith(PLUGIN_REDIRECT + "?"))
+        self.assertEqual(self.query(resp)["error"], ["invalid_request"])
+        self.assertNotIn(POST_LOGIN_REDIRECT, self.client.session)
+
+    def test_a_signed_in_non_member_is_sent_home(self):
+        MembershipCache.objects.filter(did=DID).update(active=False)
+        self.client.force_login(self.user)
+        resp = self.authorize()
+        self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
+        self.assertFalse(OidcAuthCode.objects.exists())
+
+    # --- consent ------------------------------------------------------------
+
+    def test_a_member_is_shown_the_consent_screen_and_no_code_yet(self):
+        self.client.force_login(self.user)
+        resp = self.authorize()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTemplateUsed(resp, "consent.html")
+        self.assertEqual(resp.context["client_host"], "auth.zai.test")
+        self.assertEqual(resp.context["client_name"], "SCN Sync")
+        self.assertEqual(resp.context["resource_label"], "Notes sync")
+        self.assertEqual(resp.context["redirect_target"], PLUGIN_REDIRECT)
+        self.assertFalse(resp.context["loopback"])
+        self.assertContains(resp, "alice.bsky.social")
+        self.assertContains(resp, "auth.zai.test")
+        self.assertFalse(OidcAuthCode.objects.exists())
+
+    def test_the_form_carries_a_ticket_and_none_of_the_request(self):
+        self.client.force_login(self.user)
+        resp = self.authorize()
+        self.assertContains(resp, resp.context["ticket"])
+        self.assertNotContains(resp, challenge_for(VERIFIER))
+        self.assertNotContains(resp, "client-state")
+
+    def test_allow_redirects_to_the_custom_scheme_with_code_and_state(self):
+        self.client.force_login(self.user)
+        ticket = self.authorize().context["ticket"]
+        resp = self.decide(ticket)
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(resp["Location"].startswith("obsidian://scn-obsidian?"))
+        query = self.query(resp)
+        self.assertEqual(query["state"], ["client-state"])
+
+        code = OidcAuthCode.objects.get(code=query["code"][0])
+        self.assertEqual(code.user, self.user)
+        self.assertEqual(code.client_id, PLUGIN)
+        self.assertEqual(code.redirect_uri, PLUGIN_REDIRECT)
+        self.assertEqual(code.code_challenge, challenge_for(VERIFIER))
+        self.assertEqual(code.resource, SYNC)
+        self.assertEqual(code.scope, "offline_access")
+
+    def test_the_resource_is_stored_in_the_configured_spelling(self):
+        code = self.code_for(resource="HTTPS://Sync.zai.test/")
+        self.assertEqual(OidcAuthCode.objects.get(code=code).resource, SYNC)
+
+    def test_unknown_scopes_are_dropped_and_no_scope_is_fine(self):
+        code = self.code_for(scope="claudeai offline_access")
+        self.assertEqual(OidcAuthCode.objects.get(code=code).scope, "offline_access")
+        OidcConsent.objects.all().delete()
+        code = self.code_for(scope=None)
+        self.assertEqual(OidcAuthCode.objects.get(code=code).scope, "")
+
+    def test_cancel_returns_access_denied_and_records_nothing(self):
+        self.client.force_login(self.user)
+        ticket = self.authorize().context["ticket"]
+        resp = self.decide(ticket, "cancel")
+        query = self.query(resp)
+        self.assertEqual(query["error"], ["access_denied"])
+        self.assertEqual(query["state"], ["client-state"])
+        self.assertFalse(OidcAuthCode.objects.exists())
+        self.assertFalse(OidcConsent.objects.exists())
+
+    def test_consent_is_remembered_per_client_and_resource(self):
+        self.code_for()
+        again = self.authorize()
+        self.assertEqual(again.status_code, 302)
+        self.assertIn("code", self.query(again))
+
+    def test_a_forged_ticket_gets_nothing(self):
+        self.client.force_login(self.user)
+        self.authorize()
+        resp = self.decide("not-a-ticket")
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(OidcAuthCode.objects.exists())
+
+    def test_a_ticket_answers_once(self):
+        self.client.force_login(self.user)
+        ticket = self.authorize().context["ticket"]
+        self.decide(ticket)
+        self.assertEqual(self.decide(ticket).status_code, 400)
+        self.assertEqual(OidcAuthCode.objects.count(), 1)
+
+    def test_a_ticket_expires(self):
+        self.client.force_login(self.user)
+        ticket = self.authorize().context["ticket"]
+        session = self.client.session
+        session[CONSENT_SESSION_KEY][ticket]["created"] -= oidc.CODE_TTL_SECONDS + 1
+        session.save()
+        self.assertEqual(self.decide(ticket).status_code, 400)
+
+    def test_a_member_revoked_while_the_screen_was_open_gets_no_code(self):
+        self.client.force_login(self.user)
+        ticket = self.authorize().context["ticket"]
+        MembershipCache.objects.filter(did=DID).update(active=False)
+        resp = self.decide(ticket)
+        self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
+        self.assertFalse(OidcAuthCode.objects.exists())
+        self.assertFalse(OidcConsent.objects.exists())
+
+    def test_the_answer_needs_a_csrf_token(self):
+        browser = HttpClient(enforce_csrf_checks=True)
+        browser.force_login(self.user)
+        ticket = browser.get(reverse("authorize"), self.params()).context["ticket"]
+        resp = browser.post(reverse("consent"), {"ticket": ticket, "decision": "allow"})
+        self.assertEqual(resp.status_code, 403)
+        self.assertFalse(OidcAuthCode.objects.exists())
+
+    def test_consent_does_not_answer_a_get(self):
+        self.client.force_login(self.user)
+        self.assertEqual(self.client.get(reverse("consent")).status_code, 405)
+
+    # --- the fetched clients ------------------------------------------------
+
+    def test_claude_reaches_consent_with_no_openid_and_is_named_by_its_host(self):
+        self.client.force_login(self.user)
+        resp = self.authorize(
+            client_id=CLAUDE, redirect_uri=CLAUDE_REDIRECT, resource=MCP, scope=None
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context["client_host"], "claude.ai")
+        self.assertEqual(resp.context["redirect_target"], "claude.ai")
+        self.assertEqual(resp.context["resource_label"], "Notes for Claude")
+        answer = self.decide(resp.context["ticket"])
+        self.assertTrue(answer["Location"].startswith(CLAUDE_REDIRECT + "?code="))
+
+    def test_a_loopback_client_is_asked_every_time(self):
+        self.client.force_login(self.user)
+        for port in (53124, 61000):
+            redirect_uri = f"http://localhost:{port}/callback"
+            resp = self.authorize(
+                client_id=CLAUDE_CODE, redirect_uri=redirect_uri, resource=MCP
+            )
+            self.assertEqual(resp.status_code, 200)
+            self.assertTrue(resp.context["loopback"])
+            self.assertEqual(resp.context["redirect_target"], "localhost")
+            answer = self.decide(resp.context["ticket"])
+            self.assertTrue(answer["Location"].startswith(redirect_uri + "?code="))
+        self.assertFalse(OidcConsent.objects.exists())
+        self.assertEqual(
+            OidcAuthCode.objects.latest("created_at").redirect_uri,
+            "http://localhost:61000/callback",
+        )
+
+    def test_a_loopback_path_the_client_did_not_declare_is_refused(self):
+        self.client.force_login(self.user)
+        resp = self.authorize(
+            client_id=CLAUDE_CODE,
+            redirect_uri="http://localhost:5000/other",
+            resource=MCP,
+        )
+        self.assertEqual(resp.status_code, 400)
+
+
+class PublicCodeExchangeTests(PublicFlowCase):
+    def test_the_plugin_receives_an_access_token_for_the_sync_resource(self):
+        resp = self.exchange(self.code_for())
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp["Cache-Control"], "no-store")
+        body = resp.json()
+        self.assertEqual(body["token_type"], "Bearer")
+        self.assertEqual(body["expires_in"], 900)
+        self.assertEqual(body["scope"], "offline_access")
+        self.assertNotIn("id_token", body)
+
+        header = jwt.get_unverified_header(body["access_token"])
+        self.assertEqual(header["typ"], "at+jwt")
+        jwk = next(k for k in signing.jwks()["keys"] if k["kid"] == header["kid"])
+        claims = jwt.decode(
+            body["access_token"],
+            key=jwt.PyJWK.from_dict(jwk).key,
+            algorithms=["RS256"],
+            audience=SYNC,
+            issuer=BASE,
+        )
+        self.assertEqual(claims["sub"], DID)
+        self.assertEqual(claims["client_id"], PLUGIN)
+
+    def test_claude_receives_a_token_for_the_mcp_resource(self):
+        code = self.code_for(
+            client_id=CLAUDE, redirect_uri=CLAUDE_REDIRECT, resource=MCP, scope=None
+        )
+        resp = self.exchange(code, client_id=CLAUDE, redirect_uri=CLAUDE_REDIRECT)
+        self.assertEqual(resp.status_code, 200)
+        claims = jwt.decode(
+            resp.json()["access_token"], options={"verify_signature": False}
+        )
+        self.assertEqual(claims["aud"], MCP)
+        self.assertEqual(claims["scope"], "")
+
+    def test_a_loopback_exchange_must_repeat_the_port_it_asked_with(self):
+        self.client.force_login(self.user)
+        redirect_uri = "http://127.0.0.1:53124/callback"
+        screen = self.authorize(
+            client_id=CLAUDE_CODE, redirect_uri=redirect_uri, resource=MCP
+        )
+        code = self.query(self.decide(screen.context["ticket"]))["code"][0]
+        wrong = self.exchange(
+            code, client_id=CLAUDE_CODE, redirect_uri="http://127.0.0.1/callback"
+        )
+        self.assertEqual(wrong.json()["error"], "invalid_grant")
+        right = self.exchange(code, client_id=CLAUDE_CODE, redirect_uri=redirect_uri)
+        self.assertEqual(right.status_code, 200)
+
+    def test_an_id_token_comes_only_with_openid_and_is_never_for_a_resource(self):
+        resp = self.exchange(self.code_for(scope="openid offline_access"))
+        body = resp.json()
+        claims = jwt.decode(body["id_token"], options={"verify_signature": False})
+        self.assertEqual(claims["aud"], PLUGIN)
+        self.assertNotIn("sid", claims)
+        self.assertNotEqual(body["id_token"], body["access_token"])
+
+    def test_a_public_client_records_no_session(self):
+        self.exchange(self.code_for(scope="openid"))
+        self.assertFalse(OidcSession.objects.exists())
+
+    def test_pkce_is_required_and_checked(self):
+        for verifier in (None, "w" * 43, "v" * 42):
+            with self.subTest(verifier=verifier):
+                OidcConsent.objects.all().delete()
+                resp = self.exchange(self.code_for(), code_verifier=verifier)
+                self.assertEqual(resp.status_code, 400)
+                self.assertEqual(resp.json()["error"], "invalid_grant")
+
+    def test_a_code_is_single_use(self):
+        code = self.code_for()
+        self.assertEqual(self.exchange(code).status_code, 200)
+        self.assertEqual(self.exchange(code).json()["error"], "invalid_grant")
+
+    def test_resource_at_the_token_endpoint_is_optional_but_must_match(self):
+        code = self.code_for()
+        mismatch = self.exchange(code, resource=MCP)
+        self.assertEqual(mismatch.json()["error"], "invalid_target")
+        unknown = self.exchange(code, resource="https://elsewhere.test")
+        self.assertEqual(unknown.json()["error"], "invalid_target")
+        same = self.exchange(code, resource=SYNC + "/")
+        self.assertEqual(same.status_code, 200)
+
+    def test_a_code_cannot_be_redeemed_by_another_client_or_redirect(self):
+        code = self.code_for()
+        for overrides in (
+            {"client_id": CLAUDE},
+            {"redirect_uri": CLAUDE_REDIRECT},
+            {"client_id": OWUI, "client_secret": "owui-secret"},
+        ):
+            with self.subTest(overrides=overrides):
+                resp = self.exchange(code, **overrides)
+                self.assertEqual(resp.json()["error"], "invalid_grant")
+
+    def test_a_client_id_that_is_not_a_url_is_a_failed_client_authentication(self):
+        for client_id in ("evil", None):
+            with self.subTest(client_id=client_id):
+                resp = self.exchange(self.code_for(), client_id=client_id)
+                self.assertEqual(resp.status_code, 401)
+                self.assertEqual(resp.json()["error"], "invalid_client")
+                OidcConsent.objects.all().delete()
+
+    def test_other_grants_are_not_offered(self):
+        resp = self.client.post(
+            reverse("token"), {"grant_type": "password", "client_id": PLUGIN}
+        )
+        self.assertEqual(resp.json()["error"], "unsupported_grant_type")
+
+
+class OpenWebUIUnchangedTests(PublicFlowCase):
+    """The confidential client, beside the new ones. `test_provider` is the
+    standing regression; these are the properties the new code could have
+    disturbed."""
+
+    def _authorize(self, **overrides):
+        params = {
+            "client_id": OWUI,
+            "redirect_uri": OWUI_REDIRECT,
+            "response_type": "code",
+            "scope": "openid profile",
+            "state": "rp-state",
+        }
+        params.update(overrides)
+        return self.client.get(reverse("authorize"), params)
+
+    def test_no_consent_screen_and_no_pkce_or_resource_needed(self):
+        self.client.force_login(self.user)
+        resp = self._authorize()
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(resp["Location"].startswith(OWUI_REDIRECT + "?code="))
+        self.assertFalse(OidcConsent.objects.exists())
+
+    def test_pkce_and_resource_are_ignored_when_sent(self):
+        self.client.force_login(self.user)
+        resp = self._authorize(
+            code_challenge="x", code_challenge_method="plain", resource=MCP
+        )
+        code = OidcAuthCode.objects.get(code=self.query(resp)["code"][0])
+        self.assertEqual(code.code_challenge, "")
+        self.assertEqual(code.resource, "")
+
+    def test_openid_is_still_required_and_errors_are_still_json(self):
+        self.client.force_login(self.user)
+        resp = self._authorize(scope="profile")
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"], "invalid_scope")
+        bad_redirect = self._authorize(redirect_uri="https://evil.test/cb")
+        self.assertEqual(bad_redirect.json()["error"], "invalid_request")
+
+    def test_it_still_receives_the_id_token_as_its_access_token(self):
+        self.client.force_login(self.user)
+        code = self.query(self._authorize())["code"][0]
+        resp = self.client.post(
+            reverse("token"),
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": OWUI_REDIRECT,
+                "client_id": OWUI,
+                "client_secret": "owui-secret",
+            },
+        )
+        body = resp.json()
+        self.assertEqual(body["access_token"], body["id_token"])
+        self.assertEqual(body["expires_in"], 3600)
+        self.assertNotIn("scope", body)
+        header = jwt.get_unverified_header(body["id_token"])
+        self.assertNotEqual(header.get("typ"), "at+jwt")
+        self.assertTrue(OidcSession.objects.filter(client_id=OWUI).exists())
+
+    def test_it_cannot_redeem_without_its_secret_by_posing_as_public(self):
+        """No secret sent still lands on the confidential path, by `client_id`."""
+        self.client.force_login(self.user)
+        code = self.query(self._authorize())["code"][0]
+        resp = self.client.post(
+            reverse("token"),
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": OWUI_REDIRECT,
+                "client_id": OWUI,
+                "code_verifier": VERIFIER,
+            },
+        )
+        self.assertEqual(resp.status_code, 401)
