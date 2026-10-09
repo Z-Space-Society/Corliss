@@ -2,11 +2,12 @@
 
 {% comment %}
 The Obsidian page: what the notes service is, the member's vaults, and how to
-connect Obsidian. See `views.vaults`.
+connect Obsidian and an MCP client. See `views.vaults`.
 
-About Obsidian and nothing else. The relay also serves the notes over MCP, but
-this site does not point members at any one AI product, so no assistant is
-named here and the MCP address is not shown.
+**No AI product is named here.** The relay serves the notes over MCP, which
+any assistant that speaks it can use, and this site does not point members at
+one. The section is called MCP service and says what the address is, not
+whose app to put it in.
 
 **The instructions always render.** The vault list depends on the sync relay
 answering, and the rest of the page does not: a member reading how this works
@@ -70,7 +71,8 @@ No script. One form with one field.
         </div>
       {% else %}
         <p class="hint-text">You have no vaults yet. Make one to start:
-        Obsidian connects to a vault that already exists.</p>
+        Obsidian and the MCP service both work on a vault that already
+        exists.</p>
       {% endif %}
 
       <form method="post" action="{% url 'vaults' %}" class="stacked-form">
@@ -83,6 +85,20 @@ No script. One form with one field.
         </div>
         <button type="submit" class="btn-primary">Create vault</button>
       </form>
+    {% endif %}
+  </div>
+
+  <h2 class="section-title">MCP service</h2>
+  <div class="card">
+    {% if mcp_url %}
+      <div class="endpoint">{{ mcp_url }}</div>
+      <p class="hint-text">Your notes are also served over MCP. Add this
+      address to any assistant or tool that supports MCP servers, then sign in
+      with your handle when it asks. It can read and edit the notes in your
+      vaults, with or without Obsidian.</p>
+    {% else %}
+      <p class="hint-text">No MCP address is configured on this deployment
+      yet.</p>
     {% endif %}
   </div>
 

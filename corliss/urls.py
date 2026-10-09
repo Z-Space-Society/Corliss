@@ -84,8 +84,8 @@ urlpatterns = [
     path("workspaces/", views.workspaces, name="workspaces"),
     path("workspaces/new", views.workspace_new, name="workspace_new"),
     path("workspaces/<int:pk>/", views.workspace_edit, name="workspace_edit"),
-    # Notes kept on the sync relay: what they are, how to connect Obsidian,
-    # and the member's vaults. Named for what the nav calls it.
+    # Notes kept on the sync relay: what they are, how to connect Obsidian
+    # and an MCP client, and the member's vaults. Named for what the nav calls it.
     path("vaults/", views.vaults, name="vaults"),
     path("api/", views.api, name="api"),
     path("tools/parascribe/", views.parascribe, name="parascribe"),

@@ -1128,17 +1128,17 @@ touch-specific details follow from it, all in `base.css`:
 
 ## Obsidian: `/vaults/`
 
-Members keep notes on the cluster and reach them from Obsidian. The notes and
-the record of who owns which vault live on
+Members keep notes on the cluster and reach them from Obsidian and over MCP.
+The notes and the record of who owns which vault live on
 [scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay). This page
 explains the service, lists the member's vaults, creates one, and gives the
-sync address to connect Obsidian with. **A vault is created here and nowhere
+two addresses to connect with. **A vault is created here and nowhere
 else**: every client only ever picks from the list.
 
-- **The page is about Obsidian and names no AI product.** The relay also
-  serves notes over MCP, and the `mcp` resource exists for that, but this site
-  is AI agnostic: the MCP address is not shown here and no assistant is
-  recommended. A test holds the page to it.
+- **The page names no AI product.** This site is AI agnostic. The MCP
+  address is shown under **MCP service**, as something any assistant that
+  speaks MCP can use, and no assistant is recommended. A test holds the page
+  to it.
 
 - **Nothing about a vault is stored in Corliss.** The page asks the relay each
   time it renders. A vault exists when the relay says so.
@@ -1162,8 +1162,8 @@ else**: every client only ever picks from the list.
 | The relay unreachable, or any answer but `200` | The instructions, and that the service did not answer. No form. |
 | Answered | The list and the form, or that there are no vaults yet and the form. |
 
-The address shown is the `sync` entry of `OIDC_RESOURCES`, so what a member
-pastes is the same string the relay checks tokens against.
+The two addresses shown are the `sync` and `mcp` entries of `OIDC_RESOURCES`,
+so what a member pastes is the same string the relay checks tokens against.
 
 | Setting | Meaning |
 | ------- | ------- |
@@ -1406,9 +1406,9 @@ address, and calls nothing else here. Set `OIDC_CLIENT_METADATA_ALLOWLIST` to
 Nothing in front of Corliss may block `160.79.104.0/21`, where Claude's
 discovery and token requests come from.
 
-A member then makes a vault at `/vaults/` and pastes the sync address shown
-there into the SCN Sync plugin. The MCP address is not shown on that page;
-an MCP client is given it directly.
+A member then makes a vault at `/vaults/`, pastes the sync address shown
+there into the SCN Sync plugin, and adds the MCP address to whatever MCP
+client they use.
 
 ## Wiring up a relying party (Open WebUI shown)
 
