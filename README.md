@@ -10,6 +10,9 @@ It is a bridge between two protocols:
   PKCE + DPoP + `private_key_jwt`, ending in a DID-keyed Django session.
 - **Out** — an OIDC *provider*: discovery, authorize, token, JWKS, minting an
   RS256 `id_token` whose `sub` is the member's DID.
+- **Out, for apps with no secret:** an OAuth provider for public clients
+  (Claude, Claude Code, the SCN Sync plugin), issuing short-lived access tokens
+  for the cluster's notes service. See [Public clients](#public-clients-claude-claude-code-and-scn-sync).
 
 Anything that speaks OIDC (Open WebUI, Grafana, …) can sit behind it.
 
@@ -20,15 +23,15 @@ that pushes grants and revocations to it. See
 
 ## Layout
 
-Corliss is a **single Django app**. Six models, one URL table; the protocol
+Corliss is a **single Django app**. Nine models, one URL table; the protocol
 halves are plain modules, not sub-apps. A future subsystem earns its own app
 only by being genuinely standalone.
 
 | Module | Responsibility |
 | ------ | -------------- |
-| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `OidcSession`, `MembershipCache`, `Workspace`. |
+| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `OidcSession`, `MembershipCache`, `Workspace`, and three for public clients: `OidcRefreshToken`, `OidcClientDocument`, `OidcConsent`. |
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
-| `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
+| `corliss/oidc.py` | OIDC provider core: discovery document, client lookup, auth-code issuance, `id_token` and access token minting, the request checks for public clients, fetching and caching their metadata documents, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
 | `corliss/membership.py` | The whole registry relationship: consuming its membership push, reconciling the cache against it, reading the application queue, writing grants and revocations as the acting admin, and resolving whether a DID is currently a member. |
 | `corliss/sync_relay.py` | A member's vaults on scn-sync-relay: list them, create one. The only place the relay's service token is used. |
 | `corliss/litellm.py` | Provisioning members into LiteLLM and issuing their API keys — the only place a gateway credential is used (same one-relationship-one-module rule). |
@@ -1380,6 +1383,26 @@ An operator disconnects one client from one member by deleting its rows under
   `corliss.E004`, and names the entry at fault. It is JSON in an env file, so
   a stray quote is the likely mistake. At runtime a bad value issues nothing,
   and never half of what was meant.
+
+### Wiring up Claude and Obsidian
+
+Three things have to agree between Corliss and the relay, and each fails as a
+bare `401` from the relay when it does not:
+
+| Corliss | scn-sync-relay | Must be |
+| ------- | -------------- | ------- |
+| `PUBLIC_BASE_URL` | `SCN_SYNC_RELAY_OIDC_ISSUER` | The same origin, no trailing slash on the relay's side |
+| `OIDC_RESOURCES`, the `sync` and `mcp` `url`s | `SCN_SYNC_RELAY_SYNC_AUDIENCE`, `SCN_SYNC_RELAY_MCP_AUDIENCE` | Identical strings |
+| `SYNC_RELAY_SERVICE_TOKEN` | `SCN_SYNC_RELAY_SERVICE_TOKEN` | The same secret |
+
+The relay fetches keys from `/.well-known/jwks.json` at Corliss's **internal**
+address, and calls nothing else here. Set `OIDC_CLIENT_METADATA_ALLOWLIST` to
+`https://claude.ai` for Claude and Claude Code; the plugin needs no entry.
+Nothing in front of Corliss may block `160.79.104.0/21`, where Claude's
+discovery and token requests come from.
+
+A member then makes a vault at `/vaults/`, adds the MCP address to Claude as
+a custom connector, and pastes the sync address into the SCN Sync plugin.
 
 ## Wiring up a relying party (Open WebUI shown)
 

@@ -1,6 +1,7 @@
 # 0001 Spec: Multi-client OAuth and "Your vaults"
 
-Status: draft, 2026-10-07.
+Status: built on the `multi-client-oauth` branch, 2026-10-09. Not released and
+not yet run against a real client; see open questions 1, 2 and 5.
 
 ## Goal
 

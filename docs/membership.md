@@ -268,6 +268,13 @@ parser instead of drifting into two shapes for one lexicon.
 which is what lets a scheduled run fail loudly instead of logging success over a
 half-empty cache.
 
+**The timer is no longer optional once public clients are in use.** Claude and
+Obsidian hold refresh tokens, and the refresh grant asks `may_enter`, which
+reads this cache. A revocation whose push was missed therefore keeps a removed
+member connected until the next reconcile, and with no scheduled run that is
+until somebody presses the button. An hourly timer in the deployment bounds it
+at 75 minutes. See the README's "Refresh tokens".
+
 ## Signing in as an admin
 
 An admin's login is a **different login from the first network call onwards**,

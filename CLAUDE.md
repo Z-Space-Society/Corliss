@@ -311,6 +311,51 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
   one whose half-done state is safe: a member who is not an admin, rather than a
   non-member still holding registry write access.
 
+## Public OAuth clients
+
+Claude, Claude Code and the SCN Sync plugin are public clients: no secret, a
+`client_id` that is a URL, PKCE, and an access token for one resource. The
+README's "Public clients" section has the reasons; these are the parts that
+must not drift.
+
+- **The access token's shape is a contract with scn-sync-relay.** RS256,
+  header `typ` `at+jwt`, `iss` the public base URL with no trailing slash,
+  `sub` the DID, `aud` one resource URL as a string. The relay answers
+  anything else with a bare `401`. A change to `oidc.mint_access_token` is a
+  change to the relay's verifier, and `AccessTokenContractTests` is what
+  notices.
+- **`aud` is issued in the configured spelling, never the client's.**
+  `OIDC_RESOURCES` and the relay's audience settings are rendered from one
+  definition in the deployment for exactly this reason.
+- **`/clients/scn-obsidian.json` is the plugin's identity.** Same rule as the
+  atproto `client_id` above: move the path or the origin and every install is
+  a new client whose refresh tokens are dead. Nothing errors.
+- **Corliss never fetches its own client document over HTTP.** Two workers
+  can deadlock on a request to their own origin.
+- **The allowlist is checked before any fetch, and only `authorize` fetches.**
+  `authorize` resolves the client before it asks anyone to sign in, so the
+  allowlist is all that stands between an anonymous request and an arbitrary
+  outbound GET. The token endpoint reads the cache.
+- **The fetch connects to the address it checked.** Resolving, checking and
+  then letting the HTTP library resolve again is the hole. Do not replace
+  `_PinnedAdapter` with a plain `requests.get`.
+- **A custom-scheme redirect is accepted only from Corliss's own document.**
+- **Membership is asked at `authorize`, at the consent POST, and on every
+  refresh.** The refresh is the one that cuts a removed member off, and it
+  must keep holding with the delete in `apply_event` skipped. That delete is a
+  tidy-up and must never become what the rule depends on.
+- **A refresh token follows the client's declared grants, not the
+  `offline_access` scope.** Claude may never send a scope.
+- **Refresh refusals are `invalid_grant` or `invalid_target` and nothing
+  else.** Claude treats any other code as a server fault and retries.
+- **Open WebUI's flow does not change.** It is chosen by `client_id` alone at
+  the token endpoint, so a request cannot pick the public path by leaving its
+  secret out. `test_provider.py`, `test_gate.py` and `test_backchannel.py`
+  pass without edits to their flow assertions.
+- **No request chooses whose vaults.** `views.vaults` passes
+  `request.user.did` to the relay for list and for create, the same rule the
+  API keys section states for LiteLLM.
+
 ## Development bypasses
 
 - **`/auth/dev-login` is a complete authentication bypass** and is guarded three
@@ -363,8 +408,12 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
   standalone.
 - **One relationship, one module.** `membership.py` owns the whole registry
   relationship; `litellm.py` is the only place a gateway credential is used;
-  `oidc.py` owns the provider surface including its outbound logout POST. A
-  second module talking to the same external system is the thing to avoid.
+  `oidc.py` owns the provider surface including its outbound logout POST and
+  the fetch of a public client's metadata document; `sync_relay.py` is the
+  only place the relay's service token is used. A second module talking to the
+  same external system is the thing to avoid. `health.py` probing the relay's
+  `/health` is not that: it is the cluster relationship, holds no credential,
+  and knows nothing about vaults.
 - **`views.py` is every endpoint and `urls.py` every route, un-namespaced.**
 
 ## Themes
