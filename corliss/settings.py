@@ -106,7 +106,7 @@ OIDC_BACKCHANNEL_LOGOUT_URI = env("OIDC_BACKCHANNEL_LOGOUT_URI", default="")
 # public MCP URL. A JSON list of objects, one per resource:
 #
 #   [{"url": "https://sync.example.com", "kind": "sync", "label": "Notes sync"},
-#    {"url": "https://mcp.example.com", "kind": "mcp", "label": "Notes for Claude"}]
+#    {"url": "https://mcp.example.com", "kind": "mcp", "label": "Notes over MCP"}]
 #
 # `url` becomes the token's `aud` exactly as written here, and the relay
 # compares it character for character, so both services must be rendered from

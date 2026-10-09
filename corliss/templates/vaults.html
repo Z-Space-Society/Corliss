@@ -2,7 +2,11 @@
 
 {% comment %}
 The Obsidian page: what the notes service is, the member's vaults, and how to
-connect Claude and Obsidian. See `views.vaults`.
+connect Obsidian. See `views.vaults`.
+
+About Obsidian and nothing else. The relay also serves the notes over MCP, but
+this site does not point members at any one AI product, so no assistant is
+named here and the MCP address is not shown.
 
 **The instructions always render.** The vault list depends on the sync relay
 answering, and the rest of the page does not: a member reading how this works
@@ -25,8 +29,7 @@ No script. One form with one field.
   <h1>Obsidian</h1>
 
   <p class="page-text">Your notes, kept on this network. Read and edit them in
-  Obsidian on your laptop and your phone, and from Claude, for as long as you
-  are a member.</p>
+  Obsidian on your laptop and your phone, for as long as you are a member.</p>
 
   <p class="page-text page-text--note">Notes are not end-to-end encrypted. The
   operators of this network can read what is stored here.</p>
@@ -66,8 +69,8 @@ No script. One form with one field.
           </table>
         </div>
       {% else %}
-        <p class="hint-text">You have no vaults yet. Make one to start: Claude
-        and Obsidian both connect to a vault that already exists.</p>
+        <p class="hint-text">You have no vaults yet. Make one to start:
+        Obsidian connects to a vault that already exists.</p>
       {% endif %}
 
       <form method="post" action="{% url 'vaults' %}" class="stacked-form">
@@ -80,19 +83,6 @@ No script. One form with one field.
         </div>
         <button type="submit" class="btn-primary">Create vault</button>
       </form>
-    {% endif %}
-  </div>
-
-  <h2 class="section-title">Connect Claude</h2>
-  <div class="card">
-    {% if mcp_url %}
-      <div class="endpoint">{{ mcp_url }}</div>
-      <p class="hint-text">In Claude, add a custom connector with this address,
-      then sign in with your handle when it asks. Claude can create and edit
-      notes in your vaults straight away, with or without Obsidian.</p>
-    {% else %}
-      <p class="hint-text">No address for Claude is configured on this
-      deployment yet.</p>
     {% endif %}
   </div>
 

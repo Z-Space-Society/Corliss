@@ -27,7 +27,7 @@ section below defines them and says when to reach for which.
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
 - `vaults`: the Obsidian page. What the notes service is, how to connect
-  Obsidian and Claude to it, and the member's vaults, which live on the sync
+  Obsidian to it, and the member's vaults, which live on the sync
   relay and are listed and created through `corliss.sync_relay`.
 - `parascribe`: how to call the cluster's transcription models. Signed-in, and
   names only the models the reader's own tier reaches.
@@ -1398,7 +1398,7 @@ def vaults(request):
         except sync_relay.SyncRelayError:
             pass
 
-    by_kind = {resource.kind: resource.url for resource in oidc.resources()}
+    sync_url = next((r.url for r in oidc.resources() if r.kind == "sync"), "")
     return render(
         request,
         "vaults.html",
@@ -1410,8 +1410,7 @@ def vaults(request):
             "reachable": member_vaults is not None,
             "name": name,
             "name_error": name_error,
-            "sync_url": by_kind.get("sync", ""),
-            "mcp_url": by_kind.get("mcp", ""),
+            "sync_url": sync_url,
         },
     )
 

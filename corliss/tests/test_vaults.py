@@ -231,9 +231,7 @@ class PageStateTests(VaultsCase):
     def assertInstructions(self, resp):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.context["sync_url"], SYNC)
-        self.assertEqual(resp.context["mcp_url"], MCP)
         self.assertContains(resp, SYNC)
-        self.assertContains(resp, MCP)
 
     def test_answered_with_vaults_lists_them_and_offers_the_form(self):
         with Relay(listing=[vault("Notes"), vault("Journal", last_change=None)]):
@@ -287,7 +285,14 @@ class PageStateTests(VaultsCase):
             resp = self.get()
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.context["sync_url"], "")
-        self.assertEqual(resp.context["mcp_url"], "")
+
+    def test_the_page_names_no_ai_product_and_shows_no_mcp_address(self):
+        """The site is AI agnostic. This page is about Obsidian."""
+        with Relay(listing=[vault("Notes")]):
+            resp = self.get()
+        self.assertNotContains(resp, "Claude")
+        self.assertNotContains(resp, MCP)
+        self.assertNotIn("mcp_url", resp.context)
 
     def test_the_nav_offers_the_page_to_a_member_and_closes_it_to_a_non_member(self):
         with Relay():
