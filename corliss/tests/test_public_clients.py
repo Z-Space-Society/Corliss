@@ -6,6 +6,8 @@ module covers what was added beside it. The load-bearing test is
 answers anything else with a bare 401.
 """
 
+import base64
+import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -301,3 +303,208 @@ class ResourceSettingTests(SimpleTestCase):
     @override_settings(OIDC_RESOURCES='[{"url": ')
     def test_an_unreadable_value_issues_for_nothing(self):
         self.assertEqual(oidc.resources(), [])
+
+
+def challenge_for(verifier):
+    """The S256 challenge a client derives from its verifier."""
+    digest = hashlib.sha256(verifier.encode()).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+
+
+VERIFIER = "v" * 43
+
+
+class RedirectMatchingTests(SimpleTestCase):
+    CLAUDE = ["https://claude.ai/api/mcp/auth_callback"]
+    CLAUDE_CODE = ["http://localhost/callback", "http://127.0.0.1/callback"]
+    PLUGIN = ["obsidian://scn-obsidian"]
+
+    def test_https_is_an_exact_string_match(self):
+        self.assertTrue(oidc.redirect_uri_matches(self.CLAUDE[0], self.CLAUDE))
+        for other in (
+            self.CLAUDE[0] + "/",
+            self.CLAUDE[0] + "?x=1",
+            "https://CLAUDE.ai/api/mcp/auth_callback",
+            "https://claude.ai:443/api/mcp/auth_callback",
+            "https://claude.ai.evil.test/api/mcp/auth_callback",
+        ):
+            with self.subTest(other):
+                self.assertFalse(oidc.redirect_uri_matches(other, self.CLAUDE))
+
+    def test_loopback_ignores_the_port(self):
+        for uri in (
+            "http://localhost:53124/callback",
+            "http://127.0.0.1:8976/callback",
+            "http://localhost/callback",
+        ):
+            with self.subTest(uri):
+                self.assertTrue(oidc.redirect_uri_matches(uri, self.CLAUDE_CODE))
+
+    def test_loopback_ignores_the_port_on_the_registered_side_too(self):
+        self.assertTrue(
+            oidc.redirect_uri_matches(
+                "http://localhost:1/callback", ["http://localhost:9999/callback"]
+            )
+        )
+
+    def test_localhost_and_127_0_0_1_do_not_match_each_other(self):
+        self.assertFalse(
+            oidc.redirect_uri_matches(
+                "http://127.0.0.1:5000/callback", ["http://localhost/callback"]
+            )
+        )
+        self.assertFalse(
+            oidc.redirect_uri_matches(
+                "http://localhost:5000/callback", ["http://127.0.0.1/callback"]
+            )
+        )
+
+    def test_ipv6_loopback(self):
+        self.assertTrue(
+            oidc.redirect_uri_matches(
+                "http://[::1]:4000/callback", ["http://[::1]/callback"]
+            )
+        )
+
+    def test_loopback_still_compares_path_and_query(self):
+        for uri in (
+            "http://localhost:5000/other",
+            "http://localhost:5000/callback/",
+            "http://localhost:5000/callback?x=1",
+            "http://localhost:5000/callback#frag",
+            "http://user@localhost:5000/callback",
+            "http://localhost:notaport/callback",
+        ):
+            with self.subTest(uri):
+                self.assertFalse(oidc.redirect_uri_matches(uri, self.CLAUDE_CODE))
+
+    def test_http_off_loopback_never_matches_even_when_listed(self):
+        uri = "http://example.test/callback"
+        self.assertFalse(oidc.redirect_uri_matches(uri, [uri]))
+        self.assertFalse(
+            oidc.redirect_uri_matches(
+                "http://localhost.evil.test/callback", self.CLAUDE_CODE
+            )
+        )
+
+    def test_https_on_localhost_is_exact_not_loopback(self):
+        self.assertFalse(
+            oidc.redirect_uri_matches(
+                "https://localhost:5000/callback", ["https://localhost/callback"]
+            )
+        )
+
+    def test_a_custom_scheme_is_an_exact_string_match(self):
+        self.assertTrue(oidc.redirect_uri_matches(self.PLUGIN[0], self.PLUGIN))
+        for other in (
+            "obsidian://scn-obsidian/",
+            "obsidian://scn-obsidian?x=1",
+            "obsidian://other",
+            "OBSIDIAN://scn-obsidian",
+        ):
+            with self.subTest(other):
+                self.assertFalse(oidc.redirect_uri_matches(other, self.PLUGIN))
+
+    def test_nothing_matches_an_empty_or_schemeless_uri(self):
+        for uri in ("", None, "/callback", "localhost/callback"):
+            with self.subTest(uri=uri):
+                self.assertFalse(oidc.redirect_uri_matches(uri, [uri or ""]))
+
+    def test_loopback_is_recognised_for_the_consent_screen(self):
+        self.assertTrue(oidc.is_loopback_redirect("http://127.0.0.1:1234/callback"))
+        self.assertFalse(oidc.is_loopback_redirect("https://claude.ai/cb"))
+        self.assertFalse(oidc.is_loopback_redirect("obsidian://scn-obsidian"))
+
+
+class PkceTests(SimpleTestCase):
+    def test_the_right_verifier_passes(self):
+        self.assertTrue(oidc.pkce_verifies(VERIFIER, challenge_for(VERIFIER)))
+
+    def test_the_rfc_7636_example(self):
+        self.assertTrue(
+            oidc.pkce_verifies(
+                "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+                "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            )
+        )
+
+    def test_a_wrong_verifier_fails(self):
+        self.assertFalse(oidc.pkce_verifies("w" * 43, challenge_for(VERIFIER)))
+
+    def test_a_verifier_out_of_length_fails_even_when_it_hashes_right(self):
+        for verifier in ("v" * 42, "v" * 129):
+            with self.subTest(length=len(verifier)):
+                self.assertFalse(
+                    oidc.pkce_verifies(verifier, challenge_for(verifier))
+                )
+
+    def test_a_verifier_outside_the_character_set_fails(self):
+        verifier = "v" * 42 + "!"
+        self.assertFalse(oidc.pkce_verifies(verifier, challenge_for(verifier)))
+
+    def test_the_plain_method_does_not_pass(self):
+        """A challenge equal to the verifier is `plain`, which is not offered."""
+        self.assertFalse(oidc.pkce_verifies(VERIFIER, VERIFIER))
+
+    def test_a_missing_half_fails(self):
+        self.assertFalse(oidc.pkce_verifies("", challenge_for(VERIFIER)))
+        self.assertFalse(oidc.pkce_verifies(VERIFIER, ""))
+        self.assertFalse(oidc.pkce_verifies(None, None))
+
+    def test_a_challenge_must_look_like_an_s256_digest(self):
+        self.assertTrue(oidc.valid_code_challenge(challenge_for(VERIFIER)))
+        for bad in ("", None, "short", "a" * 44, "a" * 42 + "="):
+            with self.subTest(bad=bad):
+                self.assertFalse(oidc.valid_code_challenge(bad))
+
+
+@override_settings(OIDC_RESOURCES=RESOURCES)
+class ResourceMatchingTests(SimpleTestCase):
+    def test_a_configured_resource_matches(self):
+        self.assertEqual(oidc.match_resource(SYNC).kind, "sync")
+        self.assertEqual(oidc.match_resource(MCP).kind, "mcp")
+
+    def test_a_trailing_slash_or_capitals_still_match_and_the_configured_spelling_wins(self):
+        for spelling in (SYNC + "/", "HTTPS://Sync.ZAI.test", "https://SYNC.zai.test/"):
+            with self.subTest(spelling):
+                self.assertEqual(oidc.match_resource(spelling).url, SYNC)
+
+    def test_only_a_bare_path_loses_its_slash(self):
+        self.assertIsNone(oidc.match_resource(MCP + "/"))
+        self.assertIsNone(oidc.match_resource("https://mcp.zai.test"))
+
+    def test_a_path_keeps_its_case(self):
+        self.assertIsNone(oidc.match_resource("https://mcp.zai.test/MCP"))
+
+    def test_unknown_or_missing_matches_nothing(self):
+        for value in ("", None, "https://elsewhere.test", SYNC + "/x", SYNC + ":8443"):
+            with self.subTest(value=value):
+                self.assertIsNone(oidc.match_resource(value))
+
+    @override_settings(OIDC_RESOURCES="")
+    def test_an_unconfigured_deployment_matches_nothing(self):
+        self.assertIsNone(oidc.match_resource(SYNC))
+
+    @override_settings(
+        OIDC_RESOURCES=json.dumps(
+            [{"url": "https://Sync.zai.test/", "kind": "sync", "label": "Notes"}]
+        )
+    )
+    def test_the_configured_spelling_is_returned_untouched(self):
+        self.assertEqual(oidc.match_resource(SYNC).url, "https://Sync.zai.test/")
+
+
+class ScopeTests(SimpleTestCase):
+    def test_unknown_values_are_dropped(self):
+        self.assertEqual(
+            oidc.grant_scope("openid mcp:tools offline_access"),
+            "openid offline_access",
+        )
+
+    def test_an_empty_result_is_valid(self):
+        for requested in ("", None, "claudeai", "  "):
+            with self.subTest(requested=requested):
+                self.assertEqual(oidc.grant_scope(requested), "")
+
+    def test_repeats_collapse(self):
+        self.assertEqual(oidc.grant_scope("openid openid"), "openid")

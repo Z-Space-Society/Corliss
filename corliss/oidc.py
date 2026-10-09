@@ -17,8 +17,12 @@ module would put half of that relationship in each of two files. See
 "Back-channel logout" at the bottom.
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -199,6 +203,122 @@ def resources():
     """The configured resources. Empty when unset or invalid, which refuses
     every public client: an unconfigured deployment issues nothing."""
     return parse_resources(settings.OIDC_RESOURCES)[0]
+
+
+def _normalise_resource(url) -> str:
+    """A resource URL in the form two spellings of it are compared in.
+
+    Lowercases the scheme and host and drops the slash from a path that is
+    nothing else, so `https://MCP.example.com/` and `https://mcp.example.com`
+    are one resource. Nothing more: a path's own trailing slash is kept.
+    """
+    parts = urlsplit(url)
+    path = "" if parts.path == "/" else parts.path
+    return parts._replace(
+        scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), path=path
+    ).geturl()
+
+
+def match_resource(requested):
+    """The configured resource a client's `resource` parameter names, or None.
+
+    The caller issues `aud` from the returned `url`, which is the configured
+    spelling and never the client's. A client that sends a trailing slash
+    still receives a token the relay accepts.
+    """
+    if not requested or not isinstance(requested, str):
+        return None
+    wanted = _normalise_resource(requested)
+    for resource in resources():
+        if _normalise_resource(resource.url) == wanted:
+            return resource
+    return None
+
+
+# --- Request checks for public clients --------------------------------------
+
+SCOPES = ("openid", "profile", "email", "offline_access")
+
+
+def grant_scope(requested) -> str:
+    """The scope granted for a requested one: unknown values are dropped.
+
+    An empty result is valid. The relay's protected resource metadata
+    advertises no scopes, so an MCP client may ask for none at all.
+    """
+    granted = []
+    for value in (requested or "").split():
+        if value in SCOPES and value not in granted:
+            granted.append(value)
+    return " ".join(granted)
+
+
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def _loopback_parts(uri):
+    """What a loopback redirect is compared on, or None if it is not one.
+
+    Everything but the port. A native app listens on whatever port the
+    system hands it, so the port is the one part it cannot declare ahead.
+    """
+    try:
+        parts = urlsplit(uri)
+        parts.port  # raises on a port that is not a number
+    except ValueError:
+        return None
+    if parts.scheme != "http" or parts.hostname not in _LOOPBACK_HOSTS:
+        return None
+    if parts.username is not None or parts.fragment:
+        return None
+    return (parts.hostname, parts.path, parts.query)
+
+
+def redirect_uri_matches(requested, registered) -> bool:
+    """Whether a requested redirect URI is one the client declared.
+
+    Exact string comparison for everything except loopback: an `https` URI,
+    and a custom scheme such as `obsidian://scn-obsidian`, must appear in the
+    list character for character. An `http` URI is accepted only on a
+    loopback host, compared with the port ignored on both sides.
+
+    `localhost` and `127.0.0.1` are different hosts here and do not match
+    each other. A client that uses both declares both.
+    """
+    if not requested or not isinstance(requested, str):
+        return False
+    scheme = urlsplit(requested).scheme.lower()
+    if not scheme:
+        return False
+    if scheme != "http":
+        return requested in registered
+    wanted = _loopback_parts(requested)
+    if wanted is None:
+        return False
+    return any(_loopback_parts(entry) == wanted for entry in registered)
+
+
+def is_loopback_redirect(uri) -> bool:
+    return _loopback_parts(uri) is not None
+
+
+# An S256 challenge is the base64url of a SHA-256 digest: 43 characters.
+_CODE_CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}")
+# RFC 7636: 43 to 128 characters from the unreserved set.
+_CODE_VERIFIER = re.compile(r"[A-Za-z0-9._~-]{43,128}")
+
+
+def valid_code_challenge(challenge) -> bool:
+    return bool(challenge) and _CODE_CHALLENGE.fullmatch(challenge) is not None
+
+
+def pkce_verifies(verifier, challenge) -> bool:
+    """Whether `verifier` is the secret behind a stored S256 `challenge`."""
+    if not verifier or not challenge or not _CODE_VERIFIER.fullmatch(verifier):
+        return False
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    computed = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return hmac.compare_digest(computed, challenge)
 
 
 def discovery_document() -> dict:
