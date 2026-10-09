@@ -101,6 +101,23 @@ OIDC_REDIRECT_URIS = env.list("OIDC_REDIRECT_URIS", default=[])
 # reasons the RP's own token lifetime must stay short even with this wired up.
 OIDC_BACKCHANNEL_LOGOUT_URI = env("OIDC_BACKCHANNEL_LOGOUT_URI", default="")
 
+# The resources a public client (Claude, Claude Code, the SCN Sync plugin) can
+# be issued an access token for: the sync relay's public sync URL and its
+# public MCP URL. A JSON list of objects, one per resource:
+#
+#   [{"url": "https://sync.example.com", "kind": "sync", "label": "Notes sync"},
+#    {"url": "https://mcp.example.com", "kind": "mcp", "label": "Notes for Claude"}]
+#
+# `url` becomes the token's `aud` exactly as written here, and the relay
+# compares it character for character, so both services must be rendered from
+# one definition. `kind` is `sync` or `mcp`, at most one of each. `label` is
+# what the consent screen calls it.
+#
+# Kept as the raw string and read by `corliss.oidc.resources`. Blank issues
+# nothing to any public client. A value that does not parse also issues
+# nothing, and corliss.E004 fails the deploy over it.
+OIDC_RESOURCES = env("OIDC_RESOURCES", default="")
+
 # --- UI ---------------------------------------------------------------------
 # Public origin of the cluster's Open WebUI. Blank hides the nav's "Open WebUI"
 # entry and the home page block entirely — e.g. local dev with none configured.

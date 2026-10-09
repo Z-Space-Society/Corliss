@@ -1980,7 +1980,13 @@ def jwks(request):
 
 
 def openid_configuration(request):
+    """The provider's discovery document, served at two well-known paths."""
     return JsonResponse(oidc.discovery_document())
+
+
+def plugin_client_metadata(request):
+    """Serve the SCN Sync plugin's client metadata at its `client_id` URL."""
+    return JsonResponse(oidc.plugin_client_metadata())
 
 
 def _error(error, description, status=400):
@@ -2120,7 +2126,12 @@ def token(request):
     cid, secret = _client_credentials(request)
     # Constant-time comparison so the token endpoint doesn't leak the secret.
     cid_ok = hmac.compare_digest(cid or "", settings.OIDC_CLIENT_ID)
-    secret_ok = hmac.compare_digest(secret or "", settings.OIDC_CLIENT_SECRET)
+    # A blank configured secret must refuse, not match. Comparing against ""
+    # would accept a request that also sent nothing, so a deployment that had
+    # not set one would hand tokens to anyone naming the client.
+    secret_ok = bool(settings.OIDC_CLIENT_SECRET) and hmac.compare_digest(
+        secret or "", settings.OIDC_CLIENT_SECRET
+    )
     if not (cid_ok and secret_ok):
         return _error("invalid_client", "client authentication failed", status=401)
 

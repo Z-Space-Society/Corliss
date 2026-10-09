@@ -84,6 +84,34 @@ def check_explicit_theme_exists(app_configs, **kwargs):
     return []
 
 
+def check_oidc_resources_parse(app_configs, **kwargs):
+    """Refuse to run with an OIDC_RESOURCES that cannot be read.
+
+    The value is JSON in an env file, which is easy to get wrong by one quote.
+    A value that does not parse issues no tokens at all, and the only symptom
+    would be Claude and Obsidian failing to sign in. This turns the typo into
+    a failed deploy that names the entry at fault.
+    """
+    # Imported here: `corliss.oidc` imports the models, which are not loaded
+    # when this module is.
+    from corliss import oidc
+
+    _, problems = oidc.parse_resources(settings.OIDC_RESOURCES)
+    if not problems:
+        return []
+    return [
+        Error(
+            "OIDC_RESOURCES is not usable: " + "; ".join(problems) + ".",
+            hint=(
+                'It is a JSON list such as [{"url": "https://sync.example.com", '
+                '"kind": "sync", "label": "Notes sync"}], with kind sync or '
+                "mcp and at most one of each."
+            ),
+            id="corliss.E004",
+        )
+    ]
+
+
 class CorlissConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "corliss"
@@ -92,3 +120,4 @@ class CorlissConfig(AppConfig):
         register(check_dev_login_requires_debug)
         register(check_dev_admins_require_debug)
         register(check_explicit_theme_exists)
+        register(check_oidc_resources_parse)

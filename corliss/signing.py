@@ -127,7 +127,7 @@ def sign_es256(payload: dict, *, headers: dict | None = None) -> str:
 
 
 def sign_rs256(payload: dict, *, headers: dict | None = None) -> str:
-    """Sign a JWT with the OIDC RSA key (the `id_token`)."""
+    """Sign a JWT with the OIDC RSA key (the `id_token`, access tokens)."""
     h = {"kid": oidc_kid()}
     if headers:
         h.update(headers)

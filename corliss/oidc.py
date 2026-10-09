@@ -17,10 +17,13 @@ module would put half of that relationship in each of two files. See
 "Back-channel logout" at the bottom.
 """
 
+import json
 import logging
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 import requests
 from django.conf import settings
@@ -34,10 +37,168 @@ log = logging.getLogger(__name__)
 
 CODE_TTL_SECONDS = 600
 ID_TOKEN_TTL_SECONDS = 3600
+# Short, because nothing revokes an access token once it is issued. This is
+# the whole of how long a removed member keeps access to a resource, and the
+# relay closes a sync connection at `exp`.
+ACCESS_TOKEN_TTL_SECONDS = 900
 
 
 def base_url() -> str:
     return settings.PUBLIC_BASE_URL.rstrip("/")
+
+
+# --- Clients ----------------------------------------------------------------
+#
+# Two kinds. The confidential one is Open WebUI, described by settings exactly
+# as it always was. A public client has no secret and no row here: its
+# `client_id` is the URL of a metadata document that says what it is.
+
+CONFIDENTIAL = "confidential"
+PUBLIC = "public"
+
+
+class ClientError(Exception):
+    """A `client_id` Corliss will not serve. Carries the OAuth error code."""
+
+    def __init__(self, error, description):
+        super().__init__(description)
+        self.error = error
+        self.description = description
+
+
+@dataclass(frozen=True)
+class Client:
+    client_id: str
+    kind: str
+    redirect_uris: tuple
+    name: str
+    # The host of the `client_id` URL, which is what the consent screen names
+    # the app by. Blank for the confidential client, which has no URL.
+    host: str = ""
+    grant_types: tuple = ("authorization_code",)
+
+    @property
+    def is_public(self) -> bool:
+        return self.kind == PUBLIC
+
+
+def plugin_client_id() -> str:
+    """The `client_id` of the scn-obsidian plugin: the URL of its document.
+
+    **The path is part of the client's identity**, the same way the atproto
+    `client_id` is. Change it and every install is a new client: its refresh
+    tokens stop working and each member signs in again.
+    """
+    return base_url() + reverse("plugin_client_metadata")
+
+
+def plugin_client_metadata() -> dict:
+    """The metadata document for the scn-obsidian plugin, which Corliss hosts.
+
+    The one document allowed a custom-scheme redirect, because Corliss wrote
+    it. `client_name` is what the member installed: the plugin is listed in
+    Obsidian as SCN Sync.
+    """
+    return {
+        "client_id": plugin_client_id(),
+        "client_name": "SCN Sync",
+        "client_uri": base_url(),
+        "redirect_uris": ["obsidian://scn-obsidian"],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    }
+
+
+def _client_from_document(document) -> Client:
+    return Client(
+        client_id=document["client_id"],
+        kind=PUBLIC,
+        redirect_uris=tuple(document["redirect_uris"]),
+        name=document.get("client_name", ""),
+        host=urlsplit(document["client_id"]).hostname or "",
+        grant_types=tuple(document.get("grant_types") or ["authorization_code"]),
+    )
+
+
+def resolve_client(client_id) -> Client:
+    """The client a `client_id` names, or `ClientError`.
+
+    Corliss's own document is read from the function that builds it and never
+    fetched over HTTP: with two gunicorn workers a request to our own origin
+    can wait on itself.
+    """
+    if client_id and client_id == settings.OIDC_CLIENT_ID:
+        return Client(
+            client_id=client_id,
+            kind=CONFIDENTIAL,
+            redirect_uris=tuple(settings.OIDC_REDIRECT_URIS),
+            name=client_id,
+        )
+    if client_id and client_id == plugin_client_id():
+        return _client_from_document(plugin_client_metadata())
+    raise ClientError("unauthorized_client", "unknown client_id")
+
+
+# --- Resources --------------------------------------------------------------
+#
+# The services an access token can be issued for. Each is named by its public
+# URL, and that URL is the token's `aud`, spelled exactly as configured: the
+# relay compares it character for character.
+
+RESOURCE_KINDS = ("sync", "mcp")
+
+
+@dataclass(frozen=True)
+class Resource:
+    url: str
+    kind: str
+    label: str
+
+
+def parse_resources(raw):
+    """Read `OIDC_RESOURCES` into `(resources, problems)`.
+
+    Any problem yields no resources at all. A deployment whose value is
+    half right would otherwise issue tokens for one service and silently
+    refuse the other, which is harder to notice than refusing both.
+    """
+    if not raw:
+        return [], []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError as exc:
+            return [], [f"not valid JSON: {exc}"]
+    if not isinstance(raw, list):
+        return [], ["must be a JSON list of objects"]
+
+    resources, problems = [], []
+    for index, entry in enumerate(raw):
+        where = f"entry {index + 1}"
+        if not isinstance(entry, dict):
+            problems.append(f"{where} is not an object")
+            continue
+        url, kind, label = entry.get("url"), entry.get("kind"), entry.get("label")
+        parts = urlsplit(url) if isinstance(url, str) else None
+        if not parts or parts.scheme not in ("http", "https") or not parts.hostname:
+            problems.append(f"{where}: url must be an http(s) URL")
+        if kind not in RESOURCE_KINDS:
+            problems.append(f"{where}: kind must be one of {', '.join(RESOURCE_KINDS)}")
+        elif any(r.kind == kind for r in resources):
+            problems.append(f"{where}: a second {kind} resource")
+        if not isinstance(label, str) or not label.strip():
+            problems.append(f"{where}: label must be a non-empty string")
+        if not problems:
+            resources.append(Resource(url=url, kind=kind, label=label.strip()))
+
+    return ([], problems) if problems else (resources, [])
+
+
+def resources():
+    """The configured resources. Empty when unset or invalid, which refuses
+    every public client: an unconfigured deployment issues nothing."""
+    return parse_resources(settings.OIDC_RESOURCES)[0]
 
 
 def discovery_document() -> dict:
@@ -47,14 +208,22 @@ def discovery_document() -> dict:
         "token_endpoint": base_url() + reverse("token"),
         "jwks_uri": base_url() + reverse("jwks"),
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
-        "scopes_supported": ["openid", "profile", "email"],
+        "scopes_supported": ["openid", "profile", "email", "offline_access"],
         "token_endpoint_auth_methods_supported": [
             "client_secret_post",
             "client_secret_basic",
+            "none",
         ],
+        # The three fields an MCP client reads before it will start. Without
+        # the first it refuses to proceed. Claude uses a metadata document as
+        # its `client_id` only when it sees both the second and `none` above,
+        # and otherwise looks for a registration endpoint, which does not
+        # exist here.
+        "code_challenge_methods_supported": ["S256"],
+        "client_id_metadata_document_supported": True,
         # Advertised for the next relying party, not for the current one: Open
         # WebUI reads only `issuer` and `jwks_uri` out of this document when it
         # validates a logout token, and learns that we do back-channel logout
@@ -142,6 +311,33 @@ def mint_id_token(user, *, client_id, nonce="", sid="") -> str:
         # Ties this token to the OidcSession a later logout_token will name.
         payload["sid"] = sid
     return signing.sign_rs256(payload)
+
+
+def mint_access_token(user, *, client_id, resource, scope="") -> str:
+    """An access token for one resource, as scn-sync-relay verifies it.
+
+    **This shape is a contract with the relay**, and a change here is a change
+    to its verifier. Three parts have a plausible wrong answer:
+
+    - `typ` is `at+jwt`. It is what stops an `id_token`, signed by the same
+      key, from being accepted as an access token.
+    - `aud` is one string, the resource URL as configured. The relay refuses
+      a list, and refuses a URL that differs by a trailing slash.
+    - No handle, name or email. The plugin sends this token in a websocket
+      URL, so it carries nothing about the person beyond the DID.
+    """
+    now = int(time.time())
+    payload = {
+        "iss": base_url(),
+        "sub": user.did,
+        "aud": resource,
+        "iat": now,
+        "exp": now + ACCESS_TOKEN_TTL_SECONDS,
+        "jti": secrets.token_urlsafe(16),
+        "scope": scope,
+        "client_id": client_id,
+    }
+    return signing.sign_rs256(payload, headers={"typ": "at+jwt"})
 
 
 # --- Back-channel logout ----------------------------------------------------

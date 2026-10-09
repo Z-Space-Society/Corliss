@@ -340,6 +340,8 @@ without a shell. Corliss clears it itself when a member edits their email at
 | ATProto callback | `/auth/oauth/callback` |
 | ATProto client metadata (**is** the `client_id`) | `/auth/client-metadata.json` |
 | OIDC discovery | `/.well-known/openid-configuration` |
+| The same discovery document, where OAuth and MCP clients look first | `/.well-known/oauth-authorization-server` |
+| SCN Sync plugin client metadata (**is** the plugin's `client_id`) | `/clients/scn-obsidian.json` |
 | JWKS | `/.well-known/jwks.json` |
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
 | Membership push (from the registry) | `/membership/events` |
@@ -1117,6 +1119,70 @@ touch-specific details follow from it, all in `base.css`:
 - **Under 720px the row wraps and menus drop full width beneath the nav**,
   instead of hanging from a trigger mid-row where they would run off the screen,
   and every target grows to thumb size.
+
+## Public clients: Claude, Claude Code and SCN Sync
+
+Open WebUI is a confidential client: it holds a secret and is described by
+settings. Corliss also serves **public** clients, which hold no secret: the
+Claude apps, Claude Code, and the SCN Sync plugin for Obsidian. They sign a
+member in to reach [scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay),
+where the member's notes live. The design is in
+[`docs/specs/0001-spec-multi-client-oauth`](docs/specs/0001-spec-multi-client-oauth/0001-spec-multi-client-oauth.md).
+
+- **A public client's `client_id` is a URL**, the address of a metadata
+  document saying what the client is. There is no table of clients and nothing
+  to register.
+- **Corliss hosts the plugin's document** at `/clients/scn-obsidian.json`.
+  That path is the plugin's identity, the same way the atproto `client_id` is
+  Corliss's own. Move it and every install becomes a new client whose refresh
+  tokens no longer work.
+- **Corliss never fetches its own document over HTTP.** `oidc.resolve_client`
+  reads the function that builds it. With two gunicorn workers a request to
+  our own origin can wait on itself.
+- **Discovery is served at two paths.** MCP clients ask
+  `/.well-known/oauth-authorization-server` first. Claude treats a
+  `client_id` as a metadata document only when discovery carries both
+  `client_id_metadata_document_supported` and the `none` auth method, and
+  otherwise looks for a registration endpoint that does not exist here.
+- **A blank `OIDC_CLIENT_SECRET` refuses Open WebUI at the token endpoint.**
+  It used to compare equal to a request that sent no secret. With `none` now
+  advertised, that comparison could not stand.
+
+### Access tokens
+
+A public client receives an access token for one resource. This shape is a
+contract with the relay, which answers anything else with a bare `401`.
+
+| Part | Value |
+| ---- | ----- |
+| Header | `alg` `RS256`, `typ` `at+jwt`, `kid` the OIDC key's thumbprint |
+| `iss` | `PUBLIC_BASE_URL` with no trailing slash |
+| `sub` | The member's DID |
+| `aud` | One resource URL, a string, spelled as `OIDC_RESOURCES` spells it |
+| `exp` | 15 minutes after `iat` |
+| `jti`, `scope`, `client_id` | Unique ID, granted scope (may be empty), the client |
+
+- **`typ` is what separates it from an `id_token`.** Both are signed by the
+  same key, and the relay refuses a token that does not say `at+jwt`.
+- **No handle, name or email.** The plugin sends this token in a websocket
+  URL.
+- **Fifteen minutes is the revocation bound.** Nothing revokes an access token
+  once issued.
+
+### Settings
+
+| Setting | Meaning |
+| ------- | ------- |
+| `OIDC_RESOURCES` | The resources a public client can get a token for, as a JSON list of `{"url", "kind", "label"}`. `kind` is `sync` or `mcp`, at most one of each. Blank issues nothing to any public client. |
+
+- **`url` becomes `aud` exactly as written**, and the relay compares it
+  character for character against `SCN_SYNC_RELAY_SYNC_AUDIENCE` and
+  `SCN_SYNC_RELAY_MCP_AUDIENCE`. A trailing slash on one side is a `401` with
+  no explanation. Render both services from one definition.
+- **A value that does not parse fails the deploy**, as system check
+  `corliss.E004`, and names the entry at fault. It is JSON in an env file, so
+  a stray quote is the likely mistake. At runtime a bad value issues nothing,
+  and never half of what was meant.
 
 ## Wiring up a relying party (Open WebUI shown)
 

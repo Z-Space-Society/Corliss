@@ -43,6 +43,20 @@ urlpatterns = [
         views.openid_configuration,
         name="openid_configuration",
     ),
+    # The same document again, where an OAuth client that is not an OIDC one
+    # looks for it. MCP clients try this path first.
+    path(
+        ".well-known/oauth-authorization-server",
+        views.openid_configuration,
+        name="oauth_authorization_server",
+    ),
+    # The SCN Sync plugin's client metadata document. Like the atproto one
+    # above, this URL is the plugin's `client_id`, so the path cannot move.
+    path(
+        "clients/scn-obsidian.json",
+        views.plugin_client_metadata,
+        name="plugin_client_metadata",
+    ),
     path("oidc/authorize", views.authorize, name="authorize"),
     path("oidc/token", views.token, name="token"),
     # Registry (the SCN membership push)
