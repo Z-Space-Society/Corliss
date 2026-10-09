@@ -9,6 +9,10 @@ Claims: `sub` = DID, `handle`, and — when the member has one — `name` and
 login and editable at `/account/`, so neither is guaranteed; each is omitted
 rather than sent empty.
 
+**So does fetching a public client's metadata document.** A client is one
+relationship whether it is described by settings or by a URL, and this module
+is the only place either is read. See "Client ID Metadata Documents".
+
 **Back-channel logout lives here too, including the outbound HTTP.** That is a
 deliberate repeat of the shape `corliss.membership` already uses for
 `MembershipRegistry`: issuing a token and revoking it are two halves of one
@@ -20,10 +24,12 @@ module would put half of that relationship in each of two files. See
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import re
 import secrets
+import socket
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -31,8 +37,10 @@ from urllib.parse import urlsplit
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
+from requests.adapters import HTTPAdapter
 
 from corliss import signing
 from corliss.models import OidcAuthCode, OidcClientDocument, OidcSession, User
@@ -147,7 +155,325 @@ def resolve_client(client_id) -> Client:
         )
     if client_id and client_id == plugin_client_id():
         return _client_from_document(plugin_client_metadata())
+    if isinstance(client_id, str) and client_id.startswith("https://"):
+        # The allowlist comes before everything else about a URL, because
+        # `authorize` resolves the client before it asks anyone to sign in.
+        # Without it an anonymous request could make Corliss fetch any URL.
+        if not client_id_allowed(client_id):
+            raise ClientError("unauthorized_client", "client_id is not allowed here")
+        return _document_client(client_id)
     raise ClientError("unauthorized_client", "unknown client_id")
+
+
+# --- Client ID Metadata Documents -------------------------------------------
+#
+# A public client's `client_id` is a URL, and what is served there says what
+# the client is: its name and where it may be redirected. Corliss fetches
+# that document when the client first appears at `authorize` and caches it.
+#
+# This is the one place Corliss makes a request to an address somebody else
+# chose, so every rule below is about what that could be turned into:
+#
+# - **Only allowlisted URLs are fetched**, checked before any network call.
+# - **Never an internal address.** The host is resolved first and every
+#   address it resolves to must be a public one. The connection then goes to
+#   the address that was checked, not to the name, so a second DNS answer
+#   cannot move it.
+# - **No redirects.** A redirect is a failure, not a new place to fetch.
+# - **Small and quick.** 64 KB and about five seconds.
+# - **Only `authorize` fetches.** The token endpoint reads the cache.
+
+# How long a fetched document is used before it is fetched again. The
+# document's own `Cache-Control: max-age` moves this, within the two bounds.
+CIMD_FRESH_DEFAULT = timedelta(hours=1)
+CIMD_FRESH_MIN = timedelta(minutes=5)
+CIMD_FRESH_MAX = timedelta(hours=24)
+# How long past its freshness a document is still served when it cannot be
+# refetched. A client's site being down for an afternoon should not sign
+# every member out of it.
+CIMD_STALE_LIMIT = timedelta(hours=24)
+# How long a failure is remembered before the URL is tried again, so a broken
+# URL cannot be used to make Corliss fetch in a loop.
+CIMD_FAILURE_TTL_SECONDS = 60
+CIMD_MAX_BYTES = 64 * 1024
+# The whole fetch is abandoned at the deadline. Connecting, and each read,
+# get the shorter step timeout, and the deadline is checked between reads.
+CIMD_DEADLINE_SECONDS = 5
+CIMD_STEP_TIMEOUT_SECONDS = 2
+
+
+class ClientDocumentError(Exception):
+    """A client metadata document could not be fetched or is not valid."""
+
+
+def client_id_allowed(client_id) -> bool:
+    """Whether `OIDC_CLIENT_METADATA_ALLOWLIST` accepts this `client_id` URL.
+
+    An entry is either an exact URL or an origin such as `https://claude.ai`,
+    which accepts any `client_id` on that scheme, host and port. Compared on
+    parsed components and never by string prefix: `https://claude.ai.evil.test`
+    and `https://claude.ai@evil.test` both begin with an allowed origin.
+    """
+    try:
+        parts = urlsplit(client_id)
+        port = parts.port or 443
+    except ValueError:
+        return False
+    for entry in settings.OIDC_CLIENT_METADATA_ALLOWLIST:
+        if entry == client_id:
+            return True
+        try:
+            allowed = urlsplit(entry)
+            allowed_port = allowed.port or 443
+        except ValueError:
+            continue
+        is_origin = (
+            allowed.scheme == "https"
+            and allowed.hostname
+            and allowed.path in ("", "/")
+            and not allowed.query
+            and not allowed.fragment
+            and allowed.username is None
+        )
+        if is_origin and (parts.scheme, parts.hostname, port) == (
+            "https",
+            allowed.hostname,
+            allowed_port,
+        ):
+            return True
+    return False
+
+
+def _public_address(host, port):
+    """Resolve `host` and return one address to connect to.
+
+    Refuses if **any** address the name resolves to is not a public one. A
+    name with one public and one internal answer is refused outright: which
+    answer a connection would get is not something to leave to chance.
+    """
+    try:
+        answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ClientDocumentError(f"could not resolve {host}: {exc}") from exc
+    addresses = []
+    for answer in answers:
+        address = ipaddress.ip_address(answer[4][0].split("%")[0])
+        # An IPv4 address written as IPv6 is judged as the IPv4 one it is.
+        checked = getattr(address, "ipv4_mapped", None) or address
+        if not checked.is_global or checked.is_multicast:
+            raise ClientDocumentError(f"{host} resolves to a non-public address")
+        addresses.append(address)
+    if not addresses:
+        raise ClientDocumentError(f"{host} did not resolve")
+    return addresses[0]
+
+
+class _PinnedAdapter(HTTPAdapter):
+    """Connect to an IP address while speaking TLS for a hostname.
+
+    The request URL names the address that was checked. This makes the TLS
+    handshake ask for, and verify the certificate against, the hostname the
+    document lives on, so pinning the address costs nothing in verification.
+    """
+
+    def __init__(self, hostname):
+        self._hostname = hostname
+        super().__init__(max_retries=0)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        super().init_poolmanager(
+            connections,
+            maxsize,
+            block,
+            server_hostname=self._hostname,
+            assert_hostname=self._hostname,
+            **pool_kwargs,
+        )
+
+
+def _pinned_session(hostname):
+    session = requests.Session()
+    # No proxy from the environment: a proxy would do its own resolving, and
+    # the address that was checked would not be the one connected to.
+    session.trust_env = False
+    session.mount("https://", _PinnedAdapter(hostname))
+    return session
+
+
+def _fresh_for(cache_control) -> timedelta:
+    match = re.search(r"max-age\s*=\s*(\d+)", cache_control or "", re.IGNORECASE)
+    if not match:
+        return CIMD_FRESH_DEFAULT
+    asked = timedelta(seconds=int(match.group(1)))
+    return min(max(asked, CIMD_FRESH_MIN), CIMD_FRESH_MAX)
+
+
+def validate_client_document(url, document) -> dict:
+    """Check a fetched document and return the parts of it Corliss keeps."""
+    if not isinstance(document, dict):
+        raise ClientDocumentError("document is not a JSON object")
+    if document.get("client_id") != url:
+        raise ClientDocumentError("document's client_id is not its own URL")
+    if not isinstance(document.get("client_name"), str):
+        raise ClientDocumentError("client_name must be a string")
+    if document.get("token_endpoint_auth_method", "none") != "none":
+        raise ClientDocumentError("token_endpoint_auth_method must be none")
+
+    redirect_uris = document.get("redirect_uris")
+    if (
+        not isinstance(redirect_uris, list)
+        or not redirect_uris
+        or not all(isinstance(uri, str) for uri in redirect_uris)
+    ):
+        raise ClientDocumentError("redirect_uris must be a non-empty list of strings")
+    for uri in redirect_uris:
+        # `https`, or `http` on a loopback host. A custom scheme is accepted
+        # only from a document Corliss wrote itself: any app on a device can
+        # register one, so somebody else's claim to it proves nothing.
+        if urlsplit(uri).scheme != "https" and not is_loopback_redirect(uri):
+            raise ClientDocumentError(f"redirect URI not allowed: {uri[:200]}")
+
+    grant_types = document.get("grant_types", ["authorization_code"])
+    if not isinstance(grant_types, list) or not all(
+        isinstance(grant, str) for grant in grant_types
+    ):
+        raise ClientDocumentError("grant_types must be a list of strings")
+
+    return {
+        "client_id": url,
+        "client_name": document["client_name"][:200],
+        "redirect_uris": redirect_uris,
+        "grant_types": grant_types,
+    }
+
+
+def fetch_client_document(url):
+    """Fetch and validate a client metadata document.
+
+    Returns `(document, fresh_for)`. Raises `ClientDocumentError` for every
+    way this can go wrong, and nothing else.
+    """
+    try:
+        parts = urlsplit(url)
+        port = parts.port or 443
+    except ValueError as exc:
+        raise ClientDocumentError("client_id is not a usable URL") from exc
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.path in ("", "/")
+        or parts.username is not None
+        or parts.fragment
+    ):
+        raise ClientDocumentError(
+            "client_id must be an https URL with a path, no credentials and "
+            "no fragment"
+        )
+
+    address = _public_address(parts.hostname, port)
+    literal = f"[{address}]" if address.version == 6 else str(address)
+    target = parts._replace(netloc=f"{literal}:{port}").geturl()
+    host_header = parts.hostname if port == 443 else f"{parts.hostname}:{port}"
+
+    deadline = time.monotonic() + CIMD_DEADLINE_SECONDS
+    session = _pinned_session(parts.hostname)
+    try:
+        response = session.get(
+            target,
+            headers={"Host": host_header, "Accept": "application/json"},
+            timeout=CIMD_STEP_TIMEOUT_SECONDS,
+            allow_redirects=False,
+            stream=True,
+        )
+        try:
+            if response.status_code != 200:
+                raise ClientDocumentError(f"answered HTTP {response.status_code}")
+            body = b""
+            for chunk in response.iter_content(8192):
+                body += chunk
+                if len(body) > CIMD_MAX_BYTES:
+                    raise ClientDocumentError("document is larger than 64 KB")
+                if time.monotonic() > deadline:
+                    raise ClientDocumentError("document took too long to arrive")
+            fresh_for = _fresh_for(response.headers.get("Cache-Control"))
+        finally:
+            response.close()
+    except requests.RequestException as exc:
+        raise ClientDocumentError(f"could not be fetched: {exc}") from exc
+    finally:
+        session.close()
+
+    try:
+        document = json.loads(body)
+    except ValueError as exc:
+        raise ClientDocumentError("document is not JSON") from exc
+    return validate_client_document(url, document), fresh_for
+
+
+def _document_client(client_id) -> Client:
+    """The client a fetched document describes, from the cache when it can be.
+
+    The cache is `OidcClientDocument` rows because Django's cache here is per
+    process and there are two workers.
+    """
+    now = timezone.now()
+    row = OidcClientDocument.objects.filter(client_id=client_id).first()
+
+    if row is not None and row.is_fresh:
+        if row.document:
+            return _client_from_document(row.document)
+        # A failure, remembered. Not tried again until it expires.
+        raise ClientError("invalid_client", row.last_error)
+
+    stale = (
+        row is not None
+        and bool(row.document)
+        and now <= row.expires_at + CIMD_STALE_LIMIT
+    )
+    # While a stale document is being served, the fetch that would replace it
+    # is retried at most this often. Per worker, which is close enough: the
+    # point is that an outage does not turn every sign-in into a five second
+    # wait on a dead host.
+    retry_key = "corliss:cimd-retry:" + hashlib.sha256(client_id.encode()).hexdigest()
+    if stale and cache.get(retry_key):
+        return _client_from_document(row.document)
+
+    try:
+        document, fresh_for = fetch_client_document(client_id)
+    except ClientDocumentError as exc:
+        reason = str(exc)[:500]
+        if stale:
+            log.warning(
+                "client metadata: serving a stale document for %s: %s",
+                client_id,
+                reason,
+            )
+            cache.set(retry_key, True, CIMD_FAILURE_TTL_SECONDS)
+            row.last_error = reason
+            row.save(update_fields=["last_error"])
+            return _client_from_document(row.document)
+        log.warning("client metadata: %s is unusable: %s", client_id, reason)
+        OidcClientDocument.objects.update_or_create(
+            client_id=client_id,
+            defaults={
+                "document": {},
+                "fetched_at": now,
+                "expires_at": now + timedelta(seconds=CIMD_FAILURE_TTL_SECONDS),
+                "last_error": reason,
+            },
+        )
+        raise ClientError("invalid_client", reason) from exc
+
+    OidcClientDocument.objects.update_or_create(
+        client_id=client_id,
+        defaults={
+            "document": document,
+            "fetched_at": now,
+            "expires_at": now + fresh_for,
+            "last_error": "",
+        },
+    )
+    return _client_from_document(document)
 
 
 def known_client(client_id):

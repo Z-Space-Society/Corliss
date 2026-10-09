@@ -1149,6 +1149,51 @@ where the member's notes live. The design is in
   It used to compare equal to a request that sent no secret. With `none` now
   advertised, that comparison could not stand.
 
+### Client metadata documents
+
+Claude's and Claude Code's `client_id` is a URL on `claude.ai`, and Corliss
+fetches what is served there to learn the client's name and where it may be
+redirected. **This is the one request Corliss makes to an address somebody
+else chose**, and each rule is about what that could be turned into.
+
+- **Only allowlisted URLs are fetched, and the allowlist is checked before any
+  network call.** `authorize` resolves the client before it asks anyone to
+  sign in, so without the list an anonymous request could make Corliss fetch
+  any URL.
+- **An allowlist entry is an exact URL or an origin**, and an origin is
+  compared on its parsed scheme, host and port. `https://claude.ai.evil.test`
+  and `https://claude.ai@evil.test` both start with an allowed origin as
+  strings.
+- **`https` only, with a path, no credentials and no fragment.**
+- **Never an internal address.** The host is resolved first and refused if
+  any answer is loopback, private, link-local, multicast or otherwise not
+  public. One internal answer among public ones refuses the name.
+- **The connection goes to the address that was checked**, not to the name,
+  so a second DNS answer cannot move it. TLS still asks for and verifies the
+  certificate for the hostname. Proxy settings from the environment are
+  ignored for the same reason.
+- **A redirect is a failure**, as is any status but `200`, a body over 64 KB,
+  or one that takes longer than about five seconds: connecting and each read
+  get two seconds, and the fetch is abandoned at five.
+- **The document's `client_id` must equal its URL exactly**, its
+  `token_endpoint_auth_method` must be `none` when stated, and every redirect
+  URI must be `https` or loopback `http`. **A custom scheme is accepted only
+  from Corliss's own document**: any app on a device can register one.
+- **Cached in the database**, in `OidcClientDocument`, because Django's cache
+  here is per worker. Fresh for an hour, or for the document's `max-age`
+  clamped to between five minutes and a day.
+- **A failed refetch serves the stale document for up to a day** past its
+  freshness, with a warning in the log, and retries at most once a minute per
+  worker. A client's site being down should not sign every member out.
+- **A failed first fetch is remembered for a minute**, so a broken URL cannot
+  be used to make Corliss fetch in a loop.
+- **A failure is an error page**, never a redirect. `last_error` on the row,
+  visible in the Django admin, says what went wrong.
+
+Run against the real document once while this was built, and against
+addresses holding another site's certificate to confirm the connection is
+refused. The suite itself never touches the network.
+
 ### Signing in and consent
 
 What a public client's member meets at `/oidc/authorize`, in order:
@@ -1280,6 +1325,8 @@ An operator disconnects one client from one member by deleting its rows under
 | Setting | Meaning |
 | ------- | ------- |
 | `OIDC_RESOURCES` | The resources a public client can get a token for, as a JSON list of `{"url", "kind", "label"}`. `kind` is `sync` or `mcp`, at most one of each. Blank issues nothing to any public client. |
+
+| `OIDC_CLIENT_METADATA_ALLOWLIST` | Which `client_id` URLs may sign members in, comma separated: exact URLs, or origins such as `https://claude.ai`. Blank accepts only the SCN Sync plugin. |
 
 - **`url` becomes `aud` exactly as written**, and the relay compares it
   character for character against `SCN_SYNC_RELAY_SYNC_AUDIENCE` and

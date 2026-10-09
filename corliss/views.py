@@ -2241,6 +2241,11 @@ def authorize(request):
     try:
         client = oidc.resolve_client(client_id)
     except oidc.ClientError as exc:
+        # A `client_id` that is a URL is a public client, and a person is
+        # looking at this response in a browser. Anything else keeps the JSON
+        # a relying party's own code has always been answered with.
+        if (client_id or "").startswith("https://"):
+            return _oauth_error_page(request, exc.error, exc.description)
         return _error(exc.error, exc.description)
     if client.is_public:
         return _authorize_public(request, client)
