@@ -30,6 +30,7 @@ only by being genuinely standalone.
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
 | `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
 | `corliss/membership.py` | The whole registry relationship: consuming its membership push, reconciling the cache against it, reading the application queue, writing grants and revocations as the acting admin, and resolving whether a DID is currently a member. |
+| `corliss/sync_relay.py` | A member's vaults on scn-sync-relay: list them, create one. The only place the relay's service token is used. |
 | `corliss/litellm.py` | Provisioning members into LiteLLM and issuing their API keys — the only place a gateway credential is used (same one-relationship-one-module rule). |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
@@ -333,6 +334,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Account — your own name and email (signed in) | `/account/` |
 | API keys — issue, revoke, usage (members) | `/api/` |
 | Parascribe — transcription quickstart (signed in) | `/tools/parascribe/` |
+| Obsidian — the notes service, your vaults, create a vault (members) | `/vaults/` |
 | Workspaces — the ones you are in (members) | `/workspaces/` |
 | New workspace (members) | `/workspaces/new` |
 | A workspace — rename, add/remove members (its own members) | `/workspaces/<id>/` |
@@ -1066,7 +1068,7 @@ roster. Making one takes a cluster membership; changing one takes being in it.
 ## The nav
 
 Left of the divider: the brand, then **About**. Right of it: **Workspaces**,
-**API**, **Tools**, **Manage** for admins, then the account chip.
+**Obsidian**, **API**, **Tools**, **Manage** for admins, then the account chip.
 
 **Tools has two groups, and they are not one list with a rule in it.** *Hosted
 apps* run on this cluster and answer to GATE — Open WebUI is closed to a
@@ -1120,6 +1122,45 @@ touch-specific details follow from it, all in `base.css`:
 - **Under 720px the row wraps and menus drop full width beneath the nav**,
   instead of hanging from a trigger mid-row where they would run off the screen,
   and every target grows to thumb size.
+
+## Obsidian: `/vaults/`
+
+Members keep notes on the cluster and reach them from Obsidian and from
+Claude. The notes and the record of who owns which vault live on
+[scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay). This page
+explains the service, lists the member's vaults, creates one, and gives the two
+addresses to connect with. **A vault is created here and nowhere else**: the
+plugin and Claude only ever pick from the list.
+
+- **Nothing about a vault is stored in Corliss.** The page asks the relay each
+  time it renders. A vault exists when the relay says so.
+- **No request chooses whose vaults.** The relay's service token can list and
+  create for any DID, so the DID is the signed-in member's for both, and a
+  `did` in the query string or the form is never read. Handing one member
+  another's vault names would be this page's worst failure.
+- **The relay is called at its internal address**, `SYNC_RELAY_URL`, never the
+  public sync URL shown on the page. The relay's proxy does not route
+  `/internal/` at all.
+- **Redirects are not followed**, so the service token cannot be carried to an
+  address the relay did not answer from.
+- **Nothing is retried.** A failed create is shown beside the form with the
+  name kept, and the member presses the button again.
+- **The instructions render in every state.** The list depends on the relay
+  answering and the explanation does not.
+
+| State | The page shows |
+| ----- | -------------- |
+| `SYNC_RELAY_URL` or `SYNC_RELAY_SERVICE_TOKEN` blank | The instructions, and that vaults are not set up on this deployment. No form. |
+| The relay unreachable, or any answer but `200` | The instructions, and that the service did not answer. No form. |
+| Answered | The list and the form, or that there are no vaults yet and the form. |
+
+The two addresses shown are the `sync` and `mcp` entries of `OIDC_RESOURCES`,
+so what a member pastes is the same string the relay checks tokens against.
+
+| Setting | Meaning |
+| ------- | ------- |
+| `SYNC_RELAY_URL` | The relay's **internal** origin. The same setting `/systems/` probes. |
+| `SYNC_RELAY_SERVICE_TOKEN` | The credential for the relay's `/internal/vaults`, shared with the relay as `SCN_SYNC_RELAY_SERVICE_TOKEN`. Blank leaves the page saying vaults are not set up. |
 
 ## Public clients: Claude, Claude Code and SCN Sync
 
@@ -1314,8 +1355,11 @@ How long a removed member keeps access:
 | Push missed | The next `reconcile_membership` run, plus 15 minutes |
 | An admin with no grant removed from the roster | 5 minutes of roster cache, plus 15 minutes |
 
-A missed push is bounded only by a scheduled reconcile. The deployment runs
-`manage.py reconcile_membership` hourly for that reason.
+A missed push is bounded only by a scheduled reconcile, and with none it is
+not bounded at all. Public clients are the reason the deployment needs
+`manage.py reconcile_membership` on an hourly timer, which makes the worst
+case 75 minutes. The timer is the deployment's to provide; nothing in this
+repo schedules it.
 
 An operator disconnects one client from one member by deleting its rows under
 **Oidc refresh tokens** in the Django admin.

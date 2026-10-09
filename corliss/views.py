@@ -26,6 +26,9 @@ section below defines them and says when to reach for which.
 - `api`: the member's own API keys — issue, list, revoke, and usage, read live
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
+- `vaults`: the Obsidian page. What the notes service is, how to connect
+  Obsidian and Claude to it, and the member's vaults, which live on the sync
+  relay and are listed and created through `corliss.sync_relay`.
 - `parascribe`: how to call the cluster's transcription models. Signed-in, and
   names only the models the reader's own tier reaches.
 - `manage`: the cluster console — applications, members, admins, and
@@ -89,7 +92,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from corliss import atproto, health, litellm, membership, oidc, signing
+from corliss import atproto, health, litellm, membership, oidc, signing, sync_relay
 from corliss.forms import AccountForm, WorkspaceForm
 from corliss.models import (
     AtprotoToken,
@@ -1345,6 +1348,70 @@ def parascribe(request):
             "models": models,
             "models_error": models_error,
             "example_model": models[0].name if models else EXAMPLE_MODEL_FALLBACK,
+        },
+    )
+
+
+@member_required
+@require_http_methods(["GET", "POST"])
+def vaults(request):
+    """The Obsidian page: the notes service, and the member's vaults.
+
+    The vaults are the relay's, not ours. This view asks `corliss.sync_relay`
+    for them and stores nothing.
+
+    **No request chooses whose vaults.** The relay's service token can list
+    and create for any DID, so the DID is `request.user.did` for both, and a
+    `did` in the query string or the form is never read.
+
+    No state of the relay raises here or hides the instructions: not
+    configured and unreachable are both things the page says about itself.
+    """
+    did = request.user.did
+    configured = sync_relay.is_configured()
+    name = ""
+    name_error = None
+
+    if request.method == "POST" and configured:
+        name = request.POST.get("name", "").strip()
+        if not name:
+            name_error = "Give the vault a name."
+        elif len(name) > sync_relay.VAULT_NAME_MAX:
+            name_error = (
+                f"A vault name can be at most {sync_relay.VAULT_NAME_MAX} characters."
+            )
+        else:
+            try:
+                sync_relay.create_vault(did, name)
+            except sync_relay.NameTaken:
+                name_error = "You already have a vault with that name."
+            except sync_relay.SyncRelayError:
+                name_error = "The vault could not be created right now. Try again shortly."
+            else:
+                # Back to the page, which now lists it.
+                return redirect("vaults")
+
+    member_vaults = None
+    if configured:
+        try:
+            member_vaults = sync_relay.list_vaults(did)
+        except sync_relay.SyncRelayError:
+            pass
+
+    by_kind = {resource.kind: resource.url for resource in oidc.resources()}
+    return render(
+        request,
+        "vaults.html",
+        {
+            "configured": configured,
+            # None when the relay did not answer; a list, possibly empty, when
+            # it did. The template tells the two apart.
+            "vaults": member_vaults,
+            "reachable": member_vaults is not None,
+            "name": name,
+            "name_error": name_error,
+            "sync_url": by_kind.get("sync", ""),
+            "mcp_url": by_kind.get("mcp", ""),
         },
     )
 
