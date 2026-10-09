@@ -1217,6 +1217,64 @@ contract with the relay, which answers anything else with a bare `401`.
 - **Fifteen minutes is the revocation bound.** Nothing revokes an access token
   once issued.
 
+### Refresh tokens
+
+An access token lasts fifteen minutes, so a connected client refreshes
+constantly. **The refresh grant is where "stops when you are not a member" is
+enforced for every public client**: it asks `membership.may_enter` every time.
+
+- **Issued to a client whose metadata document lists the `refresh_token`
+  grant, whatever scope it asked for.** Not tied to `offline_access`. The
+  relay advertises no scopes and Claude Code's document declares none, so a
+  client may never ask, and one without a refresh token would sign its member
+  in again every fifteen minutes.
+- **Opaque, and only the SHA-256 hash is stored.** A copy of the table is not
+  a set of credentials.
+- **Bound to one member, one client and one resource.** A member using both
+  sync and Claude holds two, in two families.
+- **Used once.** Each refresh returns a new refresh token and starts a new
+  thirty days, so a client in use never expires and an abandoned one does.
+- **A token presented twice ends its whole family**, and the member signs in
+  again. Two holders cannot be told apart, so both lose it.
+- **Except a retry within 60 seconds whose first answer was never used.**
+  That is a client that sent the request and never saw the response, which is
+  what iOS suspending Obsidian mid-refresh looks like. The retry gets its own
+  pair and the pair it never received is superseded. Once anything issued from
+  the token has been used, a replay is a replay again.
+- **The grant runs under a row lock**, not a conditional update. Two
+  concurrent retries of one used token would otherwise each leave a live
+  successor.
+- **Every refusal is `invalid_grant` or `invalid_target`.** Claude treats any
+  other code as a server fault and retries instead of signing in again.
+- **Revocation deletes the member's refresh tokens** in
+  `membership.apply_event`. That is a tidy-up: the membership check refuses
+  them whether or not the delete ran, and a test holds it to that.
+- **Signing out of Corliss leaves them alone.** A browser session and an app
+  on another device are not connected, and signing out of the website must
+  not stop Obsidian syncing on a phone.
+- **The token endpoint fetches no client document.** A code or refresh token
+  already records its client, and the client's declared grants are read from
+  the row `authorize` cached. This keeps it inside Claude's ten second limit.
+- **It can still make one outbound call: the admin roster read inside
+  `may_enter`.** That happens only for a DID with no active grant, which is
+  the refusal path and the roster admin with no grant, and at most once per
+  worker per `ROSTER_CACHE_TTL` (five minutes). It is asked before the row is
+  locked, so no lock is held across the network.
+
+How long a removed member keeps access:
+
+| Event | Access ends within |
+| ----- | ------------------ |
+| Revocation pushed by the registry and applied | 15 minutes, the life of the access token already issued |
+| Push missed | The next `reconcile_membership` run, plus 15 minutes |
+| An admin with no grant removed from the roster | 5 minutes of roster cache, plus 15 minutes |
+
+A missed push is bounded only by a scheduled reconcile. The deployment runs
+`manage.py reconcile_membership` hourly for that reason.
+
+An operator disconnects one client from one member by deleting its rows under
+**Oidc refresh tokens** in the Django admin.
+
 ### Settings
 
 | Setting | Meaning |

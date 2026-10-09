@@ -75,6 +75,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.db.models import Count, OuterRef, Subquery
 from django.http import (
     Http404,
@@ -95,6 +96,7 @@ from corliss.models import (
     MembershipCache,
     OidcAuthCode,
     OidcConsent,
+    OidcRefreshToken,
     Workspace,
 )
 
@@ -2409,6 +2411,14 @@ def _public_code_grant(request, cid):
         "expires_in": oidc.ACCESS_TOKEN_TTL_SECONDS,
         "scope": code.scope,
     }
+    if oidc.issues_refresh_tokens(cid):
+        body["refresh_token"], _ = OidcRefreshToken.issue(
+            user=code.user,
+            client_id=cid,
+            resource=code.resource,
+            scope=code.scope,
+            ttl=oidc.REFRESH_TOKEN_TTL,
+        )
     if "openid" in code.scope.split():
         # No `sid` and no `OidcSession` row: that row exists to carry `sid`
         # for back-channel logout, and a public client has no logout endpoint
@@ -2418,6 +2428,92 @@ def _public_code_grant(request, cid):
             code.user, client_id=cid, nonce=code.nonce
         )
     return _token_response(body)
+
+
+def _public_refresh_grant(request, cid):
+    """Trade a refresh token for a new access token and a new refresh token.
+
+    **This is where "stops when you are not a member" is enforced for every
+    public client.** An access token lasts fifteen minutes and nothing revokes
+    one, so the refresh is the only moment Corliss is asked again, and it asks
+    `membership.may_enter` every time. Deleting a revoked member's tokens (see
+    `membership.apply_event`) is a tidy-up; this check holds without it.
+
+    Every refusal is `invalid_grant` or `invalid_target`. Claude treats any
+    other code as a server fault and retries instead of signing in again.
+
+    The order of the checks is the spec's and each step has a reason to sit
+    where it does: reuse is judged before expiry so that replaying an old
+    token still ends its family, and membership before the claim so that a
+    refused member's token is deleted rather than spent.
+    """
+    found = OidcRefreshToken.lookup(request.POST.get("refresh_token", ""))
+    if found is None:
+        return _error("invalid_grant", "unknown refresh token")
+
+    # Asked before the row is locked. For a DID with no active grant this can
+    # read the admin roster over the network, and a lock has no business
+    # being held across that.
+    is_member = membership.may_enter(found.user.did)
+
+    with transaction.atomic():
+        # The lock is what makes rotation safe under concurrency: two requests
+        # with one token are served one after the other, and the second sees
+        # what the first did. `of=("self",)` keeps the member's row out of it.
+        row = (
+            OidcRefreshToken.objects.select_for_update(of=("self",))
+            .select_related("user")
+            .filter(pk=found.pk)
+            .first()
+        )
+        if row is None:
+            # Its family was deleted between the lookup and the lock.
+            return _error("invalid_grant", "unknown refresh token")
+        if row.client_id != cid:
+            return _error("invalid_grant", "refresh token was issued to another client")
+
+        if row.is_spent:
+            if not row.is_lost_response_retry(oidc.REFRESH_REUSE_GRACE):
+                # Two parties hold this token. Neither can be told from the
+                # other, so both lose it and the member signs in again.
+                row.revoke_family()
+                return _error("invalid_grant", "refresh token already used")
+            row.supersede_unused_children()
+
+        if row.is_expired:
+            return _error("invalid_grant", "refresh token expired")
+
+        requested = request.POST.get("resource")
+        if requested:
+            resource = oidc.match_resource(requested)
+            if resource is None or resource.url != row.resource:
+                return _error("invalid_target", "resource does not match the token")
+
+        if not is_member:
+            row.revoke_family()
+            return _error("invalid_grant", "no longer a member")
+
+        row.mark_used()
+        new_refresh, _ = OidcRefreshToken.issue(
+            user=row.user,
+            client_id=cid,
+            resource=row.resource,
+            scope=row.scope,
+            ttl=oidc.REFRESH_TOKEN_TTL,
+            parent=row,
+        )
+        scope = oidc.narrow_scope(row.scope, request.POST.get("scope", ""))
+        return _token_response(
+            {
+                "access_token": oidc.mint_access_token(
+                    row.user, client_id=cid, resource=row.resource, scope=scope
+                ),
+                "token_type": "Bearer",
+                "expires_in": oidc.ACCESS_TOKEN_TTL_SECONDS,
+                "scope": scope,
+                "refresh_token": new_refresh,
+            }
+        )
 
 
 def _token_public(request, cid):
@@ -2432,9 +2528,14 @@ def _token_public(request, cid):
     if not cid or "://" not in cid:
         return _error("invalid_client", "client authentication failed", status=401)
 
-    if request.POST.get("grant_type") == "authorization_code":
+    grant_type = request.POST.get("grant_type")
+    if grant_type == "authorization_code":
         return _public_code_grant(request, cid)
-    return _error("unsupported_grant_type", "only authorization_code")
+    if grant_type == "refresh_token":
+        return _public_refresh_grant(request, cid)
+    return _error(
+        "unsupported_grant_type", "only authorization_code and refresh_token"
+    )
 
 
 @csrf_exempt  # machine-to-machine: a client secret, or a PKCE verifier

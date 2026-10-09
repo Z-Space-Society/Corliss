@@ -35,7 +35,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from corliss import signing
-from corliss.models import OidcAuthCode, OidcSession, User
+from corliss.models import OidcAuthCode, OidcClientDocument, OidcSession, User
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,12 @@ ID_TOKEN_TTL_SECONDS = 3600
 # the whole of how long a removed member keeps access to a resource, and the
 # relay closes a sync connection at `exp`.
 ACCESS_TOKEN_TTL_SECONDS = 900
+# Thirty days from each use, not from sign-in: a client in regular use never
+# expires and an abandoned one does.
+REFRESH_TOKEN_TTL = timedelta(days=30)
+# How long after a refresh the same token is accepted once more, for a client
+# that never received the answer. See `OidcRefreshToken.is_lost_response_retry`.
+REFRESH_REUSE_GRACE = timedelta(seconds=60)
 
 
 def base_url() -> str:
@@ -144,6 +150,36 @@ def resolve_client(client_id) -> Client:
     raise ClientError("unauthorized_client", "unknown client_id")
 
 
+def known_client(client_id):
+    """The public client a `client_id` names, **without fetching anything**.
+
+    For the token endpoint, which must answer inside a client's deadline and
+    so never makes an outbound request for a document. Corliss's own document
+    comes from the function that builds it, anyone else's from the row
+    `authorize` cached when the member signed in. None when there is neither.
+    """
+    if client_id and client_id == plugin_client_id():
+        return _client_from_document(plugin_client_metadata())
+    row = OidcClientDocument.objects.filter(client_id=client_id).first()
+    if row is not None and row.document:
+        return _client_from_document(row.document)
+    return None
+
+
+def issues_refresh_tokens(client_id) -> bool:
+    """Whether this client is given a refresh token with its access token.
+
+    Decided by the `refresh_token` grant in the client's own document, and
+    deliberately **not** by the `offline_access` scope. The relay advertises
+    no scopes and Claude Code's document declares none, so a client may never
+    ask for it, and one with no refresh token signs its member in again every
+    fifteen minutes. Membership is re-checked on every refresh, which is the
+    control that matters; the scope would add nothing to it.
+    """
+    client = known_client(client_id)
+    return client is not None and "refresh_token" in client.grant_types
+
+
 # --- Resources --------------------------------------------------------------
 #
 # The services an access token can be issued for. Each is named by its public
@@ -238,6 +274,18 @@ def match_resource(requested):
 # --- Request checks for public clients --------------------------------------
 
 SCOPES = ("openid", "profile", "email", "offline_access")
+
+
+def narrow_scope(granted, requested) -> str:
+    """The scope for an access token issued on refresh.
+
+    A client may ask for less than it was granted and never for more. With no
+    request it gets what it was granted.
+    """
+    if not requested:
+        return granted
+    wanted = requested.split()
+    return " ".join(value for value in granted.split() if value in wanted)
 
 
 def grant_scope(requested) -> str:

@@ -478,6 +478,42 @@ class OidcRefreshToken(models.Model):
     def is_expired(self) -> bool:
         return timezone.now() >= self.expires_at
 
+    @property
+    def is_spent(self) -> bool:
+        """Already used, or replaced. Presenting it again is a replay."""
+        return self.used_at is not None or self.superseded_at is not None
+
+    def is_lost_response_retry(self, grace) -> bool:
+        """Whether a replay of this token is a client retrying, not a thief.
+
+        True when it was used moments ago and nothing issued from it has been
+        used since: the client sent the request, never saw the answer, and is
+        asking again with the only token it has. iOS suspending Obsidian in the
+        middle of a refresh is the ordinary case. Once a successor has been
+        used, somebody did receive the answer, and a second holder of this
+        token is exactly what the reuse rule exists to catch.
+        """
+        return (
+            self.used_at is not None
+            and self.superseded_at is None
+            and timezone.now() - self.used_at <= grace
+            and not self.children.filter(used_at__isnull=False).exists()
+        )
+
+    def supersede_unused_children(self):
+        """Retire the successors a lost response left behind, so that only the
+        pair issued to the retry is live."""
+        self.children.filter(used_at__isnull=True, superseded_at__isnull=True).update(
+            superseded_at=timezone.now()
+        )
+
+    def mark_used(self):
+        """Stamp first use. A retry keeps the original time, so the grace
+        window is measured from the request that was lost."""
+        if self.used_at is None:
+            self.used_at = timezone.now()
+            self.save(update_fields=["used_at"])
+
     def __str__(self):
         return f"OidcRefreshToken({self.user}, {self.client_id})"
 

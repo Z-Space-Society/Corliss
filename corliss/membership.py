@@ -66,7 +66,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from corliss import atproto, litellm, oidc
-from corliss.models import MembershipCache, User
+from corliss.models import MembershipCache, OidcRefreshToken, User
 
 log = logging.getLogger(__name__)
 
@@ -275,6 +275,14 @@ def apply_event(parsed):
     did = parsed["did"]
 
     if ends_live_membership:
+        # The public clients' half of the same event: Claude and Obsidian
+        # hold refresh tokens, not sessions. A plain delete, so it runs here
+        # in the transaction rather than after it. **Nothing depends on it.**
+        # The refresh grant asks `may_enter` every time and refuses a revoked
+        # member whether or not these rows are gone; this only keeps the table
+        # from holding tokens that can no longer mint anything.
+        OidcRefreshToken.revoke_for_did(did)
+
         # Two relying parties on one event, and neither may swallow the other:
         # chat holds a session that outlives the grant, and LiteLLM holds keys
         # that do the same. `_notify` keeps one failing from skipping the next.
