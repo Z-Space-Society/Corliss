@@ -2,7 +2,15 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.db.models import Count, OuterRef, Subquery
 
-from corliss.models import MembershipCache, OidcSession, User, Workspace
+from corliss.models import (
+    MembershipCache,
+    OidcClientDocument,
+    OidcConsent,
+    OidcRefreshToken,
+    OidcSession,
+    User,
+    Workspace,
+)
 
 
 @admin.register(User)
@@ -167,11 +175,95 @@ class OidcSessionAdmin(admin.ModelAdmin):
         return False
 
 
+@admin.register(OidcRefreshToken)
+class OidcRefreshTokenAdmin(admin.ModelAdmin):
+    """The refresh tokens public clients hold: Claude, Claude Code, SCN Sync.
+
+    Read-only, with **delete allowed, and delete is the point**: it is how an
+    operator disconnects one client from one member. The client's next refresh
+    fails and the member signs in again. Deleting here cannot let anyone in,
+    and it does not need to be done for a revoked member, whose refresh is
+    refused by the membership check whether or not the row is still here.
+
+    Only the token's hash is stored, so nothing on this page is a credential.
+    """
+
+    list_display = ("user", "client_id", "resource", "created_at", "expires_at", "used_at")
+    list_filter = ("resource",)
+    search_fields = ("user__did", "user__username", "client_id")
+    ordering = ("-created_at",)
+    readonly_fields = (
+        "token_hash",
+        "user",
+        "client_id",
+        "resource",
+        "scope",
+        "family",
+        "parent",
+        "created_at",
+        "expires_at",
+        "used_at",
+        "superseded_at",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(OidcConsent)
+class OidcConsentAdmin(admin.ModelAdmin):
+    """Which public clients a member has allowed, and for which resource.
+
+    Read-only with delete allowed. Deleting a row makes the consent screen
+    appear again at that client's next sign-in. It ends no session: the
+    client's refresh tokens are on the page above.
+    """
+
+    list_display = ("user", "client_id", "resource", "created_at")
+    search_fields = ("user__did", "user__username", "client_id")
+    ordering = ("-created_at",)
+    readonly_fields = ("user", "client_id", "resource", "created_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(OidcClientDocument)
+class OidcClientDocumentAdmin(admin.ModelAdmin):
+    """The client metadata documents Corliss has fetched, and when.
+
+    Read-only, delete included. The document is the client's own statement
+    about itself, fetched from its `client_id` URL, so an edit here would be a
+    claim nobody made. A row refetches on its own once it is stale.
+    `last_error` is where to look when a client cannot sign in.
+    """
+
+    list_display = ("client_id", "fetched_at", "expires_at", "last_error")
+    search_fields = ("client_id",)
+    ordering = ("client_id",)
+    readonly_fields = ("client_id", "document", "fetched_at", "expires_at", "last_error")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(Workspace)
 class WorkspaceAdmin(admin.ModelAdmin):
     """The workspaces members have made, and who is in them.
 
-    **Fully editable, unlike the two pages above, and the difference is the
+    **Fully editable, unlike the pages above, and the difference is the
     point.** `MembershipCache` is read-only because the registry owns it and an
     edit here would be reverted; `OidcSession` because it is a belief about
     somebody else's state. A workspace is local Corliss data with no external

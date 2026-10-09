@@ -1,12 +1,19 @@
 """Corliss's data model — deliberately small, all in one module.
 
-Six models: the DID-keyed `User` everything references, the server-side
+Nine models: the DID-keyed `User` everything references, the server-side
 atproto token store, the OIDC provider's short-lived auth codes, the record of
-which relying parties hold a session, the membership cache, and the workspace a
-group of members shares. The import contract is `from corliss.models import
+which relying parties hold a session, the membership cache, the workspace a
+group of members shares, and three for public OAuth clients: their refresh
+tokens, the cache of their metadata documents, and the consent a member gave
+them. The import contract is `from corliss.models import
 ...`; if this file ever grows unwieldy it can become a `models/` package
 re-exporting the same names without touching callers or the database.
 """
+
+import hashlib
+import secrets
+import uuid
+from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
@@ -265,16 +272,31 @@ class OidcAuthCode(models.Model):
 
     code = models.CharField(max_length=128, unique=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    client_id = models.CharField(max_length=255)
-    redirect_uri = models.URLField()
+    # A public client's `client_id` is the URL of its metadata document, so
+    # this is as long as a URL may be.
+    client_id = models.CharField(max_length=2000)
+    # Stored as requested, port included, and compared exactly at the token
+    # endpoint. A plain CharField because a loopback or custom-scheme URI is
+    # not something Django's URL validator accepts.
+    redirect_uri = models.CharField(max_length=2000)
     nonce = models.CharField(max_length=255, blank=True)
     scope = models.CharField(max_length=255, blank=True)
+    # Both blank for the confidential client, and for a code issued before
+    # these columns existed, which must still redeem.
+    code_challenge = models.CharField(max_length=128, blank=True)
+    resource = models.CharField(max_length=2000, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     expires_at = models.DateTimeField()
     used = models.BooleanField(default=False)
 
     def is_valid(self) -> bool:
         return not self.used and timezone.now() < self.expires_at
+
+    @classmethod
+    def purge_expired(cls):
+        """Delete codes past their expiry. Called when a code is issued, so the
+        table stays small with no scheduled job."""
+        cls.objects.filter(expires_at__lt=timezone.now()).delete()
 
     def __str__(self):
         return f"OidcAuthCode({self.user}, used={self.used})"
@@ -349,6 +371,182 @@ class OidcSession(models.Model):
 
     def __str__(self):
         return f"OidcSession({self.user}, {self.client_id})"
+
+
+class OidcRefreshToken(models.Model):
+    """A refresh token held by a public client, for one member and one resource.
+
+    Only the SHA-256 hash is stored. The token itself is 48 random bytes, so
+    the hash needs no salt, and a copy of this table hands nobody a working
+    credential.
+
+    **A token is used once.** Each use issues a successor in the same
+    `family`, linked through `parent`. A token presented a second time means
+    two parties hold it, so the whole family is deleted and the member signs in
+    again. The one exception is a retry inside the grace window after a
+    response that never arrived; `superseded_at` marks the successor that
+    retry replaced, and a superseded token is never accepted.
+
+    **Holding one is not what keeps a member connected.** The refresh grant
+    asks `membership.may_enter` every time, so a row here that outlives a
+    membership mints nothing.
+    """
+
+    # Used rows are kept this long so that a replay is recognised as one.
+    USED_RETENTION = timedelta(days=1)
+
+    token_hash = models.CharField(max_length=64, unique=True)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="oidc_refresh_tokens",
+    )
+    client_id = models.CharField(max_length=2000)
+    # The one resource this token can mint access tokens for. A member using
+    # both sync and MCP holds two of these.
+    resource = models.CharField(max_length=2000)
+    scope = models.CharField(max_length=255, blank=True)
+    family = models.UUIDField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="children",
+    )
+    superseded_at = models.DateTimeField(null=True, blank=True)
+
+    @staticmethod
+    def hash_token(raw: str) -> str:
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    @classmethod
+    def issue(cls, *, user, client_id, resource, scope, ttl, parent=None):
+        """Create a token and return `(raw, row)`. The raw value exists only in
+        this return; nothing can recover it afterwards.
+
+        With a `parent` the new token joins that token's family, otherwise it
+        starts one.
+        """
+        cls.purge_stale()
+        raw = secrets.token_urlsafe(48)
+        row = cls.objects.create(
+            token_hash=cls.hash_token(raw),
+            user=user,
+            client_id=client_id,
+            resource=resource,
+            scope=scope,
+            family=parent.family if parent else uuid.uuid4(),
+            parent=parent,
+            expires_at=timezone.now() + ttl,
+        )
+        return raw, row
+
+    @classmethod
+    def lookup(cls, raw: str):
+        """The row for a presented token, or None."""
+        return (
+            cls.objects.select_related("user")
+            .filter(token_hash=cls.hash_token(raw or ""))
+            .first()
+        )
+
+    @classmethod
+    def purge_stale(cls):
+        """Delete expired tokens, and used ones past `USED_RETENTION`."""
+        now = timezone.now()
+        cls.objects.filter(
+            models.Q(expires_at__lt=now)
+            | models.Q(used_at__lt=now - cls.USED_RETENTION)
+        ).delete()
+
+    @classmethod
+    def revoke_for_did(cls, did) -> int:
+        """Delete every refresh token a member holds. Returns how many."""
+        deleted, _ = cls.objects.filter(user__did=did).delete()
+        return deleted
+
+    def revoke_family(self) -> int:
+        """Delete every token descended from the same authorization."""
+        deleted, _ = type(self).objects.filter(family=self.family).delete()
+        return deleted
+
+    @property
+    def is_expired(self) -> bool:
+        return timezone.now() >= self.expires_at
+
+    def __str__(self):
+        return f"OidcRefreshToken({self.user}, {self.client_id})"
+
+
+class OidcClientDocument(models.Model):
+    """A cached Client ID Metadata Document, as fetched from its `client_id`.
+
+    **A cache, and the database is where it lives** because Django's default
+    cache here is per process and there are two workers. Deleting a row costs
+    one refetch at the next authorize.
+
+    A row with an empty `document` and a `last_error` records a first fetch
+    that failed. It is remembered briefly so that a broken URL cannot be used
+    to make Corliss fetch in a loop.
+    """
+
+    client_id = models.CharField(max_length=2000, unique=True)
+    document = models.JSONField(default=dict, blank=True)
+    fetched_at = models.DateTimeField()
+    # When the row stops being fresh. A stale document may still be served if
+    # the refetch fails; see `corliss.oidc`.
+    expires_at = models.DateTimeField()
+    last_error = models.CharField(max_length=500, blank=True)
+
+    @property
+    def is_fresh(self) -> bool:
+        return timezone.now() < self.expires_at
+
+    def __str__(self):
+        return f"OidcClientDocument({self.client_id})"
+
+
+class OidcConsent(models.Model):
+    """A member allowed a public client to open a resource.
+
+    One row per member, client and resource. Its presence is what lets a later
+    authorize skip the consent screen. Deleting a row asks again next time and
+    ends nothing already issued; refresh tokens are what disconnect a client.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="oidc_consents",
+    )
+    client_id = models.CharField(max_length=2000)
+    resource = models.CharField(max_length=2000)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "client_id", "resource"],
+                name="unique_oidc_consent",
+            )
+        ]
+
+    @classmethod
+    def given(cls, user, *, client_id, resource) -> bool:
+        return cls.objects.filter(
+            user=user, client_id=client_id, resource=resource
+        ).exists()
+
+    @classmethod
+    def record(cls, user, *, client_id, resource):
+        cls.objects.get_or_create(user=user, client_id=client_id, resource=resource)
+
+    def __str__(self):
+        return f"OidcConsent({self.user}, {self.client_id})"
 
 
 class MembershipCache(models.Model):

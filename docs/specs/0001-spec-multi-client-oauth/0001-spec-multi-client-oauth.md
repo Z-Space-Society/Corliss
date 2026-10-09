@@ -255,9 +255,12 @@ workers.
   warning.
 - A failed first fetch is remembered for 60 seconds, so a broken URL cannot be
   used to make Corliss fetch in a loop.
-- Only `authorize` fetches. The token endpoint never makes an outbound
-  request: a code or refresh token already records the client it was issued
-  to. This keeps the token endpoint inside Claude's 10 second limit.
+- Only `authorize` fetches a client document. The token endpoint never
+  does: a code or refresh token already records the client it was issued
+  to. This keeps the token endpoint inside Claude's 10 second limit. The
+  one outbound call the token endpoint can make is the admin roster read
+  inside `may_enter`, and only for a DID with no active grant, at most once
+  per worker per `ROSTER_CACHE_TTL`.
 
 ## C3. PKCE
 
@@ -377,14 +380,20 @@ Token response for a public client:
   "token_type": "Bearer",
   "expires_in": 900,
   "scope": "offline_access",
-  "refresh_token": "<opaque, when offline_access was granted>",
+  "refresh_token": "<opaque, when the client's document lists the refresh_token grant>",
   "id_token": "<jwt, when openid was granted>"
 }
 ```
 
 ## C5. Refresh tokens
 
-- Issued at code exchange when `offline_access` is in the granted scope.
+- Issued at code exchange when the client's metadata document lists
+  `refresh_token` in `grant_types`. Not tied to the `offline_access` scope:
+  the relay's protected resource metadata advertises no scopes and Claude
+  Code's document declares none, so a client may never ask for it, and
+  without a refresh token it would sign in again every 15 minutes. The
+  membership check at step 6 is the control. The token endpoint reads the
+  cached document and does not fetch.
 - Opaque, from `secrets.token_urlsafe(48)`. Only the SHA-256 hash is stored.
 - Bound to member, client, resource and scope. All tokens descended from one
   authorization share a `family`.
@@ -409,11 +418,13 @@ The `refresh_token` grant, in order:
 6. **Membership.** `membership.may_enter(did)`. If false, delete the family
    and return `invalid_grant`. This is the membership rule for every public
    client.
-7. Claim the token with a conditional update, so that of two concurrent
-   requests only one wins, the way codes are claimed today
-   (`corliss/views.py:2145-2149`). The loser is handled as a replay under
-   step 3, which inside the window gives it its own pair and supersedes the
-   winner's.
+7. Claim the token. Steps 1 to 8 run in one transaction holding a row lock
+   on the token (`select_for_update`), so two concurrent requests are served
+   one after the other. The second finds the token used and is handled as a
+   replay under step 3, which inside the window gives it its own pair and
+   supersedes the first's. A conditional update alone is not enough here:
+   two concurrent retries of a used token would each issue a successor and
+   neither would supersede the other.
 8. Issue a new access token and a new refresh token in the same family, with
    the same resource and scope, in the same response.
 
@@ -535,7 +546,7 @@ client.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `OIDC_RESOURCES` | empty | Resource URLs tokens may be issued for, each with a label and a kind (`sync` or `mcp`). Empty refuses every public client. |
+| `OIDC_RESOURCES` | empty | Resource URLs tokens may be issued for, as a JSON list of `{"url", "kind", "label"}` objects, with kind `sync` or `mcp`. Empty refuses every public client. A value that is not that shape fails `manage.py check`, and so the deploy. |
 | `OIDC_CLIENT_METADATA_ALLOWLIST` | empty | Exact URLs or origins. Empty accepts only Corliss's own documents. |
 | `SYNC_RELAY_URL` | exists | Internal relay address. Already used by `/systems/`. Reused for C7. |
 | `SYNC_RELAY_SERVICE_TOKEN` | empty | Shared credential for the relay's `/internal/vaults`, used to list and to create. Empty shows "not configured" on the Obsidian page. |
@@ -671,30 +682,19 @@ Further unit coverage:
 
 ## Sequencing
 
-**The relay is blocked on Corliss**, in this order:
+**The relay is built first.** Its verifier is written against the token
+contract above and tested with tokens its own tests mint, so it does not
+wait for C6. The contract is the interface: Corliss must issue exactly what
+that section says.
 
-1. **C6 first.** The relay's verifier needs a real access token to be written
-   against: the claims above, the `typ` header, and the JWKS. C6 cannot ship
-   alone, since only a public client receives such a token, but it is the
-   part to settle and build first. The token contract section is the
-   interface.
-2. **C1 to C5**, before any real client can reach the relay: client lookup,
-   CIMD, PKCE, redirect matching, refresh.
+**Corliss follows, in one release:** C1 to C7, discovery, consent and
+migration `0007`. C7 needs the relay's two `/internal/vaults` endpoints,
+whose JSON is pinned in the relay's spec, section Z3.
 
-**Corliss is blocked on the relay** for C7 only. It needs the relay's two
-`/internal/vaults` endpoints and their shapes. C7 ships after the relay's
-Phase B.
-
-**C7 now gates first use.** A vault can only be created here, so no member
-can use Claude or Obsidian with SCN until release B is deployed. Releases A
-and B are both on the path to the first working connection.
-
-Suggested releases:
-
-| Release | Contains | Unblocks |
-|---|---|---|
-| A | C1 to C6, discovery, consent, migration `0007` | The relay's verifier, then acceptance checks 1 to 6 |
-| B | C7 | Acceptance check 7, and every member's first vault |
+**Neither is in use until both are deployed.** The relay cannot run with
+auth on until Corliss issues access tokens, and a vault can only be created
+on the Obsidian page, so the deployment change that turns on the relay's
+auth and adds its public routes lands after this release.
 
 ## Open questions
 
@@ -705,9 +705,7 @@ Suggested releases:
    on iOS on a poor connection.
 3. **The reconcile timer.** Needed for the freshness bound and not built.
    Confirm it lands with this work, and the interval.
-4. **`/internal/vaults` shapes.** The relay's spec names the fields (root
-   document ID, name, created, last change) and not the JSON, for the list
-   and for the create response. Pin both before C7.
+4. Settled. The JSON is in the relay's spec, section Z3.
 5. **Custom-scheme redirect, desktop and iOS.** Whether the browser hands
    `obsidian://scn-obsidian` back to Obsidian is not verified in two cases:
    after the consent POST and redirect, and when consent is remembered and
@@ -719,11 +717,10 @@ Suggested releases:
 
 ## Rollout
 
-1. Land release A, run the suite, bump the version with `bin/release`, push
+1. Land the release, run the suite, bump the version with `bin/release`, push
    the tag.
 2. In the deployment repo: the new variables, the secret, the allowlist, the
    timer and the version pin, in one change.
 3. Update the README: Endpoints table, settings tables, `.env.example`, the
    "Wiring up a relying party" section, and a section on public clients.
    Update `docs/membership.md` where it says the timer is not built.
-4. Release B after the relay's Phase B is deployed.
