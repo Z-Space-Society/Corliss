@@ -41,9 +41,13 @@ class SigningTests(TestCase):
 
     def setUp(self):
         signing._load_private_key.cache_clear()
+        # The previous paths are pinned blank, not left to the environment: a
+        # developer trying a rotation locally has one set in .env.
         self._override = override_settings(
             ATPROTO_EC_PRIVATE_KEY_PATH=str(self.ec_path),
             OIDC_RSA_PRIVATE_KEY_PATH=str(self.rsa_path),
+            ATPROTO_EC_PREVIOUS_KEY_PATH="",
+            OIDC_RSA_PREVIOUS_KEY_PATH="",
         )
         self._override.enable()
 
