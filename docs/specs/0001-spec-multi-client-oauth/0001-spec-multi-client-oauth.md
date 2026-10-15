@@ -1,7 +1,9 @@
 # 0001 Spec: Multi-client OAuth and "Your vaults"
 
-Status: built on the `multi-client-oauth` branch, 2026-10-09. Not released and
-not yet run against a real client; see open questions 1, 2 and 5.
+Status: built on the `multi-client-oauth` branch, 2026-10-09. Not released.
+Claude Code signed in and called a tool against a local relay with auth on,
+2026-10-14. Hosted Claude and the plugin are not yet run; see open questions
+1, 2 and 5.
 
 ## Goal
 
@@ -419,9 +421,12 @@ The `refresh_token` grant, in order:
 6. **Membership.** `membership.may_enter(did)`. If false, delete the family
    and return `invalid_grant`. This is the membership rule for every public
    client.
-7. Claim the token. Steps 1 to 8 run in one transaction holding a row lock
+7. Claim the token. Steps 2 to 8 run in one transaction holding a row lock
    on the token (`select_for_update`), so two concurrent requests are served
-   one after the other. The second finds the token used and is handled as a
+   one after the other. The membership answer for step 6 is read before the
+   lock is taken and applied inside it: for a DID with no active grant,
+   `may_enter` can read the admin roster over the network, and a lock is not
+   held across that. The second finds the token used and is handled as a
    replay under step 3, which inside the window gives it its own pair and
    supersedes the first's. A conditional update alone is not enough here:
    two concurrent retries of a used token would each issue a successor and
@@ -608,13 +613,13 @@ One page for members that explains the service and holds their vaults.
 
 What the page shows, top to bottom:
 
-1. **What this is.** Notes kept on SCN, readable and editable from Obsidian
-   and from Claude, for as long as you are a member. That SCN's operators
-   can read them.
+1. **What this is.** Notes kept on SCN, readable and editable from Obsidian,
+   for as long as you are a member. That they are not end-to-end encrypted.
 2. **Your vaults.** Name, created and last change for each, and a form to
    create one: a name and a button. A member can have any number.
-3. **Connect Claude.** The public MCP URL, with the steps to add it as a
-   connector.
+3. **MCP service.** The public MCP URL, and that any assistant or tool that
+   supports MCP servers can use it. The page names no AI product: the site
+   is AI agnostic, and the service works with any MCP client.
 4. **Connect Obsidian.** Create a new empty vault in Obsidian, install SCN
    Sync, paste the public sync URL, sign in, pick a vault. On iPhone, leave
    **Store in iCloud** off.
