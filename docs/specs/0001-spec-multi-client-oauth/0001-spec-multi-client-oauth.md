@@ -1,9 +1,9 @@
 # 0001 Spec: Multi-client OAuth and "Your vaults"
 
-Status: built on the `multi-client-oauth` branch, 2026-10-09. Not released.
-Claude Code signed in and called a tool against a local relay with auth on,
-2026-10-14. Open questions decided 2026-10-15; hosted Claude and the plugin
-on iOS are checked on staging, see decisions 1 and 5.
+Status: released in v1.4.0 and deployed with relay 0.2.0 (zai-ops v0.9.0),
+2026-10-15, to staging and then production. Hosted Claude was checked on
+production, since staging's public auth was not working that day. See
+decisions 1 and 5.
 
 ## Goal
 
@@ -734,7 +734,11 @@ Formerly the open questions. Each was decided on 2026-10-15.
    stays at the `https://claude.ai` origin: pinning one URL would break the
    connector the day Anthropic moves its document, and the origin is
    already a narrow grant. The URL seen on the first real authorize request
-   is recorded here for reference: _pending the Ronchamp sign-in_.
+   is recorded here for reference, from the cached document after the first
+   sign-in on production, 2026-10-15: `client_id`
+   `https://claude.ai/oauth/mcp-oauth-client-metadata`, redirect
+   `https://claude.ai/api/mcp/auth_callback`. A connector sign-in and an
+   MCP tool call both succeeded.
 2. **Grace window length.** Ships at 60 seconds. Not measured against
    Obsidian on iOS on a poor connection. If that case logs members out, the
    symptom is a deleted family in the log after a replay just outside the
@@ -747,12 +751,19 @@ Formerly the open questions. Each was decided on 2026-10-15.
 5. **Custom-scheme redirect, desktop and iOS.** The two cases are the
    redirect after the consent POST, and a remembered consent where
    `authorize` redirects with no tap. macOS, Safari, 2026-10-15: both
-   cases hand off to Obsidian after Safari's "Open Obsidian?" prompt, so
-   no tap-through page is needed there. iOS: _pending the plugin sign-in on
-   Ronchamp_.
+   cases hand off to Obsidian after Safari's "Open Obsidian?" prompt.
+   iOS, Safari, production, 2026-10-15: the same in both cases; the SCN
+   Sync Probe plugin received the callback in Obsidian. Checked with a
+   hand-built authorize URL, since the SCN Sync plugin is not written yet.
+   No tap-through page is needed on either platform. Closed.
 6. **Whether public clients should get an ID token at all.** Yes, when
    `openid` is requested. No current client asks, and refusing it would
    add a branch to guard a case nothing exercises. Closed.
+7. **Notes stays on before the plugin exists.** The page's "Connect
+   Obsidian" steps name SCN Sync, which is specified in scn-obsidian but not
+   yet written, so a member cannot follow them yet. `ENABLE_NOTES` stays on
+   anyway: vaults and the MCP service work today, and an assistant can read
+   and write a member's notes without the plugin.
 
 ## Rollout
 
@@ -760,9 +771,9 @@ Formerly the open questions. Each was decided on 2026-10-15.
    the tag.
 2. In the deployment repo: the new variables, the secret, the allowlist, the
    timer, the version pin and the relay's Phase B settings and routes, in
-   one change. Deploy to staging first: the Claude connector and the plugin
-   on iOS are signed in there, and decisions 1 and 5 recorded, before
-   production.
+   one change. Staging first, then production. The Claude connector and the
+   plugin on iOS were signed in on production, which recorded decisions 1
+   and 5.
 3. Update the README: Endpoints table, settings tables, `.env.example`, the
    "Wiring up a relying party" section, and a section on public clients.
    Update `docs/membership.md` where it says the timer is not built.
