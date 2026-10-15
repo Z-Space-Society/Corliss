@@ -597,8 +597,9 @@ the same change, and each new route in the Endpoints table.
 
 One page for members that explains the service and holds their vaults.
 
-- Route `vaults/`, `@member_required`. GET shows the page. POST creates a
-  vault. A nav entry for members, labelled **Obsidian**.
+- Route `notes/`, `@member_required`. GET shows the page. POST creates a
+  vault. A nav entry for members, labelled **Notes**, hidden when
+  `ENABLE_NOTES` is off.
 - `corliss/sync_relay.py`, a new module, because the relay is an external
   system. An underscore, since a hyphen cannot be imported. Two functions,
   both with `Authorization: Bearer <SYNC_RELAY_SERVICE_TOKEN>`, a 5 second
@@ -656,7 +657,7 @@ flow assertions after every change in this spec. Existing tests that assert
 UI wording are not reviewed or rewritten here.
 
 New test modules: `test_public_clients.py` (C1, C3, C4, C6, consent),
-`test_cimd.py` (C2), `test_refresh.py` (C5), `test_vaults.py` (C7).
+`test_cimd.py` (C2), `test_refresh.py` (C5), `test_notes.py` (C7).
 
 | Acceptance check | Automated here | Verified on the cluster |
 |---|---|---|

@@ -85,18 +85,19 @@
 
         Open WebUI still hides entirely when OPENWEBUI_URL is unset. A disabled entry
         says "not for you yet"; on a cluster with no chat deployed, that would be
-        a different and false statement.
+        a different and false statement. Notes hides entirely when ENABLE_NOTES
+        is off, for the same reason.
         {% endcomment %}
         {% if user.is_authenticated %}
           {% if user.may_enter %}
             <a class="nav__item" href="{% url 'workspaces' %}">Workspaces</a>
-            <a class="nav__item" href="{% url 'vaults' %}">Obsidian</a>
+            {% if ENABLE_NOTES %}<a class="nav__item" href="{% url 'notes' %}">Notes</a>{% endif %}
             <a class="nav__item" href="{% url 'api' %}">API</a>
           {% else %}
             <span class="nav__item nav__item--closed" aria-disabled="true"
                   title="Members only. A cluster admin has to let you in first.">Workspaces</span>
-            <span class="nav__item nav__item--closed" aria-disabled="true"
-                  title="Members only. A cluster admin has to let you in first.">Obsidian</span>
+            {% if ENABLE_NOTES %}<span class="nav__item nav__item--closed" aria-disabled="true"
+                  title="Members only. A cluster admin has to let you in first.">Notes</span>{% endif %}
             <span class="nav__item nav__item--closed" aria-disabled="true"
                   title="Members only. A cluster admin has to let you in first.">API</span>
           {% endif %}

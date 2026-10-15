@@ -352,7 +352,7 @@ must not drift.
   the token endpoint, so a request cannot pick the public path by leaving its
   secret out. `test_provider.py`, `test_gate.py` and `test_backchannel.py`
   pass without edits to their flow assertions.
-- **No request chooses whose vaults.** `views.vaults` passes
+- **No request chooses whose vaults.** `views.notes` passes
   `request.user.did` to the relay for list and for create, the same rule the
   API keys section states for LiteLLM.
 

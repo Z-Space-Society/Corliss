@@ -250,6 +250,12 @@ SYNC_RELAY_URL = env("SYNC_RELAY_URL", default="")
 # SYNC_RELAY_URL, leaves the Obsidian page saying vaults are not set up here.
 SYNC_RELAY_SERVICE_TOKEN = env("SYNC_RELAY_SERVICE_TOKEN", default="")
 
+# Whether the nav offers the Notes page (`/notes/`). Off hides the entry for
+# members and non-members alike, for a deployment that has not rolled the
+# notes service out yet. It only hides the link: the page itself still
+# answers, and says vaults are not set up when the relay is not connected.
+ENABLE_NOTES = env.bool("ENABLE_NOTES", default=True)
+
 # The in-house AT Protocol PDS (its CT, port 3000), at its INTERNAL address like
 # the rest: its public hostname is behind the edge and would measure that
 # instead. Probed at /xrpc/_health, its readiness endpoint, so "up" means the

@@ -101,10 +101,10 @@ class VaultsCase(TestCase):
         self.client.force_login(self.user)
 
     def get(self, **params):
-        return self.client.get(reverse("vaults"), params)
+        return self.client.get(reverse("notes"), params)
 
     def create(self, name="Notes", **extra):
-        return self.client.post(reverse("vaults"), {"name": name, **extra})
+        return self.client.post(reverse("notes"), {"name": name, **extra})
 
 
 class RelayClientTests(VaultsCase):
@@ -204,7 +204,7 @@ class WhoseVaultsTests(VaultsCase):
     def test_a_did_in_the_form_is_ignored_for_create_and_for_the_list(self):
         with Relay() as relay:
             self.create("Notes", did=OTHER)
-            self.client.post(reverse("vaults") + f"?did={OTHER}", {"name": "More"})
+            self.client.post(reverse("notes") + f"?did={OTHER}", {"name": "More"})
         for _, _, kwargs in relay.made("POST"):
             self.assertEqual(kwargs["json"]["did"], DID)
         for _, _, kwargs in relay.made("GET"):
@@ -300,19 +300,29 @@ class PageStateTests(VaultsCase):
     def test_the_nav_offers_the_page_to_a_member_and_closes_it_to_a_non_member(self):
         with Relay():
             html = self.get().content.decode()
-        self.assertIn(f'href="{reverse("vaults")}"', html)
+        self.assertIn(f'href="{reverse("notes")}"', html)
 
         MembershipCache.objects.filter(did=DID).update(active=False)
         html = self.client.get(reverse("home")).content.decode()
-        self.assertNotIn(f'href="{reverse("vaults")}"', html)
-        self.assertIn(">Obsidian</span>", html)
+        self.assertNotIn(f'href="{reverse("notes")}"', html)
+        self.assertIn(">Notes</span>", html)
+
+    @override_settings(ENABLE_NOTES=False)
+    def test_the_nav_hides_the_page_when_notes_are_off(self):
+        with Relay():
+            html = self.get().content.decode()
+        self.assertNotIn(f'href="{reverse("notes")}"', html)
+
+        MembershipCache.objects.filter(did=DID).update(active=False)
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertNotIn(">Notes</span>", html)
 
 
 class CreateTests(VaultsCase):
     def test_creating_redirects_to_the_page_which_then_lists_it(self):
         with Relay(listing=[vault("Notes")]) as relay:
             resp = self.create("Notes")
-            self.assertRedirects(resp, reverse("vaults"))
+            self.assertRedirects(resp, reverse("notes"))
         self.assertEqual(len(relay.made("POST")), 1)
 
     def test_the_name_is_trimmed(self):
@@ -359,6 +369,6 @@ class CreateTests(VaultsCase):
         browser = HttpClient(enforce_csrf_checks=True)
         browser.force_login(self.user)
         with Relay() as relay:
-            resp = browser.post(reverse("vaults"), {"name": "Notes"})
+            resp = browser.post(reverse("notes"), {"name": "Notes"})
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(relay.calls, [])

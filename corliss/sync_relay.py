@@ -17,7 +17,7 @@ Three properties hold here, each with a plausible wrong answer:
   the edge to reach a neighbour.
 - **The caller says whose vaults, and it is always the signed-in member.**
   The service token can list and create for any DID, so nothing in a request
-  may choose one. `views.vaults` passes `request.user.did` and nothing else.
+  may choose one. `views.notes` passes `request.user.did` and nothing else.
 - **Nothing is retried and nothing is stored.** A failure is shown to the
   member, who can press the button again. A vault exists when the relay says
   so and in no table of ours.

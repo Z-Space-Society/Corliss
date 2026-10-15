@@ -2,7 +2,7 @@
 
 {% comment %}
 The Obsidian page: what the notes service is, the member's vaults, and how to
-connect Obsidian and an MCP client. See `views.vaults`.
+connect Obsidian and an MCP client. See `views.notes`.
 
 **No AI product is named here.** The relay serves the notes over MCP, which
 any assistant that speaks it can use, and this site does not point members at
@@ -23,18 +23,20 @@ A vault is made here and nowhere else. The plugin only picks from this list.
 No script. One form with one field.
 {% endcomment %}
 
-{% block title %}Obsidian{% endblock %}
+{% block title %}Notes{% endblock %}
 
 {% block content %}
 <div class="account-view">
-  <h1>Obsidian</h1>
+  <h1>Notes</h1>
 
-  <p class="page-text">Your notes, kept on this network. Read and edit them in
-  Obsidian on your laptop and your phone, for as long as you are a member.</p>
+  <p class="page-text">
+    Your notes, kept on this network. Read and edit them in Obsidian on your laptop and your phone with the
+    <a target="_blank" href="https://github.com/Z-Space-Society/scn-obsidian">scn-sync plugin</a>.
+  </p>
 
-  <p class="page-text page-text--note">Notes are not end-to-end encrypted.</p>
+  <!-- <p class="page-text page-text--note">Notes are not end-to-end encrypted.</p> -->
 
-  <h2 class="section-title">Your vaults</h2>
+  <h2 class="section-title">Your Note Vaults</h2>
   <div class="card">
     {% if not configured %}
       <p class="alert alert--notice" role="status">
@@ -74,7 +76,7 @@ No script. One form with one field.
         exists.</p>
       {% endif %}
 
-      <form method="post" action="{% url 'vaults' %}" class="stacked-form">
+      <form method="post" action="{% url 'notes' %}" class="stacked-form">
         {% csrf_token %}
         <div>
           <label for="vault-name">New vault</label>
@@ -84,20 +86,6 @@ No script. One form with one field.
         </div>
         <button type="submit" class="btn-primary">Create vault</button>
       </form>
-    {% endif %}
-  </div>
-
-  <h2 class="section-title">MCP service</h2>
-  <div class="card">
-    {% if mcp_url %}
-      <div class="endpoint">{{ mcp_url }}</div>
-      <p class="hint-text">Your notes are also served over MCP. Add this
-      address to any assistant or tool that supports MCP servers, then sign in
-      with your handle when it asks. It can read and edit the notes in your
-      vaults, with or without Obsidian.</p>
-    {% else %}
-      <p class="hint-text">No MCP address is configured on this deployment
-      yet.</p>
     {% endif %}
   </div>
 
@@ -117,6 +105,20 @@ No script. One form with one field.
       them.</p>
     {% else %}
       <p class="hint-text">No sync address is configured on this deployment
+      yet.</p>
+    {% endif %}
+  </div>
+
+  <h2 class="section-title">MCP service</h2>
+  <div class="card">
+    {% if mcp_url %}
+      <div class="endpoint">{{ mcp_url }}</div>
+      <p class="hint-text">Your notes are also served over MCP. Add this
+      address to any assistant or tool that supports MCP servers, then sign in
+      with your handle when it asks. It can read and edit the notes in your
+      vaults, with or without Obsidian.</p>
+    {% else %}
+      <p class="hint-text">No MCP address is configured on this deployment
       yet.</p>
     {% endif %}
   </div>

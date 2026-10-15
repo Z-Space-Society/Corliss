@@ -26,7 +26,7 @@ section below defines them and says when to reach for which.
 - `api`: the member's own API keys — issue, list, revoke, and usage, read live
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
-- `vaults`: the Obsidian page. What the notes service is, how to connect
+- `notes`: the Notes page. What the notes service is, how to connect
   Obsidian and an MCP client to it, and the member's vaults, which live on the sync
   relay and are listed and created through `corliss.sync_relay`.
 - `parascribe`: how to call the cluster's transcription models. Signed-in, and
@@ -1354,8 +1354,8 @@ def parascribe(request):
 
 @member_required
 @require_http_methods(["GET", "POST"])
-def vaults(request):
-    """The Obsidian page: the notes service, and the member's vaults.
+def notes(request):
+    """The Notes page: the notes service, and the member's vaults.
 
     The vaults are the relay's, not ours. This view asks `corliss.sync_relay`
     for them and stores nothing.
@@ -1389,7 +1389,7 @@ def vaults(request):
                 name_error = "The vault could not be created right now. Try again shortly."
             else:
                 # Back to the page, which now lists it.
-                return redirect("vaults")
+                return redirect("notes")
 
     member_vaults = None
     if configured:
@@ -1401,7 +1401,7 @@ def vaults(request):
     by_kind = {resource.kind: resource.url for resource in oidc.resources()}
     return render(
         request,
-        "vaults.html",
+        "notes_mcp.html",
         {
             "configured": configured,
             # None when the relay did not answer; a list, possibly empty, when

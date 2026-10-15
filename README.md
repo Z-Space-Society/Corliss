@@ -337,7 +337,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Account — your own name and email (signed in) | `/account/` |
 | API keys — issue, revoke, usage (members) | `/api/` |
 | Parascribe — transcription quickstart (signed in) | `/tools/parascribe/` |
-| Obsidian — the notes service, your vaults, create a vault (members) | `/vaults/` |
+| Notes: the notes service, your vaults, create a vault (members) | `/notes/` |
 | Workspaces — the ones you are in (members) | `/workspaces/` |
 | New workspace (members) | `/workspaces/new` |
 | A workspace — rename, add/remove members (its own members) | `/workspaces/<id>/` |
@@ -1071,7 +1071,8 @@ roster. Making one takes a cluster membership; changing one takes being in it.
 ## The nav
 
 Left of the divider: the brand, then **About**. Right of it: **Workspaces**,
-**Obsidian**, **API**, **Tools**, **Manage** for admins, then the account chip.
+**Notes** (hidden when `ENABLE_NOTES` is off), **API**, **Tools**, **Manage**
+for admins, then the account chip.
 
 **Tools has two groups, and they are not one list with a rule in it.** *Hosted
 apps* run on this cluster and answer to GATE — Open WebUI is closed to a
@@ -1126,7 +1127,7 @@ touch-specific details follow from it, all in `base.css`:
   instead of hanging from a trigger mid-row where they would run off the screen,
   and every target grows to thumb size.
 
-## Obsidian: `/vaults/`
+## Notes: `/notes/`
 
 Members keep notes on the cluster and reach them from Obsidian and over MCP.
 The notes and the record of who owns which vault live on
@@ -1169,6 +1170,7 @@ so what a member pastes is the same string the relay checks tokens against.
 | ------- | ------- |
 | `SYNC_RELAY_URL` | The relay's **internal** origin. The same setting `/systems/` probes. |
 | `SYNC_RELAY_SERVICE_TOKEN` | The credential for the relay's `/internal/vaults`, shared with the relay as `SCN_SYNC_RELAY_SERVICE_TOKEN`. Blank leaves the page saying vaults are not set up. |
+| `ENABLE_NOTES` | Default `True`. `False` hides the nav's **Notes** entry from everyone, for a deployment that has not rolled the service out. It hides the link only: `/notes/` still answers. |
 
 ## Public clients: Claude, Claude Code and SCN Sync
 
@@ -1406,7 +1408,7 @@ address, and calls nothing else here. Set `OIDC_CLIENT_METADATA_ALLOWLIST` to
 Nothing in front of Corliss may block `160.79.104.0/21`, where Claude's
 discovery and token requests come from.
 
-A member then makes a vault at `/vaults/`, pastes the sync address shown
+A member then makes a vault at `/notes/`, pastes the sync address shown
 there into the SCN Sync plugin, and adds the MCP address to whatever MCP
 client they use.
 
