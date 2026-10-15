@@ -2028,6 +2028,8 @@ def _store_tokens(user, token_data, dpop_key, nonce, pending):
             "dpop_private_pem": atproto.key_to_pem(dpop_key),
             "dpop_nonce": nonce or "",
             "expires_at": expires_at,
+            # The exchange just signed with the current key; see the field.
+            "client_kid": signing.atproto_kid(),
         },
     )
 

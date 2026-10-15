@@ -12,6 +12,14 @@ together in a single JWKS.)
 Private keys are loaded from configurable PEM paths (never committed). The public
 halves are published at the JWKS endpoint. Loading **fails closed**: a missing or
 unconfigured key raises `ImproperlyConfigured` rather than silently degrading.
+
+**Rotation.** Each key may have a *previous* key beside it, set while it is
+being rotated out. The JWKS publishes it after the current pair, so a relying
+party still verifies an id_token or access token signed before the rotation.
+New signatures always use the current key, with one exception: an atproto
+authorization server ties a session to the key that authenticated it, so a
+refresh is signed with the key that member's session started with
+(`AtprotoToken.client_kid`).
 """
 
 import base64
@@ -71,6 +79,22 @@ def oidc_private_key() -> rsa.RSAPrivateKey:
     )
 
 
+def atproto_previous_private_key() -> ec.EllipticCurvePrivateKey | None:
+    """The atproto key being rotated out, or None when no rotation is under way."""
+    path = settings.ATPROTO_EC_PREVIOUS_KEY_PATH
+    return _load_private_key(path, "ATPROTO_EC_PREVIOUS_KEY_PATH") if path else None
+
+
+def oidc_previous_private_key() -> rsa.RSAPrivateKey | None:
+    """The OIDC key being rotated out, or None when no rotation is under way."""
+    path = settings.OIDC_RSA_PREVIOUS_KEY_PATH
+    return _load_private_key(path, "OIDC_RSA_PREVIOUS_KEY_PATH") if path else None
+
+
+class UnknownSigningKey(Exception):
+    """A kid names no key this deployment holds: the previous key was retired."""
+
+
 def _jwk_thumbprint(jwk: dict) -> str:
     """RFC 7638 JWK thumbprint — a stable `kid` derived from the public key."""
     if jwk["kty"] == "EC":
@@ -114,16 +138,50 @@ def oidc_kid() -> str:
 
 
 def jwks() -> dict:
-    """The published JWK Set: atproto (ES256) + OIDC (RS256) public keys."""
-    return {"keys": [atproto_public_jwk(), oidc_public_jwk()]}
+    """The published JWK Set: atproto (ES256) + OIDC (RS256) public keys.
+
+    The current pair comes first and keeps its positions; previous keys follow
+    only while a rotation is under way.
+    """
+    keys = [atproto_public_jwk(), oidc_public_jwk()]
+    previous_ec = atproto_previous_private_key()
+    if previous_ec is not None:
+        keys.append(_public_jwk(previous_ec, "ES256"))
+    previous_rsa = oidc_previous_private_key()
+    if previous_rsa is not None:
+        keys.append(_public_jwk(previous_rsa, "RS256"))
+    return {"keys": keys}
 
 
-def sign_es256(payload: dict, *, headers: dict | None = None) -> str:
-    """Sign a JWT with the atproto EC key (DPoP proofs, client assertion)."""
-    h = {"kid": atproto_kid()}
+def _atproto_key_for(kid: str | None):
+    """(private key, kid) for `kid`; blank means the current key.
+
+    Blank is what every session started before rotation existed carries, and
+    those can only have started on today's key.
+    """
+    current_kid = atproto_kid()
+    if not kid or kid == current_kid:
+        return atproto_private_key(), current_kid
+    previous = atproto_previous_private_key()
+    if previous is not None and _public_jwk(previous, "ES256")["kid"] == kid:
+        return previous, kid
+    raise UnknownSigningKey(f"no atproto signing key with kid {kid}")
+
+
+def sign_es256(
+    payload: dict, *, headers: dict | None = None, kid: str | None = None
+) -> str:
+    """Sign a JWT with an atproto EC key (the client assertion).
+
+    `kid` picks the previous key for a session that started on it; omitted or
+    blank, the current key signs. Raises `UnknownSigningKey` for a kid this
+    deployment no longer holds.
+    """
+    key, key_kid = _atproto_key_for(kid)
+    h = {"kid": key_kid}
     if headers:
         h.update(headers)
-    return jwt.encode(payload, atproto_private_key(), algorithm="ES256", headers=h)
+    return jwt.encode(payload, key, algorithm="ES256", headers=h)
 
 
 def sign_rs256(payload: dict, *, headers: dict | None = None) -> str:

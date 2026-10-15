@@ -62,6 +62,11 @@ leave docs for "later":
   identity: every member re-consents at their PDS and in-flight sessions die.
   Nothing errors; it silently becomes a different client. Bundle any such move
   into a single cutover rather than paying the re-consent twice.
+- **A refresh signs with the key the session started on.** An atproto
+  authorization server refuses a refresh signed by any other key, so
+  `AtprotoToken.client_kid` is what keeps a member signed in across a key
+  rotation. New signatures always use the current key; do not "simplify"
+  `_refresh` to sign with it too.
 - **Private keys never leave `keys/`, and only public halves are served.**
   Git-ignored, mode `0600`, provisioned out-of-band in production.
 
