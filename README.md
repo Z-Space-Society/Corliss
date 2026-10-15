@@ -96,7 +96,8 @@ to activate. `uv run python manage.py …` is the explicit equivalent.
 
 Configuration is entirely env-driven — see [`.env.example`](.env.example) for
 the full list. `.env` is git-ignored; **never commit secrets or private keys**.
-`OPENWEBUI_URL` drives the nav's "Open WebUI" entry under Tools, `MANAGE_URL` the one remaining link to
+`OPENWEBUI_URL` drives the nav's "Open WebUI" entry under Tools, `CHAT_URL` the nav's
+**Chat** entry (scn-chat's public origin), `MANAGE_URL` the one remaining link to
 the Manage Console — the fallback offered on `/manage/` to an admin whose
 sign-in picked up no registry session (the nav entry is **gone**: `/manage/`
 covers everything that console did, roster editing included, and the setting
@@ -710,6 +711,7 @@ any one service, and nothing else in Corliss has business knowing Garage exists.
 | Sync relay | `GET /health`. |
 | PDS | `GET /xrpc/_health`, its readiness endpoint: "up" means its storage answered too. |
 | Open WebUI | `GET /health`. |
+| scn-chat | `GET /api/health`, which runs `select 1` against its database: "up" means its storage answered too. |
 
 Every row is something that can be asked. The list carried a **Manage Console**
 entry until `v0.9.3`, describing static files that had already been deleted
@@ -836,6 +838,7 @@ services that answer in milliseconds. Do not add Redis for it.
 | ------- | ------- |
 | `SYNC_RELAY_URL` | The Automerge sync server's **internal** origin (`http://10.1.1.<ctid>:7030`). |
 | `PDS_URL` | The in-house PDS's **internal** origin (`http://10.1.1.<ctid>:3000`). Blank on a cluster with no PDS. |
+| `SCN_CHAT_URL` | scn-chat's **internal** origin (`http://10.1.1.<ctid>:3000`). Blank on a cluster that has not assigned scn-chat. |
 | `REDIS_URL` | Redis as something to **dial** — not a cache backend. See below. |
 | `GARAGE_S3_URL` | Garage's S3 port (`http://10.1.1.<ctid>:3900`), not its admin API. |
 | `CADDY_HEALTH_URL` | Caddy's health endpoint (`http://10.1.1.<ctid>/healthz`). |
@@ -856,14 +859,14 @@ The endpoint is `GARAGE_S3_URL`, shared with the Garage probe. With any of the
 bucket or key settings blank the version columns read "not recorded" and nothing
 else on the page changes.
 
-Only these five need settings: HappyView, LiteLLM and Open WebUI are already
+Only these six need settings: HappyView, LiteLLM and Open WebUI are already
 reached by address elsewhere and their probes reuse `MEMBERSHIP_REGISTRY_URL`
 (with `MEMBERSHIP_REGISTRY_HOST`), `LITELLM_URL` and
 `OIDC_BACKCHANNEL_LOGOUT_URI`. A second setting naming the same host is a second
 thing to get wrong.
 
 **Every address is internal, without exception.** A probe pointed at a public
-origin measures the edge in front of the service rather than the service. `API_URL`, `OPENWEBUI_URL` and `MANAGE_URL` are hrefs for a
+origin measures the edge in front of the service rather than the service. `API_URL`, `OPENWEBUI_URL`, `CHAT_URL` and `MANAGE_URL` are hrefs for a
 browser and are never probe targets.
 
 **`REDIS_URL` is a probe target and nothing else.** Corliss holds no Redis
@@ -1100,8 +1103,14 @@ roster. Making one takes a cluster membership; changing one takes being in it.
 ## The nav
 
 Left of the divider: the brand, then **About**. Right of it: **Workspaces**,
-**Notes** (hidden when `ENABLE_NOTES` is off), **API**, **Tools**, **Manage**
-for admins, then the account chip.
+**Notes** (hidden when `ENABLE_NOTES` is off), **Chat** (hidden when `CHAT_URL`
+is unset), **API**, **Tools**, **Manage** for admins, then the account chip.
+
+- **Chat is members-only in the nav although scn-chat's own sign-in is open.**
+  Like Workspaces, Notes and API it is a link for a member and a closed entry
+  for a signed-in non-member. scn-chat does not ask Corliss who may sign in, so
+  this is what the nav offers, not a gate; opening the entry to non-members is
+  a choice to make when scn-chat's gating is settled.
 
 **Tools has two groups, and they are not one list with a rule in it.** *Hosted
 apps* run on this cluster and answer to GATE — Open WebUI is closed to a

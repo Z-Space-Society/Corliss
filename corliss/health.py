@@ -320,6 +320,17 @@ def _pds():
     return _http("pds", origin + "/xrpc/_health" if origin else "")
 
 
+def _scn_chat():
+    """`/api/health`: readiness, so "up" means its database answered too.
+
+    The endpoint runs `select 1` and answers 503 when that fails. scn-chat keeps
+    its sqlite on its own disk, so as with the PDS a storage failure is the
+    outage worth showing.
+    """
+    origin = _origin(settings.SCN_CHAT_URL)
+    return _http("scn-chat", origin + "/api/health" if origin else "")
+
+
 def _open_webui():
     """`/health`, at the internal address back-channel logout already names.
 
@@ -437,6 +448,7 @@ STACK = [
     ("Applications", [
         Probe("Corliss", "Login, membership, OIDC, and API keys", _corliss, manifest="corliss"),
         Probe("Open WebUI", "Chat app", _open_webui, manifest="open-webui"),
+        Probe("scn-chat", "AI assistant chat, signed in with a member's own PDS", _scn_chat, manifest="scn-chat"),
     ]),
 ]
 

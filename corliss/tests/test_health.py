@@ -45,6 +45,7 @@ class UnconfiguredTests(TestCase):
     @override_settings(
         SYNC_RELAY_URL="",
         PDS_URL="",
+        SCN_CHAT_URL="",
         REDIS_URL="",
         GARAGE_S3_URL="",
         CADDY_HEALTH_URL="",
@@ -55,7 +56,7 @@ class UnconfiguredTests(TestCase):
     def test_every_unset_probe_reads_unknown_and_dials_nothing(self):
         probes = (health._sync_relay, health._pds, health._redis, health._garage,
                   health._caddy, health._litellm, health._happyview,
-                  health._open_webui)
+                  health._open_webui, health._scn_chat)
         with patch("corliss.health.requests.get") as get, \
                 patch("corliss.health.socket.create_connection") as connect:
             for probe in probes:
@@ -105,6 +106,38 @@ class PdsProbeTests(TestCase):
     def test_its_row_reads_the_pds_manifest(self):
         rows = {p.name: p for _, probes in health.STACK for p in probes}
         self.assertEqual(rows["PDS"].manifest, "pds")
+
+
+@override_settings(SCN_CHAT_URL="http://10.1.1.122:3000")
+class ScnChatProbeTests(TestCase):
+    """scn-chat is asked its health endpoint, which also asks its database."""
+
+    def test_it_asks_the_health_endpoint(self):
+        with patch("corliss.health.requests.get", return_value=_response(200)) as get:
+            self.assertEqual(health._scn_chat(), health.UP)
+        self.assertEqual(
+            get.call_args.args[0], "http://10.1.1.122:3000/api/health"
+        )
+
+    def test_a_database_failure_is_down(self):
+        # /api/health answers 503 when its `select 1` fails.
+        with patch("corliss.health.requests.get", return_value=_response(503)):
+            self.assertEqual(health._scn_chat(), health.DOWN)
+
+    def test_an_unreachable_scn_chat_is_down(self):
+        with patch("corliss.health.requests.get",
+                   side_effect=requests.ConnectionError("no route to host")):
+            self.assertEqual(health._scn_chat(), health.DOWN)
+
+    @override_settings(SCN_CHAT_URL="")
+    def test_a_cluster_without_scn_chat_reads_unknown(self):
+        with patch("corliss.health.requests.get") as get:
+            self.assertEqual(health._scn_chat(), health.UNKNOWN)
+        get.assert_not_called()
+
+    def test_its_row_reads_the_scn_chat_manifest(self):
+        rows = {p.name: p for _, probes in health.STACK for p in probes}
+        self.assertEqual(rows["scn-chat"].manifest, "scn-chat")
 
 
 @override_settings(SYNC_RELAY_URL="http://10.1.1.113:7030")
@@ -336,6 +369,7 @@ class BrokenProbeTests(TestCase):
 @override_settings(
     SYNC_RELAY_URL="http://10.1.1.113:7030",
     PDS_URL="http://10.1.1.114:3000",
+    SCN_CHAT_URL="http://10.1.1.122:3000",
     REDIS_URL="redis://10.1.1.103:6379",
     GARAGE_S3_URL="http://10.1.1.101:3900",
     CADDY_HEALTH_URL="http://10.1.1.110/healthz",

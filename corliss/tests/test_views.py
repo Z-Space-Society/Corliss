@@ -456,6 +456,47 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.assertNotContains(resp, reverse("systems"))
 
 
+@override_settings(CHAT_URL="https://chat.example.com", ENABLE_NOTES=True)
+class ChatNavTests(NoRosterMixin, TestCase):
+    """The nav's Chat entry: scn-chat's public origin, for members."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+        self.client.force_login(self.user)
+
+    def test_a_member_gets_the_link_between_notes_and_api(self):
+        _grant()
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertIn('href="https://chat.example.com">Chat</a>', html)
+        notes = html.index(f'href="{reverse("notes")}"')
+        chat = html.index('href="https://chat.example.com"')
+        api = html.index(f'href="{reverse("api")}"')
+        self.assertLess(notes, chat)
+        self.assertLess(chat, api)
+
+    def test_a_non_member_sees_it_closed(self):
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertNotIn('href="https://chat.example.com"', html)
+        self.assertIn(">Chat</span>", html)
+
+    @override_settings(CHAT_URL="")
+    def test_no_chat_url_hides_it_for_everyone(self):
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertNotIn(">Chat</span>", html)
+        _grant()
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertNotIn(">Chat</a>", html)
+
+    @override_settings(SCN_CHAT_URL="http://10.1.1.122:3000", CHAT_URL="")
+    def test_the_probe_address_is_never_the_link(self):
+        # SCN_CHAT_URL is the internal address /systems/ dials. A browser
+        # cannot reach it, so it must not stand in for CHAT_URL.
+        _grant()
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertNotIn("10.1.1.122", html)
+
+
 class SystemsViewTests(NoRosterMixin, TestCase):
     """`/systems/` — the stack, for cluster admins.
 
@@ -513,7 +554,8 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("systems"))
         self.assertEqual(resp.status_code, 200)
         for service in ("Garage", "PostgreSQL", "Redis", "Caddy", "HappyView",
-                        "LiteLLM", "Sync relay", "PDS", "Corliss", "Open WebUI"):
+                        "LiteLLM", "Sync relay", "PDS", "Corliss", "Open WebUI",
+                        "scn-chat"):
             self.assertContains(resp, service)
 
     def test_each_state_renders_its_own_word_and_dot(self):
