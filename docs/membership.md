@@ -263,10 +263,18 @@ Both are recovered without guessing — `event` is which array the entry arrived
 in, `did` is `did_of(rkey)` — which is what lets the push and the read share one
 parser instead of drifting into two shapes for one lexicon.
 
-**Not built yet: the systemd timer and the run at boot** — wiring only, since
-`manage.py reconcile_membership` already exits non-zero on an incomplete report,
-which is what lets a scheduled run fail loudly instead of logging success over a
-half-empty cache.
+**The scheduled run is the deployment's.** zai-ops installs
+`corliss-reconcile.timer`, which runs `manage.py reconcile_membership` hourly
+and once after boot. Nothing in this repo schedules it. The command exits
+non-zero on an incomplete report, which is what lets a scheduled run fail
+loudly in the unit's status instead of logging success over a half-empty cache.
+
+**The timer is not optional once public clients are in use.** Claude and
+Obsidian hold refresh tokens, and the refresh grant asks `may_enter`, which
+reads this cache. A revocation whose push was missed therefore keeps a removed
+member connected until the next reconcile. The hourly run bounds that at 75
+minutes; a deployment without it is unbounded until somebody presses the
+button. See the README's "Refresh tokens".
 
 ## Signing in as an admin
 

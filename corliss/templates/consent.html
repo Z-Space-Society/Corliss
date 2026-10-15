@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% comment %}
+What a member sees when a public client (Claude, Claude Code, SCN Sync) asks
+to reach their notes. Shown by `views.authorize`, answered at `views.consent`.
+
+**The headline is the host the client's `client_id` lives on, never its
+name.** The name comes from the client's own metadata document, so it is
+whatever the client says it is. The host is the one thing here Corliss
+checked. The name sits beside it, marked as the app's own description.
+
+The form posts a ticket and a decision. Every other fact on this page is held
+in the session, so editing the page changes nothing about what is granted.
+
+No script: two buttons in one form.
+{% endcomment %}
+
+{% block title %}Allow access{% endblock %}
+
+{% block content %}
+<div class="account-view">
+  <h1>Allow {{ client_host }}?</h1>
+
+  <p class="page-text">An app from <strong>{{ client_host }}</strong>{% if client_name %},
+  which calls itself &ldquo;{{ client_name }}&rdquo;,{% endif %} is asking to
+  open <strong>{{ resource_label }}</strong> as you.</p>
+
+  {% if loopback %}
+    <p class="alert alert--notice" role="note">This sign-in will be handed to
+    a program on this computer. Continue only if you started this from that
+    program.</p>
+  {% endif %}
+
+  <div class="card">
+    <p class="page-text">Signed in as <strong>{{ user.username }}</strong></p>
+    <p class="page-text">Opens: <strong>{{ resource_label }}</strong></p>
+    <p class="page-text">Returns to: <strong>{{ redirect_target }}</strong></p>
+
+    <form method="post" action="{% url 'consent' %}">
+      {% csrf_token %}
+      <input type="hidden" name="ticket" value="{{ ticket }}">
+      <div class="button-row">
+        <button type="submit" name="decision" value="allow" class="btn-primary">Allow</button>
+        <button type="submit" name="decision" value="cancel" class="btn-secondary">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <p class="page-text page-text--note">Access lasts while you are a member of
+  the network. The operators of this network can read notes stored on it.</p>
+</div>
+{% endblock %}

@@ -10,6 +10,9 @@ It is a bridge between two protocols:
   PKCE + DPoP + `private_key_jwt`, ending in a DID-keyed Django session.
 - **Out** — an OIDC *provider*: discovery, authorize, token, JWKS, minting an
   RS256 `id_token` whose `sub` is the member's DID.
+- **Out, for apps with no secret:** an OAuth provider for public clients
+  (Claude, Claude Code, the SCN Sync plugin), issuing short-lived access tokens
+  for the cluster's notes service. See [Public clients](#public-clients-claude-claude-code-and-scn-sync).
 
 Anything that speaks OIDC (Open WebUI, Grafana, …) can sit behind it.
 
@@ -20,16 +23,17 @@ that pushes grants and revocations to it. See
 
 ## Layout
 
-Corliss is a **single Django app**. Six models, one URL table; the protocol
+Corliss is a **single Django app**. Nine models, one URL table; the protocol
 halves are plain modules, not sub-apps. A future subsystem earns its own app
 only by being genuinely standalone.
 
 | Module | Responsibility |
 | ------ | -------------- |
-| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `OidcSession`, `MembershipCache`, `Workspace`. |
+| `corliss/models.py` | `User` (DID-keyed), `AtprotoToken` (server-side PDS tokens + DPoP key), `OidcAuthCode`, `OidcSession`, `MembershipCache`, `Workspace`, and three for public clients: `OidcRefreshToken`, `OidcClientDocument`, `OidcConsent`. |
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
-| `corliss/oidc.py` | OIDC provider core: discovery document, auth-code issuance, `id_token` minting, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
+| `corliss/oidc.py` | OIDC provider core: discovery document, client lookup, auth-code issuance, `id_token` and access token minting, the request checks for public clients, fetching and caching their metadata documents, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
 | `corliss/membership.py` | The whole registry relationship: consuming its membership push, reconciling the cache against it, reading the application queue, writing grants and revocations as the acting admin, and resolving whether a DID is currently a member. |
+| `corliss/sync_relay.py` | A member's vaults on scn-sync-relay: list them, create one. The only place the relay's service token is used. |
 | `corliss/litellm.py` | Provisioning members into LiteLLM and issuing their API keys — the only place a gateway credential is used (same one-relationship-one-module rule). |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
@@ -333,6 +337,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Account — your own name and email (signed in) | `/account/` |
 | API keys — issue, revoke, usage (members) | `/api/` |
 | Parascribe — transcription quickstart (signed in) | `/tools/parascribe/` |
+| Notes: the notes service, your vaults, create a vault (members) | `/notes/` |
 | Workspaces — the ones you are in (members) | `/workspaces/` |
 | New workspace (members) | `/workspaces/new` |
 | A workspace — rename, add/remove members (its own members) | `/workspaces/<id>/` |
@@ -340,8 +345,11 @@ without a shell. Corliss clears it itself when a member edits their email at
 | ATProto callback | `/auth/oauth/callback` |
 | ATProto client metadata (**is** the `client_id`) | `/auth/client-metadata.json` |
 | OIDC discovery | `/.well-known/openid-configuration` |
+| The same discovery document, where OAuth and MCP clients look first | `/.well-known/oauth-authorization-server` |
+| SCN Sync plugin client metadata (**is** the plugin's `client_id`) | `/clients/scn-obsidian.json` |
 | JWKS | `/.well-known/jwks.json` |
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
+| Consent — allow or refuse a public client (POST, members; reached from authorize) | `/oidc/consent` |
 | Membership push (from the registry) | `/membership/events` |
 | Apply for membership (signed-in non-members) | `/membership/apply` |
 | About — what this is, the system, the team (public) | `/about/`, `/about/system/`, `/about/team/` |
@@ -1063,7 +1071,8 @@ roster. Making one takes a cluster membership; changing one takes being in it.
 ## The nav
 
 Left of the divider: the brand, then **About**. Right of it: **Workspaces**,
-**API**, **Tools**, **Manage** for admins, then the account chip.
+**Notes** (hidden when `ENABLE_NOTES` is off), **API**, **Tools**, **Manage**
+for admins, then the account chip.
 
 **Tools has two groups, and they are not one list with a rule in it.** *Hosted
 apps* run on this cluster and answer to GATE — Open WebUI is closed to a
@@ -1118,6 +1127,292 @@ touch-specific details follow from it, all in `base.css`:
   instead of hanging from a trigger mid-row where they would run off the screen,
   and every target grows to thumb size.
 
+## Notes: `/notes/`
+
+Members keep notes on the cluster and reach them from Obsidian and over MCP.
+The notes and the record of who owns which vault live on
+[scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay). This page
+explains the service, lists the member's vaults, creates one, and gives the
+two addresses to connect with. **A vault is created here and nowhere
+else**: every client only ever picks from the list.
+
+- **The page names no AI product.** This site is AI agnostic. The MCP
+  address is shown under **MCP service**, as something any assistant that
+  speaks MCP can use, and no assistant is recommended. A test holds the page
+  to it.
+
+- **Nothing about a vault is stored in Corliss.** The page asks the relay each
+  time it renders. A vault exists when the relay says so.
+- **No request chooses whose vaults.** The relay's service token can list and
+  create for any DID, so the DID is the signed-in member's for both, and a
+  `did` in the query string or the form is never read. Handing one member
+  another's vault names would be this page's worst failure.
+- **The relay is called at its internal address**, `SYNC_RELAY_URL`, never the
+  public sync URL shown on the page. The relay's proxy does not route
+  `/internal/` at all.
+- **Redirects are not followed**, so the service token cannot be carried to an
+  address the relay did not answer from.
+- **Nothing is retried.** A failed create is shown beside the form with the
+  name kept, and the member presses the button again.
+- **The instructions render in every state.** The list depends on the relay
+  answering and the explanation does not.
+
+| State | The page shows |
+| ----- | -------------- |
+| `SYNC_RELAY_URL` or `SYNC_RELAY_SERVICE_TOKEN` blank | The instructions, and that vaults are not set up on this deployment. No form. |
+| The relay unreachable, or any answer but `200` | The instructions, and that the service did not answer. No form. |
+| Answered | The list and the form, or that there are no vaults yet and the form. |
+
+The two addresses shown are the `sync` and `mcp` entries of `OIDC_RESOURCES`,
+so what a member pastes is the same string the relay checks tokens against.
+
+| Setting | Meaning |
+| ------- | ------- |
+| `SYNC_RELAY_URL` | The relay's **internal** origin. The same setting `/systems/` probes. |
+| `SYNC_RELAY_SERVICE_TOKEN` | The credential for the relay's `/internal/vaults`, shared with the relay as `SCN_SYNC_RELAY_SERVICE_TOKEN`. Blank leaves the page saying vaults are not set up. |
+| `ENABLE_NOTES` | Default `True`. `False` hides the nav's **Notes** entry from everyone, for a deployment that has not rolled the service out. It hides the link only: `/notes/` still answers. |
+
+## Public clients: Claude, Claude Code and SCN Sync
+
+Open WebUI is a confidential client: it holds a secret and is described by
+settings. Corliss also serves **public** clients, which hold no secret: the
+Claude apps, Claude Code, and the SCN Sync plugin for Obsidian. They sign a
+member in to reach [scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay),
+where the member's notes live. The design is in
+[`docs/specs/0001-spec-multi-client-oauth`](docs/specs/0001-spec-multi-client-oauth/0001-spec-multi-client-oauth.md).
+
+- **A public client's `client_id` is a URL**, the address of a metadata
+  document saying what the client is. There is no table of clients and nothing
+  to register.
+- **Corliss hosts the plugin's document** at `/clients/scn-obsidian.json`.
+  That path is the plugin's identity, the same way the atproto `client_id` is
+  Corliss's own. Move it and every install becomes a new client whose refresh
+  tokens no longer work.
+- **Corliss never fetches its own document over HTTP.** `oidc.resolve_client`
+  reads the function that builds it. With two gunicorn workers a request to
+  our own origin can wait on itself.
+- **Discovery is served at two paths.** MCP clients ask
+  `/.well-known/oauth-authorization-server` first. Claude treats a
+  `client_id` as a metadata document only when discovery carries both
+  `client_id_metadata_document_supported` and the `none` auth method, and
+  otherwise looks for a registration endpoint that does not exist here.
+- **A blank `OIDC_CLIENT_SECRET` refuses Open WebUI at the token endpoint.**
+  It used to compare equal to a request that sent no secret. With `none` now
+  advertised, that comparison could not stand.
+
+### Client metadata documents
+
+Claude's and Claude Code's `client_id` is a URL on `claude.ai`, and Corliss
+fetches what is served there to learn the client's name and where it may be
+redirected. **This is the one request Corliss makes to an address somebody
+else chose**, and each rule is about what that could be turned into.
+
+- **Only allowlisted URLs are fetched, and the allowlist is checked before any
+  network call.** `authorize` resolves the client before it asks anyone to
+  sign in, so without the list an anonymous request could make Corliss fetch
+  any URL.
+- **An allowlist entry is an exact URL or an origin**, and an origin is
+  compared on its parsed scheme, host and port. `https://claude.ai.evil.test`
+  and `https://claude.ai@evil.test` both start with an allowed origin as
+  strings.
+- **`https` only, with a path, no credentials and no fragment.**
+- **Never an internal address.** The host is resolved first and refused if
+  any answer is loopback, private, link-local, multicast or otherwise not
+  public. One internal answer among public ones refuses the name.
+- **The connection goes to the address that was checked**, not to the name,
+  so a second DNS answer cannot move it. TLS still asks for and verifies the
+  certificate for the hostname. Proxy settings from the environment are
+  ignored for the same reason.
+- **A redirect is a failure**, as is any status but `200`, a body over 64 KB,
+  or one that takes longer than about five seconds: connecting and each read
+  get two seconds, and the fetch is abandoned at five.
+- **The document's `client_id` must equal its URL exactly**, its
+  `token_endpoint_auth_method` must be `none` when stated, and every redirect
+  URI must be `https` or loopback `http`. **A custom scheme is accepted only
+  from Corliss's own document**: any app on a device can register one.
+- **Cached in the database**, in `OidcClientDocument`, because Django's cache
+  here is per worker. Fresh for an hour, or for the document's `max-age`
+  clamped to between five minutes and a day.
+- **A failed refetch serves the stale document for up to a day** past its
+  freshness, with a warning in the log, and retries at most once a minute per
+  worker. A client's site being down should not sign every member out.
+- **A failed first fetch is remembered for a minute**, so a broken URL cannot
+  be used to make Corliss fetch in a loop.
+- **A failure is an error page**, never a redirect. `last_error` on the row,
+  visible in the Django admin, says what went wrong.
+
+Run against the real document once while this was built, and against
+addresses holding another site's certificate to confirm the connection is
+refused. The suite itself never touches the network.
+
+### Signing in and consent
+
+What a public client's member meets at `/oidc/authorize`, in order:
+
+1. **The client and its redirect URI are checked first.** A failure here is
+   an error page, never a redirect: sending the browser to an address nobody
+   vouched for is the thing the check exists to prevent.
+2. **Every later fault goes back to the client** as a redirect carrying
+   `error` and `state`. Open WebUI keeps its JSON errors.
+3. **Not signed in:** the usual round trip through `/auth/login`. A request
+   longer than 2048 characters is refused with `invalid_request` instead,
+   because Django's own safe-URL check drops anything longer and the member
+   would land on the home page with no explanation.
+4. **Not a member:** the home page, as for every other gated surface.
+5. **Consent**, then the code.
+
+Rules with a plausible wrong answer:
+
+- **PKCE is required, S256 only.** There is no secret, so the verifier is the
+  only proof that the caller redeeming a code is the one that asked for it.
+- **Redirect URIs match exactly, except a loopback port.** `https` and custom
+  schemes are compared as strings. `http` is accepted only on `localhost`,
+  `127.0.0.1` or `[::1]`, with the port ignored on both sides, because a
+  native app cannot know its port ahead of time. `localhost` and `127.0.0.1`
+  do not match each other.
+- **`resource` is required and names exactly one configured resource.** One
+  token, one audience. It is matched after lowercasing the scheme and host
+  and dropping a bare trailing slash, and the token is issued for the
+  configured spelling, never the client's.
+- **The consent screen names the app by the host of its `client_id`.** The
+  `client_name` is the app's own claim about itself and is shown as that.
+- **The consent form posts a ticket, not the request.** The validated request
+  waits in the session. Nothing the browser sends back is read as a request
+  parameter, and a ticket answers once.
+- **Consent is remembered per member, client and resource, except for a
+  loopback client**, which is asked every time: any program on the machine
+  can present another client's `client_id`.
+- **GATE is asked at `authorize` and again when the form is posted.** The
+  screen can sit open while a member is revoked.
+- **The redirect to `obsidian://` uses a response class that allows exactly
+  that scheme.** Django refuses anything but http, https and ftp. The scheme
+  allowed is the one on a URI already matched against the client's list.
+- **A public client gets no `OidcSession` row** and no `sid`. That row exists
+  for back-channel logout and a public client has no endpoint to notify.
+- **An `id_token` is issued only when `openid` was granted.** Its `aud` is the
+  `client_id`, never a resource.
+
+### Access tokens
+
+A public client receives an access token for one resource. This shape is a
+contract with the relay, which answers anything else with a bare `401`.
+
+| Part | Value |
+| ---- | ----- |
+| Header | `alg` `RS256`, `typ` `at+jwt`, `kid` the OIDC key's thumbprint |
+| `iss` | `PUBLIC_BASE_URL` with no trailing slash |
+| `sub` | The member's DID |
+| `aud` | One resource URL, a string, spelled as `OIDC_RESOURCES` spells it |
+| `exp` | 15 minutes after `iat` |
+| `jti`, `scope`, `client_id` | Unique ID, granted scope (may be empty), the client |
+
+- **`typ` is what separates it from an `id_token`.** Both are signed by the
+  same key, and the relay refuses a token that does not say `at+jwt`.
+- **No handle, name or email.** The plugin sends this token in a websocket
+  URL.
+- **Fifteen minutes is the revocation bound.** Nothing revokes an access token
+  once issued.
+
+### Refresh tokens
+
+An access token lasts fifteen minutes, so a connected client refreshes
+constantly. **The refresh grant is where "stops when you are not a member" is
+enforced for every public client**: it asks `membership.may_enter` every time.
+
+- **Issued to a client whose metadata document lists the `refresh_token`
+  grant, whatever scope it asked for.** Not tied to `offline_access`. The
+  relay advertises no scopes and Claude Code's document declares none, so a
+  client may never ask, and one without a refresh token would sign its member
+  in again every fifteen minutes.
+- **Opaque, and only the SHA-256 hash is stored.** A copy of the table is not
+  a set of credentials.
+- **Bound to one member, one client and one resource.** A member using both
+  sync and Claude holds two, in two families.
+- **Used once.** Each refresh returns a new refresh token and starts a new
+  thirty days, so a client in use never expires and an abandoned one does.
+- **A token presented twice ends its whole family**, and the member signs in
+  again. Two holders cannot be told apart, so both lose it.
+- **Except a retry within 60 seconds whose first answer was never used.**
+  That is a client that sent the request and never saw the response, which is
+  what iOS suspending Obsidian mid-refresh looks like. The retry gets its own
+  pair and the pair it never received is superseded. Once anything issued from
+  the token has been used, a replay is a replay again.
+- **The grant runs under a row lock**, not a conditional update. Two
+  concurrent retries of one used token would otherwise each leave a live
+  successor.
+- **Every refusal is `invalid_grant` or `invalid_target`.** Claude treats any
+  other code as a server fault and retries instead of signing in again.
+- **Revocation deletes the member's refresh tokens** in
+  `membership.apply_event`. That is a tidy-up: the membership check refuses
+  them whether or not the delete ran, and a test holds it to that.
+- **Signing out of Corliss leaves them alone.** A browser session and an app
+  on another device are not connected, and signing out of the website must
+  not stop Obsidian syncing on a phone.
+- **The token endpoint fetches no client document.** A code or refresh token
+  already records its client, and the client's declared grants are read from
+  the row `authorize` cached. This keeps it inside Claude's ten second limit.
+- **It can still make one outbound call: the admin roster read inside
+  `may_enter`.** That happens only for a DID with no active grant, which is
+  the refusal path and the roster admin with no grant, and at most once per
+  worker per `ROSTER_CACHE_TTL` (five minutes). It is asked before the row is
+  locked, so no lock is held across the network.
+
+How long a removed member keeps access:
+
+| Event | Access ends within |
+| ----- | ------------------ |
+| Revocation pushed by the registry and applied | 15 minutes, the life of the access token already issued |
+| Push missed | The next `reconcile_membership` run, plus 15 minutes |
+| An admin with no grant removed from the roster | 5 minutes of roster cache, plus 15 minutes |
+
+A missed push is bounded only by a scheduled reconcile, and with none it is
+not bounded at all. Public clients are the reason the deployment needs
+`manage.py reconcile_membership` on an hourly timer, which makes the worst
+case 75 minutes. The timer is the deployment's to provide; nothing in this
+repo schedules it. On the Z-Space cluster it is zai-ops'
+`corliss-reconcile.timer`, which also runs once after boot.
+
+An operator disconnects one client from one member by deleting its rows under
+**Oidc refresh tokens** in the Django admin.
+
+### Settings
+
+| Setting | Meaning |
+| ------- | ------- |
+| `OIDC_RESOURCES` | The resources a public client can get a token for, as a JSON list of `{"url", "kind", "label"}`. `kind` is `sync` or `mcp`, at most one of each. Blank issues nothing to any public client. |
+
+| `OIDC_CLIENT_METADATA_ALLOWLIST` | Which `client_id` URLs may sign members in, comma separated: exact URLs, or origins such as `https://claude.ai`. Blank accepts only the SCN Sync plugin. |
+
+- **`url` becomes `aud` exactly as written**, and the relay compares it
+  character for character against `SCN_SYNC_RELAY_SYNC_AUDIENCE` and
+  `SCN_SYNC_RELAY_MCP_AUDIENCE`. A trailing slash on one side is a `401` with
+  no explanation. Render both services from one definition.
+- **A value that does not parse fails the deploy**, as system check
+  `corliss.E004`, and names the entry at fault. It is JSON in an env file, so
+  a stray quote is the likely mistake. At runtime a bad value issues nothing,
+  and never half of what was meant.
+
+### Wiring up Claude and Obsidian
+
+Three things have to agree between Corliss and the relay, and each fails as a
+bare `401` from the relay when it does not:
+
+| Corliss | scn-sync-relay | Must be |
+| ------- | -------------- | ------- |
+| `PUBLIC_BASE_URL` | `SCN_SYNC_RELAY_OIDC_ISSUER` | The same origin, no trailing slash on the relay's side |
+| `OIDC_RESOURCES`, the `sync` and `mcp` `url`s | `SCN_SYNC_RELAY_SYNC_AUDIENCE`, `SCN_SYNC_RELAY_MCP_AUDIENCE` | Identical strings |
+| `SYNC_RELAY_SERVICE_TOKEN` | `SCN_SYNC_RELAY_SERVICE_TOKEN` | The same secret |
+
+The relay fetches keys from `/.well-known/jwks.json` at Corliss's **internal**
+address, and calls nothing else here. Set `OIDC_CLIENT_METADATA_ALLOWLIST` to
+`https://claude.ai` for Claude and Claude Code; the plugin needs no entry.
+Nothing in front of Corliss may block `160.79.104.0/21`, where Claude's
+discovery and token requests come from.
+
+A member then makes a vault at `/notes/`, pastes the sync address shown
+there into the SCN Sync plugin, and adds the MCP address to whatever MCP
+client they use.
+
 ## Wiring up a relying party (Open WebUI shown)
 
 ```bash
@@ -1137,6 +1432,13 @@ Register the RP's redirect URI in Corliss's `OIDC_REDIRECT_URIS`
 logout endpoint in `OIDC_BACKCHANNEL_LOGOUT_URI` — its *internal* address, since
 that call is service-to-service and has no business routing out through public
 DNS and back in through the edge.
+
+**This is the confidential client, and there is exactly one.** Claude, Claude
+Code and SCN Sync are not wired up this way: they register nothing here and
+hold no secret. A public client needs its document's origin or URL in
+`OIDC_CLIENT_METADATA_ALLOWLIST` (Corliss's own SCN Sync document needs
+nothing) and the resource it asks for in `OIDC_RESOURCES`. See "Public
+clients: Claude, Claude Code and SCN Sync".
 
 **Redis is not optional on the RP side, and not merely for logout.** Open WebUI
 can drop stored OAuth sessions without it, but revoking an already-issued JWT is

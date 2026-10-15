@@ -1,6 +1,9 @@
 # 0001 Spec: Multi-client OAuth and "Your vaults"
 
-Status: draft, 2026-10-07.
+Status: built on the `multi-client-oauth` branch, 2026-10-09. Not released.
+Claude Code signed in and called a tool against a local relay with auth on,
+2026-10-14. Open questions decided 2026-10-15; hosted Claude and the plugin
+on iOS are checked on staging, see decisions 1 and 5.
 
 ## Goal
 
@@ -106,7 +109,7 @@ the plugin's protocol handler. The plugin asks for `offline_access` and the
 sync resource.
 
 The exact `client_id` URL the hosted Claude apps send is not published. See
-open question 1.
+decision 1.
 
 ## Token contract
 
@@ -255,9 +258,12 @@ workers.
   warning.
 - A failed first fetch is remembered for 60 seconds, so a broken URL cannot be
   used to make Corliss fetch in a loop.
-- Only `authorize` fetches. The token endpoint never makes an outbound
-  request: a code or refresh token already records the client it was issued
-  to. This keeps the token endpoint inside Claude's 10 second limit.
+- Only `authorize` fetches a client document. The token endpoint never
+  does: a code or refresh token already records the client it was issued
+  to. This keeps the token endpoint inside Claude's 10 second limit. The
+  one outbound call the token endpoint can make is the admin roster read
+  inside `may_enter`, and only for a DID with no active grant, at most once
+  per worker per `ROSTER_CACHE_TTL`.
 
 ## C3. PKCE
 
@@ -377,14 +383,20 @@ Token response for a public client:
   "token_type": "Bearer",
   "expires_in": 900,
   "scope": "offline_access",
-  "refresh_token": "<opaque, when offline_access was granted>",
+  "refresh_token": "<opaque, when the client's document lists the refresh_token grant>",
   "id_token": "<jwt, when openid was granted>"
 }
 ```
 
 ## C5. Refresh tokens
 
-- Issued at code exchange when `offline_access` is in the granted scope.
+- Issued at code exchange when the client's metadata document lists
+  `refresh_token` in `grant_types`. Not tied to the `offline_access` scope:
+  the relay's protected resource metadata advertises no scopes and Claude
+  Code's document declares none, so a client may never ask for it, and
+  without a refresh token it would sign in again every 15 minutes. The
+  membership check at step 6 is the control. The token endpoint reads the
+  cached document and does not fetch.
 - Opaque, from `secrets.token_urlsafe(48)`. Only the SHA-256 hash is stored.
 - Bound to member, client, resource and scope. All tokens descended from one
   authorization share a `family`.
@@ -409,11 +421,16 @@ The `refresh_token` grant, in order:
 6. **Membership.** `membership.may_enter(did)`. If false, delete the family
    and return `invalid_grant`. This is the membership rule for every public
    client.
-7. Claim the token with a conditional update, so that of two concurrent
-   requests only one wins, the way codes are claimed today
-   (`corliss/views.py:2145-2149`). The loser is handled as a replay under
-   step 3, which inside the window gives it its own pair and supersedes the
-   winner's.
+7. Claim the token. Steps 2 to 8 run in one transaction holding a row lock
+   on the token (`select_for_update`), so two concurrent requests are served
+   one after the other. The membership answer for step 6 is read before the
+   lock is taken and applied inside it: for a DID with no active grant,
+   `may_enter` can read the admin roster over the network, and a lock is not
+   held across that. The second finds the token used and is handled as a
+   replay under step 3, which inside the window gives it its own pair and
+   supersedes the first's. A conditional update alone is not enough here:
+   two concurrent retries of a used token would each issue a successor and
+   neither would supersede the other.
 8. Issue a new access token and a new refresh token in the same family, with
    the same resource and scope, in the same response.
 
@@ -439,10 +456,10 @@ bound on cutting a member off.
 | Push missed | The next reconcile run, plus 15 minutes |
 | An admin with no grant removed from the roster | 5 minutes of roster cache (`ROSTER_CACHE_TTL`, per worker), plus 15 minutes |
 
-There is no scheduled reconcile today. `docs/membership.md` records the timer
-as not built. Until one runs, a missed push is unbounded. This spec asks the
-deployment for an hourly `manage.py reconcile_membership`, which makes the
-worst case 75 minutes. See Settings and open question 3.
+The deployment runs `manage.py reconcile_membership` hourly and once after
+boot, from `corliss-reconcile.timer`, which makes the worst case for a missed
+push 75 minutes. Without that timer a missed push lasts until an admin
+presses Reconcile on `/manage/`. See decision 3.
 
 ### Revocation and sign-out
 
@@ -535,7 +552,7 @@ client.
 
 | Setting | Default | Notes |
 |---|---|---|
-| `OIDC_RESOURCES` | empty | Resource URLs tokens may be issued for, each with a label and a kind (`sync` or `mcp`). Empty refuses every public client. |
+| `OIDC_RESOURCES` | empty | Resource URLs tokens may be issued for, as a JSON list of `{"url", "kind", "label"}` objects, with kind `sync` or `mcp`. Empty refuses every public client. A value that is not that shape fails `manage.py check`, and so the deploy. |
 | `OIDC_CLIENT_METADATA_ALLOWLIST` | empty | Exact URLs or origins. Empty accepts only Corliss's own documents. |
 | `SYNC_RELAY_URL` | exists | Internal relay address. Already used by `/systems/`. Reused for C7. |
 | `SYNC_RELAY_SERVICE_TOKEN` | empty | Shared credential for the relay's `/internal/vaults`, used to list and to create. Empty shows "not configured" on the Obsidian page. |
@@ -570,6 +587,12 @@ the same change, and each new route in the Endpoints table.
   is already in `corliss_allowed_hosts` for the registry's push.
 - **Hourly reconcile timer** on the Corliss CT running
   `manage.py reconcile_membership`. See Membership freshness.
+- **The relay's Phase B rollout, in the same change.** The relay pinned
+  before this work, v0.1.2, has no token verifier and no `/internal/vaults`,
+  so this release would deploy inert without it. v0.2.0 with
+  `REQUIRE_AUTH=true`, the issuer, JWKS, audience and service token
+  settings, the MCP listener, and public routes for sync and MCP, with
+  `/internal/` left unrouted.
 - **No new proxy route for Corliss.** Every new path is on the existing host.
   Nothing in front of Corliss may block `160.79.104.0/21`, where Claude's
   discovery and token requests come from.
@@ -580,8 +603,9 @@ the same change, and each new route in the Endpoints table.
 
 One page for members that explains the service and holds their vaults.
 
-- Route `vaults/`, `@member_required`. GET shows the page. POST creates a
-  vault. A nav entry for members, labelled **Obsidian**.
+- Route `notes/`, `@member_required`. GET shows the page. POST creates a
+  vault. A nav entry for members, labelled **Notes**, hidden when
+  `ENABLE_NOTES` is off.
 - `corliss/sync_relay.py`, a new module, because the relay is an external
   system. An underscore, since a hyphen cannot be imported. Two functions,
   both with `Authorization: Bearer <SYNC_RELAY_SERVICE_TOKEN>`, a 5 second
@@ -596,13 +620,13 @@ One page for members that explains the service and holds their vaults.
 
 What the page shows, top to bottom:
 
-1. **What this is.** Notes kept on SCN, readable and editable from Obsidian
-   and from Claude, for as long as you are a member. That SCN's operators
-   can read them.
+1. **What this is.** Notes kept on SCN, readable and editable from Obsidian,
+   for as long as you are a member. That they are not end-to-end encrypted.
 2. **Your vaults.** Name, created and last change for each, and a form to
    create one: a name and a button. A member can have any number.
-3. **Connect Claude.** The public MCP URL, with the steps to add it as a
-   connector.
+3. **MCP service.** The public MCP URL, and that any assistant or tool that
+   supports MCP servers can use it. The page names no AI product: the site
+   is AI agnostic, and the service works with any MCP client.
 4. **Connect Obsidian.** Create a new empty vault in Obsidian, install SCN
    Sync, paste the public sync URL, sign in, pick a vault. On iPhone, leave
    **Store in iCloud** off.
@@ -639,7 +663,7 @@ flow assertions after every change in this spec. Existing tests that assert
 UI wording are not reviewed or rewritten here.
 
 New test modules: `test_public_clients.py` (C1, C3, C4, C6, consent),
-`test_cimd.py` (C2), `test_refresh.py` (C5), `test_vaults.py` (C7).
+`test_cimd.py` (C2), `test_refresh.py` (C5), `test_notes.py` (C7).
 
 | Acceptance check | Automated here | Verified on the cluster |
 |---|---|---|
@@ -671,59 +695,74 @@ Further unit coverage:
 
 ## Sequencing
 
-**The relay is blocked on Corliss**, in this order:
+**The relay is built first.** Its verifier is written against the token
+contract above and tested with tokens its own tests mint, so it does not
+wait for C6. The contract is the interface: Corliss must issue exactly what
+that section says.
 
-1. **C6 first.** The relay's verifier needs a real access token to be written
-   against: the claims above, the `typ` header, and the JWKS. C6 cannot ship
-   alone, since only a public client receives such a token, but it is the
-   part to settle and build first. The token contract section is the
-   interface.
-2. **C1 to C5**, before any real client can reach the relay: client lookup,
-   CIMD, PKCE, redirect matching, refresh.
+**Corliss follows, in one release:** C1 to C7, discovery, consent and
+migration `0007`. C7 needs the relay's two `/internal/vaults` endpoints,
+whose JSON is pinned in the relay's spec, section Z3.
 
-**Corliss is blocked on the relay** for C7 only. It needs the relay's two
-`/internal/vaults` endpoints and their shapes. C7 ships after the relay's
-Phase B.
+**Neither is in use until both are deployed.** The relay cannot run with
+auth on until Corliss issues access tokens, and a vault can only be created
+on the Obsidian page, so the deployment change that turns on the relay's
+auth and adds its public routes lands after this release.
 
-**C7 now gates first use.** A vault can only be created here, so no member
-can use Claude or Obsidian with SCN until release B is deployed. Releases A
-and B are both on the path to the first working connection.
+## Where Notes sits
 
-Suggested releases:
+Decided 2026-10-15, after Boris's review of PR #18: accepted as built.
 
-| Release | Contains | Unblocks |
-|---|---|---|
-| A | C1 to C6, discovery, consent, migration `0007` | The relay's verifier, then acceptance checks 1 to 6 |
-| B | C7 | Acceptance check 7, and every member's first vault |
+The OAuth half of this spec is identity provider work and belongs in Corliss.
+The Notes half is not: the `/notes/` page, `sync_relay.py` and the plugin's
+client document make member management the front end for one content type.
+With one content type that is fine. The expected end state is groups or
+Workspaces managed in one place, with each content type a separate app inside
+a group that asks the group layer who belongs.
 
-## Open questions
+When a second content type arrives, the Notes page and the vault list and
+create calls move behind that boundary, and a vault's owner becomes a group
+rather than one member's DID. The data already sits on the right side: the
+relay holds every vault and Corliss stores none. The public client machinery
+(C1 to C6) stays where it is.
+
+## Decisions
+
+Formerly the open questions. Each was decided on 2026-10-15.
 
 1. **The hosted Claude `client_id` URL.** Not published. The allowlist
-   default is the `https://claude.ai` origin. Read the exact URL from the
-   first real authorize request and decide whether to pin it.
-2. **Grace window length.** 60 seconds is proposed. Confirm against Obsidian
-   on iOS on a poor connection.
-3. **The reconcile timer.** Needed for the freshness bound and not built.
-   Confirm it lands with this work, and the interval.
-4. **`/internal/vaults` shapes.** The relay's spec names the fields (root
-   document ID, name, created, last change) and not the JSON, for the list
-   and for the create response. Pin both before C7.
-5. **Custom-scheme redirect, desktop and iOS.** Whether the browser hands
-   `obsidian://scn-obsidian` back to Obsidian is not verified in two cases:
-   after the consent POST and redirect, and when consent is remembered and
-   `authorize` redirects with no tap at all. Check both on macOS and iOS. If
-   either fails, a custom-scheme redirect ends on a page with a link the
-   member taps.
-6. **Whether public clients should get an ID token at all.** Allowed here
-   when `openid` is requested. No current client needs it.
+   stays at the `https://claude.ai` origin: pinning one URL would break the
+   connector the day Anthropic moves its document, and the origin is
+   already a narrow grant. The URL seen on the first real authorize request
+   is recorded here for reference: _pending the Ronchamp sign-in_.
+2. **Grace window length.** Ships at 60 seconds. Not measured against
+   Obsidian on iOS on a poor connection. If that case logs members out, the
+   symptom is a deleted family in the log after a replay just outside the
+   window, and the constant in `oidc.py` is the one thing to change.
+3. **The reconcile timer.** Built in the deployment, not in Corliss:
+   `corliss-reconcile.timer` runs `manage.py reconcile_membership` hourly
+   and once after boot. A missed revocation push is bounded at 75 minutes.
+   See Membership freshness.
+4. Settled. The JSON is in the relay's spec, section Z3.
+5. **Custom-scheme redirect, desktop and iOS.** The two cases are the
+   redirect after the consent POST, and a remembered consent where
+   `authorize` redirects with no tap. macOS, Safari, 2026-10-15: both
+   cases hand off to Obsidian after Safari's "Open Obsidian?" prompt, so
+   no tap-through page is needed there. iOS: _pending the plugin sign-in on
+   Ronchamp_.
+6. **Whether public clients should get an ID token at all.** Yes, when
+   `openid` is requested. No current client asks, and refusing it would
+   add a branch to guard a case nothing exercises. Closed.
 
 ## Rollout
 
-1. Land release A, run the suite, bump the version with `bin/release`, push
+1. Land the release, run the suite, bump the version with `bin/release`, push
    the tag.
 2. In the deployment repo: the new variables, the secret, the allowlist, the
-   timer and the version pin, in one change.
+   timer, the version pin and the relay's Phase B settings and routes, in
+   one change. Deploy to staging first: the Claude connector and the plugin
+   on iOS are signed in there, and decisions 1 and 5 recorded, before
+   production.
 3. Update the README: Endpoints table, settings tables, `.env.example`, the
    "Wiring up a relying party" section, and a section on public clients.
    Update `docs/membership.md` where it says the timer is not built.
-4. Release B after the relay's Phase B is deployed.

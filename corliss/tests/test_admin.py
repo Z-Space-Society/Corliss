@@ -10,6 +10,7 @@ here at all, and — just as much — what that does *not* grant them.
 """
 
 import json
+from datetime import timedelta
 from io import StringIO
 from unittest.mock import patch
 
@@ -19,9 +20,16 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from corliss import atproto, membership
-from corliss.models import AtprotoToken, MembershipCache
+from corliss.models import (
+    AtprotoToken,
+    MembershipCache,
+    OidcClientDocument,
+    OidcConsent,
+    OidcRefreshToken,
+)
 from corliss.tests.roster_fixtures import (
     OTHER_ADMIN as OTHER,
     SERVICE_DID,
@@ -160,6 +168,69 @@ class MembershipCacheAdminTests(TestCase):
         )
         self.assertEqual(resp.status_code, 200)
         self.assertNotContains(resp, 'name="_save"')
+
+
+class PublicClientAdminTests(TestCase):
+    """The three public-client tables: all read-only, and an operator can
+    delete a refresh token or a consent to disconnect a client."""
+
+    CLIENT = "https://claude.ai/oauth/claude-code-client-metadata"
+    RESOURCE = "https://mcp.example.test"
+
+    def setUp(self):
+        self.superuser = User.objects.create_superuser(
+            username="root.bsky.social", did="did:plc:rootrootrootrootrootroot"
+        )
+        self.client.force_login(self.superuser)
+        self.member = User.objects.create_user(username="alice.bsky.social", did=DID)
+        now = timezone.now()
+        self.rows = {
+            OidcRefreshToken: OidcRefreshToken.issue(
+                user=self.member,
+                client_id=self.CLIENT,
+                resource=self.RESOURCE,
+                scope="",
+                ttl=timedelta(days=30),
+            )[1],
+            OidcConsent: OidcConsent.objects.create(
+                user=self.member, client_id=self.CLIENT, resource=self.RESOURCE
+            ),
+            OidcClientDocument: OidcClientDocument.objects.create(
+                client_id=self.CLIENT, fetched_at=now, expires_at=now
+            ),
+        }
+
+    def _request(self):
+        return type("Req", (), {"user": self.superuser, "method": "GET"})()
+
+    def test_each_table_lists_and_opens(self):
+        for model, row in self.rows.items():
+            name = model._meta.model_name
+            with self.subTest(model=name):
+                listing = self.client.get(reverse(f"admin:corliss_{name}_changelist"))
+                self.assertEqual(listing.status_code, 200)
+                detail = self.client.get(
+                    reverse(f"admin:corliss_{name}_change", args=[row.pk])
+                )
+                self.assertEqual(detail.status_code, 200)
+                self.assertNotContains(detail, 'name="_save"')
+
+    def test_nothing_can_be_added_or_changed(self):
+        for model, row in self.rows.items():
+            site_admin = admin.site._registry[model]
+            with self.subTest(model=model._meta.model_name):
+                self.assertFalse(site_admin.has_add_permission(self._request()))
+                self.assertFalse(site_admin.has_change_permission(self._request(), row))
+
+    def test_a_refresh_token_and_a_consent_can_be_deleted_and_a_document_cannot(self):
+        allowed = {OidcRefreshToken: True, OidcConsent: True, OidcClientDocument: False}
+        for model, row in self.rows.items():
+            site_admin = admin.site._registry[model]
+            with self.subTest(model=model._meta.model_name):
+                self.assertEqual(
+                    site_admin.has_delete_permission(self._request(), row),
+                    allowed[model],
+                )
 
 
 @override_settings(SCN_SERVICE_DID=SERVICE_DID)

@@ -11,6 +11,8 @@ def ui(request):
         # The nav's Manage menu links here, for cluster admins only and only
         # when configured — see base.html.
         "MANAGE_URL": settings.MANAGE_URL,
+        # Whether the nav offers the Notes page. See settings.ENABLE_NOTES.
+        "ENABLE_NOTES": settings.ENABLE_NOTES,
         # LiteLLM's own admin UI, derived from API_URL rather than configured
         # separately: it is served from the same origin as the API itself, so a
         # second setting could only ever disagree with the first — and this way

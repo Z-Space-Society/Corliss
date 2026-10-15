@@ -43,7 +43,23 @@ urlpatterns = [
         views.openid_configuration,
         name="openid_configuration",
     ),
+    # The same document again, where an OAuth client that is not an OIDC one
+    # looks for it. MCP clients try this path first.
+    path(
+        ".well-known/oauth-authorization-server",
+        views.openid_configuration,
+        name="oauth_authorization_server",
+    ),
+    # The SCN Sync plugin's client metadata document. Like the atproto one
+    # above, this URL is the plugin's `client_id`, so the path cannot move.
+    path(
+        "clients/scn-obsidian.json",
+        views.plugin_client_metadata,
+        name="plugin_client_metadata",
+    ),
     path("oidc/authorize", views.authorize, name="authorize"),
+    # Where the consent screen posts. Reached only from `authorize`.
+    path("oidc/consent", views.consent, name="consent"),
     path("oidc/token", views.token, name="token"),
     # Registry (the SCN membership push)
     path(
@@ -68,6 +84,9 @@ urlpatterns = [
     path("workspaces/", views.workspaces, name="workspaces"),
     path("workspaces/new", views.workspace_new, name="workspace_new"),
     path("workspaces/<int:pk>/", views.workspace_edit, name="workspace_edit"),
+    # Notes kept on the sync relay: what they are, how to connect Obsidian
+    # and an MCP client, and the member's vaults. Named for what the nav calls it.
+    path("notes/", views.notes, name="notes"),
     path("api/", views.api, name="api"),
     path("tools/parascribe/", views.parascribe, name="parascribe"),
     # The cluster console. Gated on the atproto admin roster, not on a Django

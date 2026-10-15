@@ -26,6 +26,9 @@ section below defines them and says when to reach for which.
 - `api`: the member's own API keys — issue, list, revoke, and usage, read live
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
+- `notes`: the Notes page. What the notes service is, how to connect
+  Obsidian and an MCP client to it, and the member's vaults, which live on the sync
+  relay and are listed and created through `corliss.sync_relay`.
 - `parascribe`: how to call the cluster's transcription models. Signed-in, and
   names only the models the reader's own tier reaches.
 - `manage`: the cluster console — applications, members, admins, and
@@ -48,6 +51,12 @@ OIDC provider (machines):
   issue an auth code and redirect back, otherwise we bounce through atproto
   login and resume, or refuse. GATE's most important surface — see below.
 - `token`: the RP redeems the code (with its client secret) for an `id_token`.
+  A public client redeems its code with a PKCE verifier and receives an access
+  token for one resource instead.
+- `plugin_client_metadata`: the SCN Sync plugin's client metadata, at the URL
+  that is its `client_id`.
+- `consent`: where a member allows or refuses a public client. The one OIDC
+  endpoint a person posts to.
 
 Registry (machines):
 - `membership_push`: the SCN registry POSTs each grant/revocation here so
@@ -59,26 +68,40 @@ import hmac
 import json
 import logging
 import secrets
+import time
 from datetime import timedelta
 from functools import wraps
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.db.models import Count, OuterRef, Subquery
-from django.http import Http404, HttpResponseBadRequest, JsonResponse
+from django.http import (
+    Http404,
+    HttpResponseBadRequest,
+    HttpResponseRedirect,
+    JsonResponse,
+)
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from corliss import atproto, health, litellm, membership, oidc, signing
+from corliss import atproto, health, litellm, membership, oidc, signing, sync_relay
 from corliss.forms import AccountForm, WorkspaceForm
-from corliss.models import AtprotoToken, MembershipCache, OidcAuthCode, Workspace
+from corliss.models import (
+    AtprotoToken,
+    MembershipCache,
+    OidcAuthCode,
+    OidcConsent,
+    OidcRefreshToken,
+    Workspace,
+)
 
 User = get_user_model()
 
@@ -113,6 +136,18 @@ ACCOUNT_NOTICE_SESSION_KEY = "corliss:account_notice"
 # the same reason the console does.
 WORKSPACE_NOTICE_SESSION_KEY = "corliss:workspace_notice"
 WORKSPACE_ERROR_SESSION_KEY = "corliss:workspace_error"
+
+# Authorization requests from public clients waiting on the member's answer at
+# the consent screen, keyed by a random ticket. See `consent`.
+CONSENT_SESSION_KEY = "corliss:oidc_consent"
+# A member with several tabs open has several requests waiting. More than this
+# is not a person, and the session is a row in the database.
+CONSENT_MAX_PENDING = 5
+
+# The longest path and query a login round trip can carry. Django's
+# `url_has_allowed_host_and_scheme` refuses anything longer, so `_safe_resume`
+# would drop the request and leave the member on the home page with no error.
+RESUME_MAX_LENGTH = 2048
 
 # How far back /api/ reports usage. A month is what fits on the page and what
 # a member is actually asking when they look ("am I using a lot?").
@@ -1317,6 +1352,70 @@ def parascribe(request):
     )
 
 
+@member_required
+@require_http_methods(["GET", "POST"])
+def notes(request):
+    """The Notes page: the notes service, and the member's vaults.
+
+    The vaults are the relay's, not ours. This view asks `corliss.sync_relay`
+    for them and stores nothing.
+
+    **No request chooses whose vaults.** The relay's service token can list
+    and create for any DID, so the DID is `request.user.did` for both, and a
+    `did` in the query string or the form is never read.
+
+    No state of the relay raises here or hides the instructions: not
+    configured and unreachable are both things the page says about itself.
+    """
+    did = request.user.did
+    configured = sync_relay.is_configured()
+    name = ""
+    name_error = None
+
+    if request.method == "POST" and configured:
+        name = request.POST.get("name", "").strip()
+        if not name:
+            name_error = "Give the vault a name."
+        elif len(name) > sync_relay.VAULT_NAME_MAX:
+            name_error = (
+                f"A vault name can be at most {sync_relay.VAULT_NAME_MAX} characters."
+            )
+        else:
+            try:
+                sync_relay.create_vault(did, name)
+            except sync_relay.NameTaken:
+                name_error = "You already have a vault with that name."
+            except sync_relay.SyncRelayError:
+                name_error = "The vault could not be created right now. Try again shortly."
+            else:
+                # Back to the page, which now lists it.
+                return redirect("notes")
+
+    member_vaults = None
+    if configured:
+        try:
+            member_vaults = sync_relay.list_vaults(did)
+        except sync_relay.SyncRelayError:
+            pass
+
+    by_kind = {resource.kind: resource.url for resource in oidc.resources()}
+    return render(
+        request,
+        "notes_mcp.html",
+        {
+            "configured": configured,
+            # None when the relay did not answer; a list, possibly empty, when
+            # it did. The template tells the two apart.
+            "vaults": member_vaults,
+            "reachable": member_vaults is not None,
+            "name": name,
+            "name_error": name_error,
+            "sync_url": by_kind.get("sync", ""),
+            "mcp_url": by_kind.get("mcp", ""),
+        },
+    )
+
+
 @require_http_methods(["GET"])
 @admin_required
 def systems(request):
@@ -1980,13 +2079,220 @@ def jwks(request):
 
 
 def openid_configuration(request):
+    """The provider's discovery document, served at two well-known paths."""
     return JsonResponse(oidc.discovery_document())
+
+
+def plugin_client_metadata(request):
+    """Serve the SCN Sync plugin's client metadata at its `client_id` URL."""
+    return JsonResponse(oidc.plugin_client_metadata())
 
 
 def _error(error, description, status=400):
     return JsonResponse(
         {"error": error, "error_description": description}, status=status
     )
+
+
+def _oauth_error_page(request, error, description, status=400):
+    """An OAuth failure shown to the person, because there is nowhere safe to
+    send it. Used when the client or its redirect URI did not check out: a
+    redirect would hand the error, and the browser, to an address nobody
+    vouched for."""
+    return render(
+        request,
+        "oauth_error.html",
+        {"error": error, "description": description},
+        status=status,
+    )
+
+
+def _client_redirect(redirect_uri, params):
+    """Send the browser back to a public client's redirect URI.
+
+    Django's redirect refuses any scheme but http, https and ftp, and the
+    plugin's redirect is `obsidian://scn-obsidian`. The scheme allowed here is
+    exactly the one on a URI that `oidc.redirect_uri_matches` already accepted
+    for this client, so this widens nothing: it cannot be reached with a URI
+    the client did not declare.
+    """
+    scheme = urlsplit(redirect_uri).scheme
+
+    class _Redirect(HttpResponseRedirect):
+        allowed_schemes = [scheme]
+
+    joiner = "&" if "?" in redirect_uri else "?"
+    return _Redirect(f"{redirect_uri}{joiner}{urlencode(params)}")
+
+
+def _client_error_redirect(redirect_uri, state, error, description):
+    params = {"error": error, "error_description": description}
+    if state:
+        params["state"] = state
+    return _client_redirect(redirect_uri, params)
+
+
+def _issue_public_code(user, pending):
+    """Issue the code a validated public request asked for, and redirect."""
+    code = oidc.issue_code(
+        user,
+        client_id=pending["client_id"],
+        redirect_uri=pending["redirect_uri"],
+        nonce=pending["nonce"],
+        scope=pending["scope"],
+        code_challenge=pending["code_challenge"],
+        resource=pending["resource"],
+    )
+    params = {"code": code}
+    if pending["state"]:
+        params["state"] = pending["state"]
+    return _client_redirect(pending["redirect_uri"], params)
+
+
+def _authorize_public(request, client):
+    """`authorize` for a client with no secret: Claude, Claude Code, SCN Sync.
+
+    Same order as the confidential path and for the same reason: the client
+    and its redirect URI are checked first, then the person, then GATE. What
+    is added is PKCE, a resource, and a consent screen, since anybody can
+    present a public `client_id`.
+    """
+    redirect_uri = request.GET.get("redirect_uri", "")
+    state = request.GET.get("state", "")
+
+    if not oidc.redirect_uri_matches(redirect_uri, client.redirect_uris):
+        return _oauth_error_page(
+            request, "invalid_request", "redirect_uri not registered for this client"
+        )
+
+    # The client and where it wants the answer sent are both good from here
+    # on, so every later refusal goes back to it rather than to a page.
+    def refuse(error, description):
+        return _client_error_redirect(redirect_uri, state, error, description)
+
+    if request.GET.get("response_type") != "code":
+        return refuse("unsupported_response_type", "only 'code' is supported")
+
+    code_challenge = request.GET.get("code_challenge", "")
+    if request.GET.get("code_challenge_method") != "S256":
+        return refuse("invalid_request", "code_challenge_method must be S256")
+    if not oidc.valid_code_challenge(code_challenge):
+        return refuse("invalid_request", "missing or malformed code_challenge")
+
+    # One token, one audience: a request naming two resources is refused
+    # rather than answered for the first.
+    requested = request.GET.getlist("resource")
+    resource = oidc.match_resource(requested[0]) if len(requested) == 1 else None
+    if resource is None:
+        return refuse("invalid_target", "resource missing, repeated or not known")
+
+    if not request.user.is_authenticated:
+        if len(request.get_full_path()) > RESUME_MAX_LENGTH:
+            return refuse("invalid_request", "request too long to resume after sign-in")
+        return _bounce_through_login(request)
+
+    # GATE. A refused member goes to the home page, as for Open WebUI and for
+    # the same reason: that page explains the refusal and how to apply, and
+    # an `access_denied` shown by somebody else's app explains nothing.
+    denial = membership_denial(request)
+    if denial is not None:
+        return denial
+
+    pending = {
+        "did": request.user.did,
+        "client_id": client.client_id,
+        "client_name": client.name,
+        "client_host": client.host,
+        "redirect_uri": redirect_uri,
+        "resource": resource.url,
+        "resource_label": resource.label,
+        "scope": oidc.grant_scope(request.GET.get("scope", "")),
+        "state": state,
+        "nonce": request.GET.get("nonce", ""),
+        "code_challenge": code_challenge,
+        "created": time.time(),
+    }
+
+    # A loopback client is asked every time. Any program on the machine can
+    # present another client's `client_id` and listen on a port, so a remembered
+    # answer would be an answer given to whichever program asked next.
+    loopback = oidc.is_loopback_redirect(redirect_uri)
+    if not loopback and OidcConsent.given(
+        request.user, client_id=client.client_id, resource=resource.url
+    ):
+        return _issue_public_code(request.user, pending)
+
+    # Hold the validated request here and give the form only a ticket for it,
+    # so nothing the browser posts back is read as a request parameter.
+    ticket = secrets.token_urlsafe(24)
+    waiting = request.session.get(CONSENT_SESSION_KEY, {})
+    waiting[ticket] = pending
+    newest = sorted(waiting, key=lambda t: waiting[t]["created"])[-CONSENT_MAX_PENDING:]
+    request.session[CONSENT_SESSION_KEY] = {t: waiting[t] for t in newest}
+
+    parts = urlsplit(redirect_uri)
+    return render(
+        request,
+        "consent.html",
+        {
+            "ticket": ticket,
+            "client_host": client.host,
+            "client_name": client.name,
+            # A custom scheme has no host worth the name, so the whole URI is
+            # what says where the answer goes.
+            "redirect_target": parts.hostname
+            if parts.scheme in ("http", "https")
+            else redirect_uri,
+            "loopback": loopback,
+            "resource_label": resource.label,
+        },
+    )
+
+
+@require_http_methods(["POST"])
+def consent(request):
+    """The member's answer to a public client's request: Allow or Cancel.
+
+    The form carries a ticket and a decision and nothing else. The request it
+    answers was validated by `authorize` and has been in the session since, so
+    a forged or replayed post finds no ticket and gets nothing.
+
+    **GATE is asked again here.** The screen can sit open, and the member may
+    have been revoked while it did.
+    """
+    waiting = request.session.get(CONSENT_SESSION_KEY, {})
+    pending = waiting.pop(request.POST.get("ticket", ""), None)
+    request.session[CONSENT_SESSION_KEY] = waiting
+
+    if (
+        pending is None
+        or not request.user.is_authenticated
+        or pending["did"] != request.user.did
+        or time.time() - pending["created"] > oidc.CODE_TTL_SECONDS
+    ):
+        return _oauth_error_page(
+            request,
+            "invalid_request",
+            "This sign-in request has expired. Go back to the app and start again.",
+        )
+
+    denial = membership_denial(request)
+    if denial is not None:
+        return denial
+
+    if request.POST.get("decision") != "allow":
+        return _client_error_redirect(
+            pending["redirect_uri"],
+            pending["state"],
+            "access_denied",
+            "the member declined",
+        )
+
+    if not oidc.is_loopback_redirect(pending["redirect_uri"]):
+        OidcConsent.record(
+            request.user, client_id=pending["client_id"], resource=pending["resource"]
+        )
+    return _issue_public_code(request.user, pending)
 
 
 @require_http_methods(["GET"])
@@ -1999,9 +2305,19 @@ def authorize(request):
     nonce = request.GET.get("nonce", "")
 
     # Validate the relying party before doing anything else.
-    if client_id != settings.OIDC_CLIENT_ID:
-        return _error("unauthorized_client", "unknown client_id")
-    if redirect_uri not in settings.OIDC_REDIRECT_URIS:
+    try:
+        client = oidc.resolve_client(client_id)
+    except oidc.ClientError as exc:
+        # A `client_id` that is a URL is a public client, and a person is
+        # looking at this response in a browser. Anything else keeps the JSON
+        # a relying party's own code has always been answered with.
+        if (client_id or "").startswith("https://"):
+            return _oauth_error_page(request, exc.error, exc.description)
+        return _error(exc.error, exc.description)
+    if client.is_public:
+        return _authorize_public(request, client)
+
+    if redirect_uri not in client.redirect_uris:
         return _error("invalid_request", "redirect_uri not registered")
     if response_type != "code":
         return _error("unsupported_response_type", "only 'code' is supported")
@@ -2114,14 +2430,201 @@ def _client_credentials(request):
     return cid, secret
 
 
-@csrf_exempt  # token endpoint is machine-to-machine, authenticated by client secret
+def _token_response(body):
+    """A token response, marked as never to be stored by anything in between."""
+    response = JsonResponse(body)
+    response["Cache-Control"] = "no-store"
+    return response
+
+
+def _public_code_grant(request, cid):
+    """Redeem a public client's code for an access token.
+
+    There is no secret to check. What proves the caller is the client that
+    started the flow is the PKCE verifier, whose hash has been on the code
+    since `authorize`. Nothing here makes an outbound request: the code
+    already records the client, the redirect and the resource.
+    """
+    try:
+        code = OidcAuthCode.objects.select_related("user").get(
+            code=request.POST.get("code", "")
+        )
+    except OidcAuthCode.DoesNotExist:
+        return _error("invalid_grant", "unknown code")
+
+    if not code.is_valid():
+        return _error("invalid_grant", "code expired or already used")
+    if code.client_id != cid or code.redirect_uri != request.POST.get(
+        "redirect_uri", ""
+    ):
+        return _error("invalid_grant", "code/client/redirect mismatch")
+    if not oidc.pkce_verifies(
+        request.POST.get("code_verifier", ""), code.code_challenge
+    ):
+        return _error("invalid_grant", "code_verifier does not match")
+
+    # Optional here. A client that sends it must name the resource it asked
+    # for at `authorize`; it cannot trade a code for a different audience.
+    requested = request.POST.get("resource")
+    if requested:
+        resource = oidc.match_resource(requested)
+        if resource is None or resource.url != code.resource:
+            return _error("invalid_target", "resource does not match the code")
+
+    claimed = OidcAuthCode.objects.filter(pk=code.pk, used=False).update(used=True)
+    if not claimed:
+        return _error("invalid_grant", "code already used")
+
+    body = {
+        "access_token": oidc.mint_access_token(
+            code.user, client_id=cid, resource=code.resource, scope=code.scope
+        ),
+        "token_type": "Bearer",
+        "expires_in": oidc.ACCESS_TOKEN_TTL_SECONDS,
+        "scope": code.scope,
+    }
+    if oidc.issues_refresh_tokens(cid):
+        body["refresh_token"], _ = OidcRefreshToken.issue(
+            user=code.user,
+            client_id=cid,
+            resource=code.resource,
+            scope=code.scope,
+            ttl=oidc.REFRESH_TOKEN_TTL,
+        )
+    if "openid" in code.scope.split():
+        # No `sid` and no `OidcSession` row: that row exists to carry `sid`
+        # for back-channel logout, and a public client has no logout endpoint
+        # to notify. Its `aud` is the client, never a resource, so the relay
+        # cannot take it for an access token.
+        body["id_token"] = oidc.mint_id_token(
+            code.user, client_id=cid, nonce=code.nonce
+        )
+    return _token_response(body)
+
+
+def _public_refresh_grant(request, cid):
+    """Trade a refresh token for a new access token and a new refresh token.
+
+    **This is where "stops when you are not a member" is enforced for every
+    public client.** An access token lasts fifteen minutes and nothing revokes
+    one, so the refresh is the only moment Corliss is asked again, and it asks
+    `membership.may_enter` every time. Deleting a revoked member's tokens (see
+    `membership.apply_event`) is a tidy-up; this check holds without it.
+
+    Every refusal is `invalid_grant` or `invalid_target`. Claude treats any
+    other code as a server fault and retries instead of signing in again.
+
+    The order of the checks is the spec's and each step has a reason to sit
+    where it does: reuse is judged before expiry so that replaying an old
+    token still ends its family, and membership before the claim so that a
+    refused member's token is deleted rather than spent.
+    """
+    found = OidcRefreshToken.lookup(request.POST.get("refresh_token", ""))
+    if found is None:
+        return _error("invalid_grant", "unknown refresh token")
+
+    # Asked before the row is locked. For a DID with no active grant this can
+    # read the admin roster over the network, and a lock has no business
+    # being held across that.
+    is_member = membership.may_enter(found.user.did)
+
+    with transaction.atomic():
+        # The lock is what makes rotation safe under concurrency: two requests
+        # with one token are served one after the other, and the second sees
+        # what the first did. `of=("self",)` keeps the member's row out of it.
+        row = (
+            OidcRefreshToken.objects.select_for_update(of=("self",))
+            .select_related("user")
+            .filter(pk=found.pk)
+            .first()
+        )
+        if row is None:
+            # Its family was deleted between the lookup and the lock.
+            return _error("invalid_grant", "unknown refresh token")
+        if row.client_id != cid:
+            return _error("invalid_grant", "refresh token was issued to another client")
+
+        if row.is_spent:
+            if not row.is_lost_response_retry(oidc.REFRESH_REUSE_GRACE):
+                # Two parties hold this token. Neither can be told from the
+                # other, so both lose it and the member signs in again.
+                row.revoke_family()
+                return _error("invalid_grant", "refresh token already used")
+            row.supersede_unused_children()
+
+        if row.is_expired:
+            return _error("invalid_grant", "refresh token expired")
+
+        requested = request.POST.get("resource")
+        if requested:
+            resource = oidc.match_resource(requested)
+            if resource is None or resource.url != row.resource:
+                return _error("invalid_target", "resource does not match the token")
+
+        if not is_member:
+            row.revoke_family()
+            return _error("invalid_grant", "no longer a member")
+
+        row.mark_used()
+        new_refresh, _ = OidcRefreshToken.issue(
+            user=row.user,
+            client_id=cid,
+            resource=row.resource,
+            scope=row.scope,
+            ttl=oidc.REFRESH_TOKEN_TTL,
+            parent=row,
+        )
+        scope = oidc.narrow_scope(row.scope, request.POST.get("scope", ""))
+        return _token_response(
+            {
+                "access_token": oidc.mint_access_token(
+                    row.user, client_id=cid, resource=row.resource, scope=scope
+                ),
+                "token_type": "Bearer",
+                "expires_in": oidc.ACCESS_TOKEN_TTL_SECONDS,
+                "scope": scope,
+                "refresh_token": new_refresh,
+            }
+        )
+
+
+def _token_public(request, cid):
+    """The token endpoint for a client that is not the configured one.
+
+    A public client authenticates with nothing, so there is no credential to
+    refuse here. A `client_id` nobody was issued a code for fails at the code,
+    as `invalid_grant`.
+    """
+    # Something that is not a URL cannot be a public client. Answered as a
+    # failed client authentication, which is what it always was.
+    if not cid or "://" not in cid:
+        return _error("invalid_client", "client authentication failed", status=401)
+
+    grant_type = request.POST.get("grant_type")
+    if grant_type == "authorization_code":
+        return _public_code_grant(request, cid)
+    if grant_type == "refresh_token":
+        return _public_refresh_grant(request, cid)
+    return _error(
+        "unsupported_grant_type", "only authorization_code and refresh_token"
+    )
+
+
+@csrf_exempt  # machine-to-machine: a client secret, or a PKCE verifier
 @require_http_methods(["POST"])
 def token(request):
     cid, secret = _client_credentials(request)
+    if cid != settings.OIDC_CLIENT_ID:
+        return _token_public(request, cid)
+
     # Constant-time comparison so the token endpoint doesn't leak the secret.
-    cid_ok = hmac.compare_digest(cid or "", settings.OIDC_CLIENT_ID)
-    secret_ok = hmac.compare_digest(secret or "", settings.OIDC_CLIENT_SECRET)
-    if not (cid_ok and secret_ok):
+    # A blank configured secret must refuse, not match. Comparing against ""
+    # would accept a request that also sent nothing, so a deployment that had
+    # not set one would hand tokens to anyone naming the client.
+    secret_ok = bool(settings.OIDC_CLIENT_SECRET) and hmac.compare_digest(
+        secret or "", settings.OIDC_CLIENT_SECRET
+    )
+    if not secret_ok:
         return _error("invalid_client", "client authentication failed", status=401)
 
     if request.POST.get("grant_type") != "authorization_code":

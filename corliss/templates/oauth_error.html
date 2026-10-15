@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% comment %}
+An OAuth request that could not be sent back to the app that made it, because
+the app or its return address did not check out. See
+`views._oauth_error_page`. The code is shown because it is what the app's
+developer will search for.
+{% endcomment %}
+
+{% block title %}Sign-in could not continue{% endblock %}
+
+{% block content %}
+<div class="account-view">
+  <h1>Sign-in could not continue</h1>
+  <p class="alert" role="alert">{{ description }}</p>
+  <p class="page-text page-text--note">Error code: <code>{{ error }}</code></p>
+</div>
+{% endblock %}

@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% comment %}
+The Obsidian page: what the notes service is, the member's vaults, and how to
+connect Obsidian and an MCP client. See `views.notes`.
+
+**No AI product is named here.** The relay serves the notes over MCP, which
+any assistant that speaks it can use, and this site does not point members at
+one. The section is called MCP service and says what the address is, not
+whose app to put it in.
+
+**The instructions always render.** The vault list depends on the sync relay
+answering, and the rest of the page does not: a member reading how this works
+should not be shown an error where the explanation was. Three states for the
+list, each said in words:
+
+- not configured: this deployment has no relay connected. No form.
+- unreachable: it has one and it did not answer. No form.
+- answered: the list, or that there are none yet, and the form.
+
+A vault is made here and nowhere else. The plugin only picks from this list.
+
+No script. One form with one field.
+{% endcomment %}
+
+{% block title %}Notes{% endblock %}
+
+{% block content %}
+<div class="account-view">
+  <h1>Notes</h1>
+
+  <p class="page-text">
+    Your notes, kept on this network. Read and edit them in Obsidian on your laptop and your phone with the
+    <a target="_blank" href="https://github.com/Z-Space-Society/scn-obsidian">scn-sync plugin</a>.
+  </p>
+
+  <!-- <p class="page-text page-text--note">Notes are not end-to-end encrypted.</p> -->
+
+  <h2 class="section-title">Your Note Vaults</h2>
+  <div class="card">
+    {% if not configured %}
+      <p class="alert alert--notice" role="status">
+        <strong>Not set up.</strong> This deployment has no notes service
+        connected, so vaults cannot be made here yet.
+      </p>
+    {% elif not reachable %}
+      <p class="alert" role="alert">
+        <strong>Not reachable.</strong> The notes service did not answer just
+        now. Your vaults are unaffected. Try again in a moment.
+      </p>
+    {% else %}
+      {% if vaults %}
+        <div class="table-scroll">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Created</th>
+                <th>Last change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for vault in vaults %}
+                <tr>
+                  <td>{{ vault.name }}</td>
+                  <td class="data-table__muted">{{ vault.created_at|date:"Y-m-d"|default:"—" }}</td>
+                  <td class="data-table__muted">{{ vault.last_change_at|date:"Y-m-d H:i"|default:"—" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="hint-text">You have no vaults yet. Make one to start:
+        Obsidian and the MCP service both work on a vault that already
+        exists.</p>
+      {% endif %}
+
+      <form method="post" action="{% url 'notes' %}" class="stacked-form">
+        {% csrf_token %}
+        <div>
+          <label for="vault-name">New vault</label>
+          {% if name_error %}<ul class="errorlist"><li>{{ name_error }}</li></ul>{% endif %}
+          <input id="vault-name" name="name" type="text" maxlength="100"
+                 value="{{ name }}" placeholder="what to call it" required>
+        </div>
+        <button type="submit" class="btn-primary">Create vault</button>
+      </form>
+    {% endif %}
+  </div>
+
+  <h2 class="section-title">Connect Obsidian</h2>
+  <div class="card">
+    {% if sync_url %}
+      <div class="endpoint">{{ sync_url }}</div>
+      <ol class="page-text">
+        <li>In Obsidian, create a new, empty vault. On iPhone, leave
+        <strong>Store in iCloud</strong> off.</li>
+        <li>Install and enable the <strong>SCN Sync</strong> plugin.</li>
+        <li>Paste the address above when it asks for the sync address.</li>
+        <li>Sign in with your handle.</li>
+        <li>Pick one of your vaults from the list.</li>
+      </ol>
+      <p class="hint-text">Do the same on each device. Notes sync as you add
+      them.</p>
+    {% else %}
+      <p class="hint-text">No sync address is configured on this deployment
+      yet.</p>
+    {% endif %}
+  </div>
+
+  <h2 class="section-title">MCP service</h2>
+  <div class="card">
+    {% if mcp_url %}
+      <div class="endpoint">{{ mcp_url }}</div>
+      <p class="hint-text">Your notes are also served over MCP. Add this
+      address to any assistant or tool that supports MCP servers, then sign in
+      with your handle when it asks. It can read and edit the notes in your
+      vaults, with or without Obsidian.</p>
+    {% else %}
+      <p class="hint-text">No MCP address is configured on this deployment
+      yet.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

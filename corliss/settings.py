@@ -101,6 +101,34 @@ OIDC_REDIRECT_URIS = env.list("OIDC_REDIRECT_URIS", default=[])
 # reasons the RP's own token lifetime must stay short even with this wired up.
 OIDC_BACKCHANNEL_LOGOUT_URI = env("OIDC_BACKCHANNEL_LOGOUT_URI", default="")
 
+# The resources a public client (Claude, Claude Code, the SCN Sync plugin) can
+# be issued an access token for: the sync relay's public sync URL and its
+# public MCP URL. A JSON list of objects, one per resource:
+#
+#   [{"url": "https://sync.example.com", "kind": "sync", "label": "Notes sync"},
+#    {"url": "https://mcp.example.com", "kind": "mcp", "label": "Notes over MCP"}]
+#
+# `url` becomes the token's `aud` exactly as written here, and the relay
+# compares it character for character, so both services must be rendered from
+# one definition. `kind` is `sync` or `mcp`, at most one of each. `label` is
+# what the consent screen calls it.
+#
+# Kept as the raw string and read by `corliss.oidc.resources`. Blank issues
+# nothing to any public client. A value that does not parse also issues
+# nothing, and corliss.E004 fails the deploy over it.
+OIDC_RESOURCES = env("OIDC_RESOURCES", default="")
+
+# Which public clients may sign members in. A public client's `client_id` is
+# the URL of a metadata document that Corliss fetches, so this list is also
+# the whole of what Corliss can be made to fetch. Each entry is either an
+# exact `client_id` URL, or an origin (`https://claude.ai`) accepting any
+# `client_id` on exactly that scheme, host and port.
+#
+# The SCN Sync plugin's own document, which Corliss serves, is always accepted
+# and needs no entry. Blank therefore means the plugin can sign in and nothing
+# else can.
+OIDC_CLIENT_METADATA_ALLOWLIST = env.list("OIDC_CLIENT_METADATA_ALLOWLIST", default=[])
+
 # --- UI ---------------------------------------------------------------------
 # Public origin of the cluster's Open WebUI. Blank hides the nav's "Open WebUI"
 # entry and the home page block entirely — e.g. local dev with none configured.
@@ -210,6 +238,23 @@ LITELLM_MAX_KEYS_PER_MEMBER = env.int("LITELLM_MAX_KEYS_PER_MEMBER", default=5)
 # Probed at /health, which reports liveness WITHOUT touching Postgres, so "up"
 # here means the process is serving, not that its storage works.
 SYNC_RELAY_URL = env("SYNC_RELAY_URL", default="")
+
+# The credential Corliss presents on the relay's `/internal/vaults`, to list a
+# member's vaults and create one from the Obsidian page. **Not a probe
+# setting**, and it sits here only because it belongs beside the address it is
+# used with: unlike everything else in this block, it is a credential.
+#
+# Shared with the relay, which reads it as SCN_SYNC_RELAY_SERVICE_TOKEN. It can
+# list and create vaults for any DID, so `corliss.sync_relay` is the only place
+# it is used and the DID is always the signed-in member's. Blank, or a blank
+# SYNC_RELAY_URL, leaves the Obsidian page saying vaults are not set up here.
+SYNC_RELAY_SERVICE_TOKEN = env("SYNC_RELAY_SERVICE_TOKEN", default="")
+
+# Whether the nav offers the Notes page (`/notes/`). Off hides the entry for
+# members and non-members alike, for a deployment that has not rolled the
+# notes service out yet. It only hides the link: the page itself still
+# answers, and says vaults are not set up when the relay is not connected.
+ENABLE_NOTES = env.bool("ENABLE_NOTES", default=True)
 
 # The in-house AT Protocol PDS (its CT, port 3000), at its INTERNAL address like
 # the rest: its public hostname is behind the edge and would measure that

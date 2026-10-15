@@ -9,6 +9,10 @@ Claims: `sub` = DID, `handle`, and — when the member has one — `name` and
 login and editable at `/account/`, so neither is guaranteed; each is omitted
 rather than sent empty.
 
+**So does fetching a public client's metadata document.** A client is one
+relationship whether it is described by settings or by a URL, and this module
+is the only place either is read. See "Client ID Metadata Documents".
+
 **Back-channel logout lives here too, including the outbound HTTP.** That is a
 deliberate repeat of the shape `corliss.membership` already uses for
 `MembershipRegistry`: issuing a token and revoking it are two halves of one
@@ -17,27 +21,678 @@ module would put half of that relationship in each of two files. See
 "Back-channel logout" at the bottom.
 """
 
+import base64
+import hashlib
+import hmac
+import ipaddress
+import json
 import logging
+import re
 import secrets
+import socket
 import time
+from dataclasses import dataclass
 from datetime import timedelta
+from urllib.parse import urlsplit
 
 import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
+from requests.adapters import HTTPAdapter
 
 from corliss import signing
-from corliss.models import OidcAuthCode, OidcSession, User
+from corliss.models import OidcAuthCode, OidcClientDocument, OidcSession, User
 
 log = logging.getLogger(__name__)
 
 CODE_TTL_SECONDS = 600
 ID_TOKEN_TTL_SECONDS = 3600
+# Short, because nothing revokes an access token once it is issued. This is
+# the whole of how long a removed member keeps access to a resource, and the
+# relay closes a sync connection at `exp`.
+ACCESS_TOKEN_TTL_SECONDS = 900
+# Thirty days from each use, not from sign-in: a client in regular use never
+# expires and an abandoned one does.
+REFRESH_TOKEN_TTL = timedelta(days=30)
+# How long after a refresh the same token is accepted once more, for a client
+# that never received the answer. See `OidcRefreshToken.is_lost_response_retry`.
+REFRESH_REUSE_GRACE = timedelta(seconds=60)
 
 
 def base_url() -> str:
     return settings.PUBLIC_BASE_URL.rstrip("/")
+
+
+# --- Clients ----------------------------------------------------------------
+#
+# Two kinds. The confidential one is Open WebUI, described by settings exactly
+# as it always was. A public client has no secret and no row here: its
+# `client_id` is the URL of a metadata document that says what it is.
+
+CONFIDENTIAL = "confidential"
+PUBLIC = "public"
+
+
+class ClientError(Exception):
+    """A `client_id` Corliss will not serve. Carries the OAuth error code."""
+
+    def __init__(self, error, description):
+        super().__init__(description)
+        self.error = error
+        self.description = description
+
+
+@dataclass(frozen=True)
+class Client:
+    client_id: str
+    kind: str
+    redirect_uris: tuple
+    name: str
+    # The host of the `client_id` URL, which is what the consent screen names
+    # the app by. Blank for the confidential client, which has no URL.
+    host: str = ""
+    grant_types: tuple = ("authorization_code",)
+
+    @property
+    def is_public(self) -> bool:
+        return self.kind == PUBLIC
+
+
+def plugin_client_id() -> str:
+    """The `client_id` of the scn-obsidian plugin: the URL of its document.
+
+    **The path is part of the client's identity**, the same way the atproto
+    `client_id` is. Change it and every install is a new client: its refresh
+    tokens stop working and each member signs in again.
+    """
+    return base_url() + reverse("plugin_client_metadata")
+
+
+def plugin_client_metadata() -> dict:
+    """The metadata document for the scn-obsidian plugin, which Corliss hosts.
+
+    The one document allowed a custom-scheme redirect, because Corliss wrote
+    it. `client_name` is what the member installed: the plugin is listed in
+    Obsidian as SCN Sync.
+    """
+    return {
+        "client_id": plugin_client_id(),
+        "client_name": "SCN Sync",
+        "client_uri": base_url(),
+        "redirect_uris": ["obsidian://scn-obsidian"],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    }
+
+
+def _client_from_document(document) -> Client:
+    return Client(
+        client_id=document["client_id"],
+        kind=PUBLIC,
+        redirect_uris=tuple(document["redirect_uris"]),
+        name=document.get("client_name", ""),
+        host=urlsplit(document["client_id"]).hostname or "",
+        grant_types=tuple(document.get("grant_types") or ["authorization_code"]),
+    )
+
+
+def resolve_client(client_id) -> Client:
+    """The client a `client_id` names, or `ClientError`.
+
+    Corliss's own document is read from the function that builds it and never
+    fetched over HTTP: with two gunicorn workers a request to our own origin
+    can wait on itself.
+    """
+    if client_id and client_id == settings.OIDC_CLIENT_ID:
+        return Client(
+            client_id=client_id,
+            kind=CONFIDENTIAL,
+            redirect_uris=tuple(settings.OIDC_REDIRECT_URIS),
+            name=client_id,
+        )
+    if client_id and client_id == plugin_client_id():
+        return _client_from_document(plugin_client_metadata())
+    if isinstance(client_id, str) and client_id.startswith("https://"):
+        # The allowlist comes before everything else about a URL, because
+        # `authorize` resolves the client before it asks anyone to sign in.
+        # Without it an anonymous request could make Corliss fetch any URL.
+        if not client_id_allowed(client_id):
+            raise ClientError("unauthorized_client", "client_id is not allowed here")
+        return _document_client(client_id)
+    raise ClientError("unauthorized_client", "unknown client_id")
+
+
+# --- Client ID Metadata Documents -------------------------------------------
+#
+# A public client's `client_id` is a URL, and what is served there says what
+# the client is: its name and where it may be redirected. Corliss fetches
+# that document when the client first appears at `authorize` and caches it.
+#
+# This is the one place Corliss makes a request to an address somebody else
+# chose, so every rule below is about what that could be turned into:
+#
+# - **Only allowlisted URLs are fetched**, checked before any network call.
+# - **Never an internal address.** The host is resolved first and every
+#   address it resolves to must be a public one. The connection then goes to
+#   the address that was checked, not to the name, so a second DNS answer
+#   cannot move it.
+# - **No redirects.** A redirect is a failure, not a new place to fetch.
+# - **Small and quick.** 64 KB and about five seconds.
+# - **Only `authorize` fetches.** The token endpoint reads the cache.
+
+# How long a fetched document is used before it is fetched again. The
+# document's own `Cache-Control: max-age` moves this, within the two bounds.
+CIMD_FRESH_DEFAULT = timedelta(hours=1)
+CIMD_FRESH_MIN = timedelta(minutes=5)
+CIMD_FRESH_MAX = timedelta(hours=24)
+# How long past its freshness a document is still served when it cannot be
+# refetched. A client's site being down for an afternoon should not sign
+# every member out of it.
+CIMD_STALE_LIMIT = timedelta(hours=24)
+# How long a failure is remembered before the URL is tried again, so a broken
+# URL cannot be used to make Corliss fetch in a loop.
+CIMD_FAILURE_TTL_SECONDS = 60
+CIMD_MAX_BYTES = 64 * 1024
+# The whole fetch is abandoned at the deadline. Connecting, and each read,
+# get the shorter step timeout, and the deadline is checked between reads.
+CIMD_DEADLINE_SECONDS = 5
+CIMD_STEP_TIMEOUT_SECONDS = 2
+
+
+class ClientDocumentError(Exception):
+    """A client metadata document could not be fetched or is not valid."""
+
+
+def client_id_allowed(client_id) -> bool:
+    """Whether `OIDC_CLIENT_METADATA_ALLOWLIST` accepts this `client_id` URL.
+
+    An entry is either an exact URL or an origin such as `https://claude.ai`,
+    which accepts any `client_id` on that scheme, host and port. Compared on
+    parsed components and never by string prefix: `https://claude.ai.evil.test`
+    and `https://claude.ai@evil.test` both begin with an allowed origin.
+    """
+    try:
+        parts = urlsplit(client_id)
+        port = parts.port or 443
+    except ValueError:
+        return False
+    for entry in settings.OIDC_CLIENT_METADATA_ALLOWLIST:
+        if entry == client_id:
+            return True
+        try:
+            allowed = urlsplit(entry)
+            allowed_port = allowed.port or 443
+        except ValueError:
+            continue
+        is_origin = (
+            allowed.scheme == "https"
+            and allowed.hostname
+            and allowed.path in ("", "/")
+            and not allowed.query
+            and not allowed.fragment
+            and allowed.username is None
+        )
+        if is_origin and (parts.scheme, parts.hostname, port) == (
+            "https",
+            allowed.hostname,
+            allowed_port,
+        ):
+            return True
+    return False
+
+
+def _public_address(host, port):
+    """Resolve `host` and return one address to connect to.
+
+    Refuses if **any** address the name resolves to is not a public one. A
+    name with one public and one internal answer is refused outright: which
+    answer a connection would get is not something to leave to chance.
+    """
+    try:
+        answers = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ClientDocumentError(f"could not resolve {host}: {exc}") from exc
+    addresses = []
+    for answer in answers:
+        address = ipaddress.ip_address(answer[4][0].split("%")[0])
+        # An IPv4 address written as IPv6 is judged as the IPv4 one it is.
+        checked = getattr(address, "ipv4_mapped", None) or address
+        if not checked.is_global or checked.is_multicast:
+            raise ClientDocumentError(f"{host} resolves to a non-public address")
+        addresses.append(address)
+    if not addresses:
+        raise ClientDocumentError(f"{host} did not resolve")
+    return addresses[0]
+
+
+class _PinnedAdapter(HTTPAdapter):
+    """Connect to an IP address while speaking TLS for a hostname.
+
+    The request URL names the address that was checked. This makes the TLS
+    handshake ask for, and verify the certificate against, the hostname the
+    document lives on, so pinning the address costs nothing in verification.
+    """
+
+    def __init__(self, hostname):
+        self._hostname = hostname
+        super().__init__(max_retries=0)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        super().init_poolmanager(
+            connections,
+            maxsize,
+            block,
+            server_hostname=self._hostname,
+            assert_hostname=self._hostname,
+            **pool_kwargs,
+        )
+
+
+def _pinned_session(hostname):
+    session = requests.Session()
+    # No proxy from the environment: a proxy would do its own resolving, and
+    # the address that was checked would not be the one connected to.
+    session.trust_env = False
+    session.mount("https://", _PinnedAdapter(hostname))
+    return session
+
+
+def _fresh_for(cache_control) -> timedelta:
+    match = re.search(r"max-age\s*=\s*(\d+)", cache_control or "", re.IGNORECASE)
+    if not match:
+        return CIMD_FRESH_DEFAULT
+    asked = timedelta(seconds=int(match.group(1)))
+    return min(max(asked, CIMD_FRESH_MIN), CIMD_FRESH_MAX)
+
+
+def validate_client_document(url, document) -> dict:
+    """Check a fetched document and return the parts of it Corliss keeps."""
+    if not isinstance(document, dict):
+        raise ClientDocumentError("document is not a JSON object")
+    if document.get("client_id") != url:
+        raise ClientDocumentError("document's client_id is not its own URL")
+    if not isinstance(document.get("client_name"), str):
+        raise ClientDocumentError("client_name must be a string")
+    if document.get("token_endpoint_auth_method", "none") != "none":
+        raise ClientDocumentError("token_endpoint_auth_method must be none")
+
+    redirect_uris = document.get("redirect_uris")
+    if (
+        not isinstance(redirect_uris, list)
+        or not redirect_uris
+        or not all(isinstance(uri, str) for uri in redirect_uris)
+    ):
+        raise ClientDocumentError("redirect_uris must be a non-empty list of strings")
+    for uri in redirect_uris:
+        # `https`, or `http` on a loopback host. A custom scheme is accepted
+        # only from a document Corliss wrote itself: any app on a device can
+        # register one, so somebody else's claim to it proves nothing.
+        if urlsplit(uri).scheme != "https" and not is_loopback_redirect(uri):
+            raise ClientDocumentError(f"redirect URI not allowed: {uri[:200]}")
+
+    grant_types = document.get("grant_types", ["authorization_code"])
+    if not isinstance(grant_types, list) or not all(
+        isinstance(grant, str) for grant in grant_types
+    ):
+        raise ClientDocumentError("grant_types must be a list of strings")
+
+    return {
+        "client_id": url,
+        "client_name": document["client_name"][:200],
+        "redirect_uris": redirect_uris,
+        "grant_types": grant_types,
+    }
+
+
+def fetch_client_document(url):
+    """Fetch and validate a client metadata document.
+
+    Returns `(document, fresh_for)`. Raises `ClientDocumentError` for every
+    way this can go wrong, and nothing else.
+    """
+    try:
+        parts = urlsplit(url)
+        port = parts.port or 443
+    except ValueError as exc:
+        raise ClientDocumentError("client_id is not a usable URL") from exc
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.path in ("", "/")
+        or parts.username is not None
+        or parts.fragment
+    ):
+        raise ClientDocumentError(
+            "client_id must be an https URL with a path, no credentials and "
+            "no fragment"
+        )
+
+    address = _public_address(parts.hostname, port)
+    literal = f"[{address}]" if address.version == 6 else str(address)
+    target = parts._replace(netloc=f"{literal}:{port}").geturl()
+    host_header = parts.hostname if port == 443 else f"{parts.hostname}:{port}"
+
+    deadline = time.monotonic() + CIMD_DEADLINE_SECONDS
+    session = _pinned_session(parts.hostname)
+    try:
+        response = session.get(
+            target,
+            headers={"Host": host_header, "Accept": "application/json"},
+            timeout=CIMD_STEP_TIMEOUT_SECONDS,
+            allow_redirects=False,
+            stream=True,
+        )
+        try:
+            if response.status_code != 200:
+                raise ClientDocumentError(f"answered HTTP {response.status_code}")
+            body = b""
+            for chunk in response.iter_content(8192):
+                body += chunk
+                if len(body) > CIMD_MAX_BYTES:
+                    raise ClientDocumentError("document is larger than 64 KB")
+                if time.monotonic() > deadline:
+                    raise ClientDocumentError("document took too long to arrive")
+            fresh_for = _fresh_for(response.headers.get("Cache-Control"))
+        finally:
+            response.close()
+    except requests.RequestException as exc:
+        raise ClientDocumentError(f"could not be fetched: {exc}") from exc
+    finally:
+        session.close()
+
+    try:
+        document = json.loads(body)
+    except ValueError as exc:
+        raise ClientDocumentError("document is not JSON") from exc
+    return validate_client_document(url, document), fresh_for
+
+
+def _document_client(client_id) -> Client:
+    """The client a fetched document describes, from the cache when it can be.
+
+    The cache is `OidcClientDocument` rows because Django's cache here is per
+    process and there are two workers.
+    """
+    now = timezone.now()
+    row = OidcClientDocument.objects.filter(client_id=client_id).first()
+
+    if row is not None and row.is_fresh:
+        if row.document:
+            return _client_from_document(row.document)
+        # A failure, remembered. Not tried again until it expires.
+        raise ClientError("invalid_client", row.last_error)
+
+    stale = (
+        row is not None
+        and bool(row.document)
+        and now <= row.expires_at + CIMD_STALE_LIMIT
+    )
+    # While a stale document is being served, the fetch that would replace it
+    # is retried at most this often. Per worker, which is close enough: the
+    # point is that an outage does not turn every sign-in into a five second
+    # wait on a dead host.
+    retry_key = "corliss:cimd-retry:" + hashlib.sha256(client_id.encode()).hexdigest()
+    if stale and cache.get(retry_key):
+        return _client_from_document(row.document)
+
+    try:
+        document, fresh_for = fetch_client_document(client_id)
+    except ClientDocumentError as exc:
+        reason = str(exc)[:500]
+        if stale:
+            log.warning(
+                "client metadata: serving a stale document for %s: %s",
+                client_id,
+                reason,
+            )
+            cache.set(retry_key, True, CIMD_FAILURE_TTL_SECONDS)
+            row.last_error = reason
+            row.save(update_fields=["last_error"])
+            return _client_from_document(row.document)
+        log.warning("client metadata: %s is unusable: %s", client_id, reason)
+        OidcClientDocument.objects.update_or_create(
+            client_id=client_id,
+            defaults={
+                "document": {},
+                "fetched_at": now,
+                "expires_at": now + timedelta(seconds=CIMD_FAILURE_TTL_SECONDS),
+                "last_error": reason,
+            },
+        )
+        raise ClientError("invalid_client", reason) from exc
+
+    OidcClientDocument.objects.update_or_create(
+        client_id=client_id,
+        defaults={
+            "document": document,
+            "fetched_at": now,
+            "expires_at": now + fresh_for,
+            "last_error": "",
+        },
+    )
+    return _client_from_document(document)
+
+
+def known_client(client_id):
+    """The public client a `client_id` names, **without fetching anything**.
+
+    For the token endpoint, which must answer inside a client's deadline and
+    so never makes an outbound request for a document. Corliss's own document
+    comes from the function that builds it, anyone else's from the row
+    `authorize` cached when the member signed in. None when there is neither.
+    """
+    if client_id and client_id == plugin_client_id():
+        return _client_from_document(plugin_client_metadata())
+    row = OidcClientDocument.objects.filter(client_id=client_id).first()
+    if row is not None and row.document:
+        return _client_from_document(row.document)
+    return None
+
+
+def issues_refresh_tokens(client_id) -> bool:
+    """Whether this client is given a refresh token with its access token.
+
+    Decided by the `refresh_token` grant in the client's own document, and
+    deliberately **not** by the `offline_access` scope. The relay advertises
+    no scopes and Claude Code's document declares none, so a client may never
+    ask for it, and one with no refresh token signs its member in again every
+    fifteen minutes. Membership is re-checked on every refresh, which is the
+    control that matters; the scope would add nothing to it.
+    """
+    client = known_client(client_id)
+    return client is not None and "refresh_token" in client.grant_types
+
+
+# --- Resources --------------------------------------------------------------
+#
+# The services an access token can be issued for. Each is named by its public
+# URL, and that URL is the token's `aud`, spelled exactly as configured: the
+# relay compares it character for character.
+
+RESOURCE_KINDS = ("sync", "mcp")
+
+
+@dataclass(frozen=True)
+class Resource:
+    url: str
+    kind: str
+    label: str
+
+
+def parse_resources(raw):
+    """Read `OIDC_RESOURCES` into `(resources, problems)`.
+
+    Any problem yields no resources at all. A deployment whose value is
+    half right would otherwise issue tokens for one service and silently
+    refuse the other, which is harder to notice than refusing both.
+    """
+    if not raw:
+        return [], []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError as exc:
+            return [], [f"not valid JSON: {exc}"]
+    if not isinstance(raw, list):
+        return [], ["must be a JSON list of objects"]
+
+    resources, problems = [], []
+    for index, entry in enumerate(raw):
+        where = f"entry {index + 1}"
+        if not isinstance(entry, dict):
+            problems.append(f"{where} is not an object")
+            continue
+        url, kind, label = entry.get("url"), entry.get("kind"), entry.get("label")
+        parts = urlsplit(url) if isinstance(url, str) else None
+        if not parts or parts.scheme not in ("http", "https") or not parts.hostname:
+            problems.append(f"{where}: url must be an http(s) URL")
+        if kind not in RESOURCE_KINDS:
+            problems.append(f"{where}: kind must be one of {', '.join(RESOURCE_KINDS)}")
+        elif any(r.kind == kind for r in resources):
+            problems.append(f"{where}: a second {kind} resource")
+        if not isinstance(label, str) or not label.strip():
+            problems.append(f"{where}: label must be a non-empty string")
+        if not problems:
+            resources.append(Resource(url=url, kind=kind, label=label.strip()))
+
+    return ([], problems) if problems else (resources, [])
+
+
+def resources():
+    """The configured resources. Empty when unset or invalid, which refuses
+    every public client: an unconfigured deployment issues nothing."""
+    return parse_resources(settings.OIDC_RESOURCES)[0]
+
+
+def _normalise_resource(url) -> str:
+    """A resource URL in the form two spellings of it are compared in.
+
+    Lowercases the scheme and host and drops the slash from a path that is
+    nothing else, so `https://MCP.example.com/` and `https://mcp.example.com`
+    are one resource. Nothing more: a path's own trailing slash is kept.
+    """
+    parts = urlsplit(url)
+    path = "" if parts.path == "/" else parts.path
+    return parts._replace(
+        scheme=parts.scheme.lower(), netloc=parts.netloc.lower(), path=path
+    ).geturl()
+
+
+def match_resource(requested):
+    """The configured resource a client's `resource` parameter names, or None.
+
+    The caller issues `aud` from the returned `url`, which is the configured
+    spelling and never the client's. A client that sends a trailing slash
+    still receives a token the relay accepts.
+    """
+    if not requested or not isinstance(requested, str):
+        return None
+    wanted = _normalise_resource(requested)
+    for resource in resources():
+        if _normalise_resource(resource.url) == wanted:
+            return resource
+    return None
+
+
+# --- Request checks for public clients --------------------------------------
+
+SCOPES = ("openid", "profile", "email", "offline_access")
+
+
+def narrow_scope(granted, requested) -> str:
+    """The scope for an access token issued on refresh.
+
+    A client may ask for less than it was granted and never for more. With no
+    request it gets what it was granted.
+    """
+    if not requested:
+        return granted
+    wanted = requested.split()
+    return " ".join(value for value in granted.split() if value in wanted)
+
+
+def grant_scope(requested) -> str:
+    """The scope granted for a requested one: unknown values are dropped.
+
+    An empty result is valid. The relay's protected resource metadata
+    advertises no scopes, so an MCP client may ask for none at all.
+    """
+    granted = []
+    for value in (requested or "").split():
+        if value in SCOPES and value not in granted:
+            granted.append(value)
+    return " ".join(granted)
+
+
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def _loopback_parts(uri):
+    """What a loopback redirect is compared on, or None if it is not one.
+
+    Everything but the port. A native app listens on whatever port the
+    system hands it, so the port is the one part it cannot declare ahead.
+    """
+    try:
+        parts = urlsplit(uri)
+        parts.port  # raises on a port that is not a number
+    except ValueError:
+        return None
+    if parts.scheme != "http" or parts.hostname not in _LOOPBACK_HOSTS:
+        return None
+    if parts.username is not None or parts.fragment:
+        return None
+    return (parts.hostname, parts.path, parts.query)
+
+
+def redirect_uri_matches(requested, registered) -> bool:
+    """Whether a requested redirect URI is one the client declared.
+
+    Exact string comparison for everything except loopback: an `https` URI,
+    and a custom scheme such as `obsidian://scn-obsidian`, must appear in the
+    list character for character. An `http` URI is accepted only on a
+    loopback host, compared with the port ignored on both sides.
+
+    `localhost` and `127.0.0.1` are different hosts here and do not match
+    each other. A client that uses both declares both.
+    """
+    if not requested or not isinstance(requested, str):
+        return False
+    scheme = urlsplit(requested).scheme.lower()
+    if not scheme:
+        return False
+    if scheme != "http":
+        return requested in registered
+    wanted = _loopback_parts(requested)
+    if wanted is None:
+        return False
+    return any(_loopback_parts(entry) == wanted for entry in registered)
+
+
+def is_loopback_redirect(uri) -> bool:
+    return _loopback_parts(uri) is not None
+
+
+# An S256 challenge is the base64url of a SHA-256 digest: 43 characters.
+_CODE_CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}")
+# RFC 7636: 43 to 128 characters from the unreserved set.
+_CODE_VERIFIER = re.compile(r"[A-Za-z0-9._~-]{43,128}")
+
+
+def valid_code_challenge(challenge) -> bool:
+    return bool(challenge) and _CODE_CHALLENGE.fullmatch(challenge) is not None
+
+
+def pkce_verifies(verifier, challenge) -> bool:
+    """Whether `verifier` is the secret behind a stored S256 `challenge`."""
+    if not verifier or not challenge or not _CODE_VERIFIER.fullmatch(verifier):
+        return False
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    computed = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return hmac.compare_digest(computed, challenge)
 
 
 def discovery_document() -> dict:
@@ -47,14 +702,22 @@ def discovery_document() -> dict:
         "token_endpoint": base_url() + reverse("token"),
         "jwks_uri": base_url() + reverse("jwks"),
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
         "subject_types_supported": ["public"],
         "id_token_signing_alg_values_supported": ["RS256"],
-        "scopes_supported": ["openid", "profile", "email"],
+        "scopes_supported": ["openid", "profile", "email", "offline_access"],
         "token_endpoint_auth_methods_supported": [
             "client_secret_post",
             "client_secret_basic",
+            "none",
         ],
+        # The three fields an MCP client reads before it will start. Without
+        # the first it refuses to proceed. Claude uses a metadata document as
+        # its `client_id` only when it sees both the second and `none` above,
+        # and otherwise looks for a registration endpoint, which does not
+        # exist here.
+        "code_challenge_methods_supported": ["S256"],
+        "client_id_metadata_document_supported": True,
         # Advertised for the next relying party, not for the current one: Open
         # WebUI reads only `issuer` and `jwks_uri` out of this document when it
         # validates a logout token, and learns that we do back-channel logout
@@ -77,7 +740,19 @@ def discovery_document() -> dict:
     }
 
 
-def issue_code(user, *, client_id, redirect_uri, nonce="", scope="") -> str:
+def issue_code(
+    user,
+    *,
+    client_id,
+    redirect_uri,
+    nonce="",
+    scope="",
+    code_challenge="",
+    resource="",
+) -> str:
+    # The only cleanup codes get. There is no scheduled job, and one that is
+    # issued is the natural moment to drop the ones nobody redeemed.
+    OidcAuthCode.purge_expired()
     code = secrets.token_urlsafe(48)
     OidcAuthCode.objects.create(
         code=code,
@@ -86,6 +761,8 @@ def issue_code(user, *, client_id, redirect_uri, nonce="", scope="") -> str:
         redirect_uri=redirect_uri,
         nonce=nonce,
         scope=scope,
+        code_challenge=code_challenge,
+        resource=resource,
         expires_at=timezone.now() + timedelta(seconds=CODE_TTL_SECONDS),
     )
     return code
@@ -142,6 +819,33 @@ def mint_id_token(user, *, client_id, nonce="", sid="") -> str:
         # Ties this token to the OidcSession a later logout_token will name.
         payload["sid"] = sid
     return signing.sign_rs256(payload)
+
+
+def mint_access_token(user, *, client_id, resource, scope="") -> str:
+    """An access token for one resource, as scn-sync-relay verifies it.
+
+    **This shape is a contract with the relay**, and a change here is a change
+    to its verifier. Three parts have a plausible wrong answer:
+
+    - `typ` is `at+jwt`. It is what stops an `id_token`, signed by the same
+      key, from being accepted as an access token.
+    - `aud` is one string, the resource URL as configured. The relay refuses
+      a list, and refuses a URL that differs by a trailing slash.
+    - No handle, name or email. The plugin sends this token in a websocket
+      URL, so it carries nothing about the person beyond the DID.
+    """
+    now = int(time.time())
+    payload = {
+        "iss": base_url(),
+        "sub": user.did,
+        "aud": resource,
+        "iat": now,
+        "exp": now + ACCESS_TOKEN_TTL_SECONDS,
+        "jti": secrets.token_urlsafe(16),
+        "scope": scope,
+        "client_id": client_id,
+    }
+    return signing.sign_rs256(payload, headers={"typ": "at+jwt"})
 
 
 # --- Back-channel logout ----------------------------------------------------
