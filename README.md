@@ -1369,7 +1369,8 @@ A missed push is bounded only by a scheduled reconcile, and with none it is
 not bounded at all. Public clients are the reason the deployment needs
 `manage.py reconcile_membership` on an hourly timer, which makes the worst
 case 75 minutes. The timer is the deployment's to provide; nothing in this
-repo schedules it.
+repo schedules it. On the Z-Space cluster it is zai-ops'
+`corliss-reconcile.timer`, which also runs once after boot.
 
 An operator disconnects one client from one member by deleting its rows under
 **Oidc refresh tokens** in the Django admin.
@@ -1431,6 +1432,13 @@ Register the RP's redirect URI in Corliss's `OIDC_REDIRECT_URIS`
 logout endpoint in `OIDC_BACKCHANNEL_LOGOUT_URI` — its *internal* address, since
 that call is service-to-service and has no business routing out through public
 DNS and back in through the edge.
+
+**This is the confidential client, and there is exactly one.** Claude, Claude
+Code and SCN Sync are not wired up this way: they register nothing here and
+hold no secret. A public client needs its document's origin or URL in
+`OIDC_CLIENT_METADATA_ALLOWLIST` (Corliss's own SCN Sync document needs
+nothing) and the resource it asks for in `OIDC_RESOURCES`. See "Public
+clients: Claude, Claude Code and SCN Sync".
 
 **Redis is not optional on the RP side, and not merely for logout.** Open WebUI
 can drop stored OAuth sessions without it, but revoking an already-issued JWT is
