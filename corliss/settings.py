@@ -67,6 +67,11 @@ REPO_URL = version.REPO_URL
 # broad OIDC-client compatibility. Two keys, one JWKS. Never committed.
 ATPROTO_EC_PRIVATE_KEY_PATH = env("ATPROTO_EC_PRIVATE_KEY_PATH", default="")
 OIDC_RSA_PRIVATE_KEY_PATH = env("OIDC_RSA_PRIVATE_KEY_PATH", default="")
+# The key each one is replacing, set only while a rotation is under way. The
+# JWKS keeps publishing it, and an atproto session that started on it keeps
+# refreshing with it. Blank (the normal state) means no rotation.
+ATPROTO_EC_PREVIOUS_KEY_PATH = env("ATPROTO_EC_PREVIOUS_KEY_PATH", default="")
+OIDC_RSA_PREVIOUS_KEY_PATH = env("OIDC_RSA_PREVIOUS_KEY_PATH", default="")
 
 # --- OIDC provider --------------------------------------------------------
 # The single relying party we issue id_tokens to (Open WebUI). Secret is read

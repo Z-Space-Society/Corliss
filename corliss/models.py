@@ -233,6 +233,13 @@ class AtprotoToken(models.Model):
     dpop_private_pem = models.TextField()
     dpop_nonce = models.CharField(max_length=512, blank=True)
 
+    # The kid of Corliss's own atproto client key that authenticated this
+    # session. The authorization server ties the session to that key, so every
+    # refresh must be signed with it, and during a key rotation that may be the
+    # previous key rather than the current one. Blank on sessions that predate
+    # rotation, which can only have started on today's key.
+    client_kid = models.CharField(max_length=64, blank=True)
+
     expires_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

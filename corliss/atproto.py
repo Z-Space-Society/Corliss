@@ -483,8 +483,12 @@ def pkce_pair() -> tuple[str, str]:
     return verifier, challenge
 
 
-def build_client_assertion(issuer: str) -> str:
-    """A `private_key_jwt` proving the client to the auth server (ES256)."""
+def build_client_assertion(issuer: str, kid: str | None = None) -> str:
+    """A `private_key_jwt` proving the client to the auth server (ES256).
+
+    `kid` names the key a refresh must use (`AtprotoToken.client_kid`); PAR
+    and the code exchange leave it out and sign with the current key.
+    """
     now = int(time.time())
     payload = {
         "iss": client_id(),
@@ -494,7 +498,7 @@ def build_client_assertion(issuer: str) -> str:
         "iat": now,
         "exp": now + 300,
     }
-    return signing.sign_es256(payload)
+    return signing.sign_es256(payload, kid=kid)
 
 
 # --- DPoP-bound POST with one-shot nonce retry ----------------------------
@@ -722,7 +726,7 @@ def exchange_code(meta, *, code, code_verifier, dpop_key, nonce=None):
     return resp.json(), new_nonce
 
 
-def refresh_tokens(meta, *, refresh_token, dpop_key, nonce=None):
+def refresh_tokens(meta, *, refresh_token, dpop_key, nonce=None, client_kid=None):
     """Trade a refresh token for a fresh access token; return (token, nonce).
 
     The same exchange as `exchange_code` with a different grant, and the same
@@ -739,7 +743,9 @@ def refresh_tokens(meta, *, refresh_token, dpop_key, nonce=None):
         "refresh_token": refresh_token,
         "client_id": client_id(),
         "client_assertion_type": CLIENT_ASSERTION_TYPE,
-        "client_assertion": build_client_assertion(meta["issuer"]),
+        "client_assertion": build_client_assertion(
+            meta["issuer"], kid=client_kid
+        ),
     }
     resp, new_nonce = _post_with_dpop(
         meta["token_endpoint"], data, dpop_key, nonce=nonce
@@ -893,12 +899,21 @@ def _refresh(token, dpop_key):
             "session has no refresh token; sign in again"
         )
 
-    data, nonce = refresh_tokens(
-        {"issuer": token.issuer, "token_endpoint": token.token_endpoint},
-        refresh_token=token.refresh_token,
-        dpop_key=dpop_key,
-        nonce=token.dpop_nonce or None,
-    )
+    try:
+        data, nonce = refresh_tokens(
+            {"issuer": token.issuer, "token_endpoint": token.token_endpoint},
+            refresh_token=token.refresh_token,
+            dpop_key=dpop_key,
+            nonce=token.dpop_nonce or None,
+            client_kid=token.client_kid or None,
+        )
+    except signing.UnknownSigningKey:
+        # The session started on a key that has since been retired. The
+        # authorization server will accept no other key for it, so the only
+        # way on is a fresh sign-in.
+        raise NoSession(
+            "session was authorized with a retired signing key; sign in again"
+        ) from None
 
     # Checked BEFORE anything is persisted. Storing an empty access token and
     # then raising would leave the member with a session that cannot be used and

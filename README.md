@@ -45,6 +45,35 @@ Two signing keys, one JWKS: **ES256 (P-256)** for atproto DPoP + client
 assertion (atproto mandates it) and **RS256 (RSA)** for the OIDC `id_token`
 (broad OIDC-client compatibility).
 
+### Rotating a signing key
+
+Each key can have a previous key beside it while it is rotated out:
+
+| Setting | Meaning |
+| ------- | ------- |
+| `ATPROTO_EC_PRIVATE_KEY_PATH` | The current ES256 key. Signs every new client assertion. |
+| `OIDC_RSA_PRIVATE_KEY_PATH` | The current RS256 key. Signs every id_token and access token. |
+| `ATPROTO_EC_PREVIOUS_KEY_PATH` | The ES256 key being retired. Blank except during a rotation. |
+| `OIDC_RSA_PREVIOUS_KEY_PATH` | The RS256 key being retired. Blank except during a rotation. |
+
+- **The JWKS publishes the previous keys after the current pair**, so a token
+  signed just before the rotation still verifies, and the current pair keeps
+  its first two positions.
+- **An atproto session keeps the key it started with.** The member's
+  authorization server ties the session to the key that authenticated it and
+  refuses a refresh signed by any other. `AtprotoToken.client_kid` records that
+  key at sign-in and every refresh signs with it. A blank `client_kid` is a
+  session from before this existed, which can only be on the key that was
+  current then.
+- **Retiring the previous ES256 key ends the sessions still on it.** Their next
+  refresh raises `NoSession`, and the member signs in again. That includes the
+  membership service account, which an admin re-authenticates from `/manage/`.
+- **The previous RS256 key can go after an hour.** That is the longest a token
+  it signed lives (`ID_TOKEN_TTL_SECONDS`); OIDC refresh tokens are database
+  rows, not signatures, so they survive the rotation.
+
+In production the deployment owns the files and the rotation; see zai-ops.
+
 ## Run locally
 
 Requires [uv](https://docs.astral.sh/uv/) and a reachable Postgres.
