@@ -139,6 +139,12 @@ OIDC_CLIENT_METADATA_ALLOWLIST = env.list("OIDC_CLIENT_METADATA_ALLOWLIST", defa
 # entry and the home page block entirely — e.g. local dev with none configured.
 OPENWEBUI_URL = env("OPENWEBUI_URL", default="")
 
+# Public origin of the cluster's scn-chat (chat.<domain>). Blank hides the nav's
+# "Chat" entry. This is the origin a member's browser opens; it is deliberately
+# not SCN_CHAT_URL, the internal address /systems/ probes, and the two must not
+# be conflated.
+CHAT_URL = env("CHAT_URL", default="")
+
 # Public origin of the cluster's API service (api.<domain>, served from heron).
 # Shown on /api/ as the endpoint to point a client at. Blank leaves that page's
 # endpoint block out — the page itself still explains what is coming.
@@ -267,6 +273,12 @@ ENABLE_NOTES = env.bool("ENABLE_NOTES", default=True)
 # process is serving and its storage answered. A cluster with no PDS leaves this
 # blank and the row reads "unknown".
 PDS_URL = env("PDS_URL", default="")
+
+# scn-chat, the SCN AI-assistant chat app (its CT, port 3000), at its INTERNAL
+# address for the same reason. Probed at /api/health, which runs `select 1`
+# against its database, so "up" means its storage answered too. A cluster that
+# has not assigned scn-chat leaves this blank and the row reads "unknown".
+SCN_CHAT_URL = env("SCN_CHAT_URL", default="")
 
 # Redis, as something to dial — NOT as a cache backend. Corliss holds no Redis
 # client and no redis dependency; the probe writes `PING` to a socket and reads
