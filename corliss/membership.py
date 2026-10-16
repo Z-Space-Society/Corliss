@@ -732,6 +732,27 @@ def refresh_service_session():
     return "service session: refreshed"
 
 
+def lock_service_session():
+    """Discard the stored service session, so `/manage/` shows the lock shut.
+
+    The open lock only says a session is stored, not that it still works. When
+    the service account moves PDS, the stored session keeps pointing at the old
+    one, which answers every roster write with `AccountDeactivated` while the
+    lock still reads open. Locking is how an admin gets back to Authenticate,
+    whose handshake resolves the DID afresh and so finds the new PDS.
+
+    Only Corliss's copy goes. HappyView's registered session cannot be revoked
+    from here (see `_service_token`); the next Authenticate replaces it. Nothing
+    an admin does on their own session depends on this one, so the cost of
+    locking is that appointing an admin waits until someone authenticates.
+    """
+    from corliss.models import AtprotoToken
+
+    service_did = settings.SCN_SERVICE_DID
+    if service_did:
+        AtprotoToken.objects.filter(user__did=service_did).delete()
+
+
 def service_session_status():
     """What `/manage/` shows about the session roster edits depend on.
 
@@ -1855,11 +1876,12 @@ class MembershipRegistry:
         and gets the script's own error back. So the key adds nothing the token
         does not already carry here.
 
-        That is not a micro-optimisation. The key is the *console's*
-        origin-bound key, and requiring it would mean a cluster rebuilt before
-        `zai-set-console client_key` had been run could not reconcile — tying
-        the recovery path to the console being configured, when the whole point
-        of this path is that it works when nothing else does.
+        That is not a micro-optimisation. The key is an origin-bound key
+        recorded by hand (zai-ops: scn-config, Registry client key), and
+        requiring it would mean a cluster rebuilt before it was recorded could
+        not reconcile, tying the recovery path to a setting, when the whole
+        point of this path is that it works when nothing else does. Writes are
+        different: `_procedure` refuses without the key.
         """
         return bool(self.url and self.token)
 
@@ -2004,7 +2026,8 @@ class MembershipRegistry:
             )
         if not self.client_key:
             # Unlike a query, which works without one. Said plainly because the
-            # fix is a deployment step (`zai-set-console client_key`), not a bug.
+            # fix is a deployment step (zai-ops: scn-config, Registry client
+            # key), not a bug.
             raise RegistryError(
                 "registry is not configured for writes: "
                 "MEMBERSHIP_REGISTRY_CLIENT_KEY must be set"

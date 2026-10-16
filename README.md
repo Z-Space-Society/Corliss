@@ -385,6 +385,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | About — what this is, the system, the team (public) | `/about/`, `/about/system/`, `/about/team/` |
 | Console — applications, members, admins, invite, reconcile (cluster admins) | `/manage/` |
 | Authenticate the service account so roster edits can be made (POST, cluster admins; returns through `/auth/callback`) | `/manage/unlock` |
+| Lock: discard the stored service session so it can be authenticated again, e.g. after the account moved PDS (POST, cluster admins) | `/manage/lock` |
 | Systems — the stack, with live health checks and each service's provisioned version (cluster admins) | `/systems/` |
 | Django admin | `/admin/` |
 
@@ -398,8 +399,8 @@ same question as `@member_required` but inline, because its relying-party
 validation has to run first. Levels are cumulative for *entry*; what a member
 then *receives* is the separate question their tier answers.
 
-`/membership/apply` and `/manage/unlock` act on POST only — a GET performs
-nothing and redirects to `/` and `/manage/` respectively, rather than returning
+`/membership/apply`, `/manage/unlock` and `/manage/lock` act on POST only — a
+GET performs nothing and redirects to `/` and `/manage/` respectively, rather than returning
 405, because a login bounce resumes as a GET and signing in successfully should
 not land on an error page.
 

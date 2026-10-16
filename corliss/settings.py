@@ -352,11 +352,15 @@ SCN_SERVICE_DID = env("SCN_SERVICE_DID", default="")
 # That is why the two are checked separately: a deployment with a URL and no
 # token can still show who has asked.
 #
-# CLIENT_KEY is **optional** — sent when set. Verified against production
-# 2026-08-18: HappyView dispatches to a Lua script with no session and no client
-# key, so it adds nothing the token does not carry. Requiring it would tie the
-# recovery path to the *console's* origin-bound key having been configured,
-# which is the one dependency reconciliation must not have.
+# CLIENT_KEY is **optional for reads** and sent when set. Verified against
+# production 2026-08-18: HappyView dispatches to a Lua script with no session and
+# no client key, so it adds nothing the token does not carry. Requiring it for
+# reads would tie the recovery path to the origin-bound key having been
+# configured, which is the one dependency reconciliation must not have.
+# **Admin writes need it.** An admin's login uses it to have the registry
+# provision a DPoP key, and approve, tier change and revoke refuse without it.
+# Blank leaves /manage/ read-only. zai-ops records it with scn-config (Cluster
+# Settings, Registry client key).
 #
 # HOST is the `Host` header to present, needed only when URL is an internal
 # address. The registry routes by virtual host and refuses a request whose Host

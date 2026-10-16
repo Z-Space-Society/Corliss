@@ -1370,6 +1370,38 @@ class ManageViewTests(NoRosterMixin, TestCase):
         self.assertNotContains(resp, "lock--closed")
         self.assertNotContains(resp, "lock--open")
 
+    @override_settings(SCN_SERVICE_DID="did:plc:n4mzxx6z4ehnswc7znswtfr2")
+    def test_the_open_lock_is_a_button_that_locks(self):
+        """An open lock only says a session is stored. When the service account
+        moves PDS the stored one goes stale while the lock still reads open,
+        so the open lock has to be the way back to Authenticate."""
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        service = User.objects.create_user(
+            username="sharedcomputer.network",
+            did="did:plc:n4mzxx6z4ehnswc7znswtfr2",
+        )
+        AtprotoToken.objects.create(
+            user=service,
+            pds_url="https://pds.old.example",
+            issuer="https://auth.example",
+            token_endpoint="https://auth.example/token",
+            access_token="AT",
+            dpop_private_pem=atproto.key_to_pem(atproto.generate_key()),
+            registry_session_at=timezone.now(),
+        )
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+        self.assertContains(resp, "lock--open")
+        self.assertContains(resp, reverse("manage_lock"))
+
+        self.client.post(reverse("manage_lock"))
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+        self.assertContains(resp, "lock--closed")
+        self.assertNotContains(resp, "lock--open")
+
 
 class AccountMenuTests(NoRosterMixin, TestCase):
     """The nav's account menu — identity and standing, on every page."""
@@ -2029,6 +2061,57 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
                 )
 
         self.assertIn("_auth_user_id", self.client.session)
+
+    def _store_service_session(self):
+        service = User.objects.create_user(
+            username="sharedcomputer.network", did=SERVICE_DID
+        )
+        return AtprotoToken.objects.create(
+            user=service,
+            pds_url="https://pds.old.example",
+            issuer="https://auth.example",
+            token_endpoint="https://auth.example/token",
+            access_token="AT",
+            dpop_private_pem=atproto.key_to_pem(atproto.generate_key()),
+            registry_session_at=timezone.now(),
+        )
+
+    def test_locking_discards_the_service_session_and_shuts_the_lock(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        self._store_service_session()
+
+        resp = self.client.post(reverse("manage_lock"))
+
+        self.assertRedirects(resp, reverse("manage"), fetch_redirect_response=False)
+        self.assertFalse(
+            AtprotoToken.objects.filter(user__did=SERVICE_DID).exists()
+        )
+        # Your own session is untouched: locking is not a sign-out.
+        self.assertEqual(self.client.session["_auth_user_id"], str(self.user.pk))
+
+    def test_locking_is_not_triggerable_by_a_link(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        self._store_service_session()
+
+        resp = self.client.get(reverse("manage_lock"))
+
+        self.assertRedirects(resp, reverse("manage"), fetch_redirect_response=False)
+        self.assertTrue(
+            AtprotoToken.objects.filter(user__did=SERVICE_DID).exists()
+        )
+
+    def test_a_non_admin_cannot_lock(self):
+        self.client.force_login(self.user)
+        self._store_service_session()
+
+        resp = self.client.post(reverse("manage_lock"))
+
+        self.assertEqual(resp.status_code, 404)
+        self.assertTrue(
+            AtprotoToken.objects.filter(user__did=SERVICE_DID).exists()
+        )
 
 
 @override_settings(SCN_SERVICE_DID=SERVICE_DID)

@@ -418,8 +418,8 @@ class ConfigurationTests(TestCase):
         self.assertTrue(
             membership.MembershipRegistry(URL, CLIENT_KEY, TOKEN).is_configured
         )
-        # The recovery case: a cluster rebuilt before `zai-set-console
-        # client_key` has been run must still be able to reconcile.
+        # The recovery case: a cluster rebuilt before its registry client key
+        # has been recorded must still be able to reconcile.
         self.assertTrue(membership.MembershipRegistry(URL, "", TOKEN).is_configured)
 
         for args in [("", CLIENT_KEY, TOKEN), (URL, CLIENT_KEY, "")]:

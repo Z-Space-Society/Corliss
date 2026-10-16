@@ -660,8 +660,10 @@ a {
    page's own success token or muted, and the word says which. Colour alone is
    unreadable to anyone who cannot distinguish the two and invisible to a screen
    reader — the same reason .status carries a word beside its dot.
-   The two states are also different elements, and the words follow: a <span>
-   states what is true, a <button> says what pressing it does. */
+   Both states are buttons. Shut, pressing it authenticates the service
+   account; open, pressing it locks, which is the way back to Authenticate when
+   a stored session has gone stale (the account moved PDS, say). The word still
+   states what is true, and the title says what pressing does. */
 .lock {
   display: inline-flex;
   align-items: center;
@@ -687,13 +689,18 @@ a {
   flex-shrink: 0;
 }
 
+/* Pressable either way, so both carry a button's outline. */
 .lock--open {
   color: var(--success);
+  border-color: var(--border-input);
+  cursor: pointer;
 }
 
-/* Locked is the resting state, not a fault, so it is muted rather than red —
-   but it is the only one of the two that is pressable, and it carries a
-   button's outline to say so. */
+.lock--open:hover {
+  border-color: var(--border-hover);
+}
+
+/* Locked is the resting state, not a fault, so it is muted rather than red. */
 .lock--closed {
   color: var(--text-secondary);
   border-color: var(--border-input);

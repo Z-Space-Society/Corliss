@@ -101,14 +101,17 @@ makes it sound otherwise.
     {% endcomment %}
     {% if service_session.present and service_session.can_write_registry %}
       <div class="card__corner">
-        <span class="lock lock--open"
-              title="Admin controls enabled. Service account authenticated{% if service_session.registry_session_at %} {{ service_session.registry_session_at|date:"j M" }}{% endif %}.">
-          <svg class="lock__icon" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3" y="11" width="18" height="10" rx="2"></rect>
-            <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
-          </svg>
-          Admin Unlocked
-        </span>
+        <form method="post" action="{% url 'manage_lock' %}" class="lock-form">
+          {% csrf_token %}
+          <button type="submit" class="lock lock--open"
+                  title="Admin controls enabled. Service account authenticated{% if service_session.registry_session_at %} {{ service_session.registry_session_at|date:"j M" }}{% endif %}. Lock to authenticate it again, e.g. after it moved PDS.">
+            <svg class="lock__icon" width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="3" y="11" width="18" height="10" rx="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+            </svg>
+            Admin Unlocked
+          </button>
+        </form>
       </div>
     {% elif service_session.configured %}
       <div class="card__corner">

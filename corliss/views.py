@@ -180,7 +180,7 @@ EXAMPLE_MODEL_FALLBACK = "MODEL-NAME"
 #    already behind GATE.
 # 3. **A member** — `@member_required`. `/api/`, and `/oidc/authorize` inline.
 # 4. **A cluster admin** — `@admin_required`. `/manage/`, `/manage/unlock`,
-#    `/systems/`.
+#    `/manage/lock`, `/systems/`.
 #
 # Levels are cumulative for *entry* — `may_enter` passes a roster admin with no
 # grant, so 4 reaches 3's pages — but **entitlement is a separate question**
@@ -393,6 +393,26 @@ def login(request):
         **registry,
     }
     return redirect(atproto.authorization_url(meta, request_uri))
+
+
+@admin_required
+def manage_lock(request):
+    """Discard the service account's stored session, so it can be authenticated
+    again. See `membership.lock_service_session` for why an open lock can need
+    this.
+
+    POST only, for the same reason as `manage_unlock`: a GET would let any page
+    on the internet lock an admin's console by linking here. A GET goes back to
+    `/manage/` and does nothing.
+    """
+    if request.method != "POST":
+        return redirect("manage")
+    membership.lock_service_session()
+    request.session[MANAGE_NOTICE_SESSION_KEY] = (
+        "Admin controls are locked. Authenticate the service account to "
+        "unlock them."
+    )
+    return redirect("manage")
 
 
 @admin_required
