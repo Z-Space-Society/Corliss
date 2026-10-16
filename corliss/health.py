@@ -435,7 +435,7 @@ def _manifest(client, key):
 STACK = [
     ("Core", [
         Probe("Garage", "S3 object store and system backup target", _garage, manifest="garage"),
-        Probe("PostgreSQL", "Cluster's central database: Corliss, LiteLLM, HappyView", _postgres, manifest="postgres"),
+        Probe("PostgreSQL", "Cluster's central database", _postgres, manifest="postgres"),
         Probe("Redis", "In-memory store for sessions, caching, and short-lived data", _redis, manifest="redis"),
     ]),
     ("Platform", [
