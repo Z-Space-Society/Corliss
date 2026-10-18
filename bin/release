@@ -50,7 +50,7 @@ Remaining steps to deploy $tag:
   1. Push the release
        git push origin main $tag
 
-  2. Wait one autodeploy tick (about 5 minutes). A cluster on `latest`
+  2. Wait one autodeploy tick (about 5 minutes). A cluster on "latest"
      provisions corliss itself; $SITE_URL/systems/deploys/ shows the run with
      trigger "timer", and its log if it failed. A cluster pinned to a tag
      doesn't move; deploy there by hand from the control node:
