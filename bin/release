@@ -14,8 +14,9 @@
 # It deliberately stops short of pushing. Everything up to the tag is local and
 # undoable; the push is neither, and it is the operator's call. What the script
 # does instead is print every remaining step as a runnable command — because
-# tagging is only half of shipping: the release isn't live until zai-ops is
-# pinned to the new tag and the corliss role is replayed.
+# tagging is only half of shipping. A cluster whose corliss_version is
+# `latest` (the zai-ops default since v0.11.1) deploys the tag on its own,
+# within one zai-ops autodeploy tick of the push (zai-ops ADR-0013).
 set -euo pipefail
 
 # The deploy checklist below is specific to the Z-Space AI cluster (the only
@@ -24,7 +25,6 @@ set -euo pipefail
 CONTROL_NODE_CT=100         # zai-ops' Ansible control node, entered with `pct enter`
 ZAI_OPS_DIR=/opt/zai-ops    # where the blueprint lives on that node
 SITE_URL=https://sharedcomputer.network
-DEFAULTS_FILE=ansible/roles/corliss/defaults/main.yml
 
 # Run from the repo root no matter the caller's CWD, self-located off this
 # script's own path so any checkout works (same idiom as zai-ops' bin/).
@@ -35,31 +35,29 @@ die() { echo "release: $*" >&2; exit 1; }
 declared_version() { sed -n '/^\[project\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' pyproject.toml | head -1; }
 
 # Everything still standing between a local tag and a live deploy. Printed as
-# commands to run in order — step 2 lands in a zai-ops checkout, the rest here.
+# commands to run in order.
 print_steps() {
   local tag="$1" annotation="$2"
   cat <<STEPS
 
 Remaining steps to deploy $tag:
 
+  0. If this release needs new env keys or other role wiring, that zai-ops
+     change is merged, tagged and deployed FIRST. Pushed ahead of it, the
+     autodeploy runs the role without the wiring and fails.
+       "$annotation"
+
   1. Push the release
        git push origin main $tag
 
-  2. Pin it in zai-ops — $DEFAULTS_FILE
-       corliss_version: $tag
-     Update the comment above that line to say what the release brings; the tag
-     annotation is the starting point:
-       "$annotation"
-     Then:
-       git commit -am 'chore(corliss): pin corliss_version to the $tag tag'
-       git push
-
-  3. Replay the role from the control node
+  2. Wait one autodeploy tick (about 5 minutes). A cluster on `latest`
+     provisions corliss itself; $SITE_URL/systems/deploys/ shows the run with
+     trigger "timer", and its log if it failed. A cluster pinned to a tag
+     doesn't move; deploy there by hand from the control node:
        pct enter $CONTROL_NODE_CT
-       cd $ZAI_OPS_DIR && git pull
-       cd ansible && ansible-playbook provision.yml --limit corliss
+       cd $ZAI_OPS_DIR/ansible && ansible-playbook provision.yml --limit corliss
 
-  4. Confirm it landed — the live footer should now read $tag
+  3. Confirm it landed. The live footer should now read $tag
        curl -s $SITE_URL/auth/login | grep -o 'v[0-9][^<]*'
 STEPS
 }

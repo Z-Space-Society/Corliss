@@ -309,9 +309,10 @@ deploy runs `uv sync --locked`, so bumping `pyproject.toml` without re-running
 `uv lock` fails the deploy outright. The script always does both, runs the suite
 before it will tag, and reverts the bump if the suite fails.
 
-It stops at the tag rather than pushing, then prints the remaining steps —
-push, pin `corliss_version` in [zai-ops](https://github.com/Z-Space-Society/zai-ops),
-replay the role, confirm the live footer — as runnable commands. Tagging is only
+It stops at the tag rather than pushing, then prints the remaining steps as
+runnable commands: land any role wiring in [zai-ops](https://github.com/Z-Space-Society/zai-ops)
+first, push, let the cluster's autodeploy timer take the tag (zai-ops
+ADR-0013), and confirm the live footer. Tagging is only
 half of shipping; the checklist is the other half, and lives in the script rather
 than being duplicated here so there is one place for it to be correct.
 
@@ -387,6 +388,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Authenticate the service account so roster edits can be made (POST, cluster admins; returns through `/auth/callback`) | `/manage/unlock` |
 | Lock: discard the stored service session so it can be authenticated again, e.g. after the account moved PDS (POST, cluster admins) | `/manage/lock` |
 | Systems — the stack, with live health checks and each service's provisioned version (cluster admins) | `/systems/` |
+| Deploys: each service's last provision run, its history, and each run's log, as zai-ops recorded them (cluster admins) | `/systems/deploys/`, `/systems/deploys/<host>/`, `/systems/deploys/<host>/<stamp>/` |
 | Django admin | `/admin/` |
 
 The parenthesised audiences above are the four access levels, and each is one
@@ -736,6 +738,11 @@ writing a manifest to a Garage bucket (zai-ops ADR-0009):
 `corliss.health` reads one per row, in the same thread pool as the probes, with
 boto3 on the S3 port the Garage probe already dials.
 
+The object key is the row's inventory name, `<host>.json`. zai-ops wrote
+`caddy.json` and `garage.json` before v0.11.1; this release reads `proxy.json`
+and `object-store.json`, so replay those two plays before deploying it or their
+version cells read "not recorded" until you do.
+
 - **Uniformity is the signal.** On a healthy cluster the zai-ops column is the
   same value all the way down, and that is the all-clear. A row whose revision
   differs was provisioned against a different blueprint and has not been replayed
@@ -762,6 +769,32 @@ boto3 on the S3 port the Garage probe already dials.
   its `manifest` key, and zai-ops lists the same names in
   `docs/roles/manifest.md`. Rename one side alone and that row goes blank without
   anything failing.
+
+### Deploys: `/systems/deploys/`
+
+How each provisioning run went. zai-ops records every `provision.yml` run,
+per service, at the end of the run, whether it succeeded or failed: a JSON
+record and a log under `deploys/<host>/<stamp>` in the same manifest bucket
+(zai-ops ADR-0013). `corliss.health` reads them back with the same key.
+
+- **Corliss reads these and can never write them.** The key is read-only, so
+  a record on this page is what the control node wrote. That is why the records
+  live beside the manifests rather than in Corliss's database.
+- **A service has one key, zai-ops' inventory name** (`proxy`, `object-store`):
+  its manifest is `<host>.json` (since zai-ops v0.11.1), its records are under
+  `deploys/<host>/`, and each `STACK` row is keyed by it. The row's name
+  (Caddy, Garage) is display only, and `health.display_name` is the one place an
+  inventory name becomes one. Every `/systems/` row links to its own runs.
+- **Admin-only, like the rest of `/systems/`.** A log names hosts, internal
+  addresses and paths. Ansible has already masked `no_log` output before it is
+  recorded.
+- **"Can't be read" and "nothing yet" are different answers.** An unreachable
+  or unconfigured bucket says the first; a cluster whose zai-ops predates the
+  records says the second.
+- **Read on request, never cached.** Somebody opens this right after a deploy
+  to see how it went.
+- **Host and stamp are checked against the shapes zai-ops writes** before any
+  read, so a URL can't name some other object in the bucket.
 
 **Adding a service** means a probe *and* a manifest key here, plus a manifest
 step in its zai-ops role. zai-ops' `docs/adding-a-service.md` is the checklist

@@ -56,6 +56,7 @@ that timeout on every load.
 
 import json
 import logging
+import re
 import socket
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
@@ -108,19 +109,22 @@ class Probe:
     it needs itself, so an unconfigured service is that probe's own business
     rather than a special case in the runner.
 
-    `manifest` is the object key zai-ops writes for this service, without
-    `.json`. It is an interface with zai-ops' `docs/roles/manifest.md`: rename
-    one side and the row's version columns go blank without anything failing.
+    `host` is zai-ops' inventory name for the service (`object-store`,
+    `proxy`), the one key for it everywhere: its manifest is `<host>.json`, its
+    deploy records are under `deploys/<host>/`, and `--limit` takes it. `name`
+    is only how this page shows it. A host renamed in zai-ops without the same
+    rename here blanks the row's version columns without anything failing
+    (zai-ops `docs/roles/manifest.md`).
     """
 
-    __slots__ = ("name", "purpose", "check", "note", "manifest")
+    __slots__ = ("host", "name", "purpose", "check", "note")
 
-    def __init__(self, name, purpose, check, note="", manifest=""):
+    def __init__(self, host, name, purpose, check, note=""):
+        self.host = host
         self.name = name
         self.purpose = purpose
         self.check = check
         self.note = note
-        self.manifest = manifest
 
 
 # --- transport ---------------------------------------------------------------
@@ -434,21 +438,21 @@ def _manifest(client, key):
 # asked whether it is up.
 STACK = [
     ("Core", [
-        Probe("Garage", "S3 object store and system backup target", _garage, manifest="garage"),
-        Probe("PostgreSQL", "Cluster's central database", _postgres, manifest="postgres"),
-        Probe("Redis", "In-memory store for sessions, caching, and short-lived data", _redis, manifest="redis"),
+        Probe("object-store", "Garage", "S3 object store and system backup target", _garage),
+        Probe("postgres", "PostgreSQL", "Cluster's central database", _postgres),
+        Probe("redis", "Redis", "In-memory store for sessions, caching, and short-lived data", _redis),
     ]),
     ("Platform", [
-        Probe("Caddy", "The only LAN-facing container, terminates TLS", _caddy, manifest="caddy"),
-        Probe("HappyView", "Membership registry: applications, grants, admin roster", _happyview, manifest="happyview"),
-        Probe("LiteLLM", "API gateway in front of the models", _litellm, manifest="litellm"),
-        Probe("Sync relay", "Automerge sync server", _sync_relay, manifest="sync-relay"),
-        Probe("PDS", "AT Protocol personal data server: accounts and their repos", _pds, manifest="pds"),
+        Probe("proxy", "Caddy", "The only LAN-facing container, terminates TLS", _caddy),
+        Probe("happyview", "HappyView", "Membership registry: applications, grants, admin roster", _happyview),
+        Probe("litellm", "LiteLLM", "API gateway in front of the models", _litellm),
+        Probe("sync-relay", "Sync relay", "Automerge sync server", _sync_relay),
+        Probe("pds", "PDS", "AT Protocol personal data server: accounts and their repos", _pds),
     ]),
     ("Applications", [
-        Probe("Corliss", "Login, membership, OIDC, and API keys", _corliss, manifest="corliss"),
-        Probe("Open WebUI", "Chat app", _open_webui, manifest="open-webui"),
-        Probe("scn-chat", "AI assistant chat, signed in with a member's own PDS", _scn_chat, manifest="scn-chat"),
+        Probe("corliss", "Corliss", "Login, membership, OIDC, and API keys", _corliss),
+        Probe("open-webui", "Open WebUI", "Chat app", _open_webui),
+        Probe("scn-chat", "scn-chat", "AI assistant chat, signed in with a member's own PDS", _scn_chat),
     ]),
 ]
 
@@ -487,14 +491,14 @@ def _measure():
     states = {p.name: _safely(p) for p in probes if p.check in _INLINE}
 
     client = _manifest_client()
-    manifested = [p for p in probes if p.manifest] if client else []
+    manifested = probes if client else []
     manifests = {}
 
     if remote or manifested:
         with ThreadPoolExecutor(max_workers=len(remote) + len(manifested)) as pool:
             pending_states = {p.name: pool.submit(_safely, p) for p in remote}
             pending_manifests = {
-                p.name: pool.submit(_manifest, client, p.manifest) for p in manifested
+                p.name: pool.submit(_manifest, client, p.host) for p in manifested
             }
             for name, future in pending_states.items():
                 states[name] = future.result()
@@ -506,6 +510,7 @@ def _measure():
             "name": name,
             "services": [
                 {
+                    "host": probe.host,
                     "name": probe.name,
                     "purpose": probe.purpose,
                     "note": probe.note,
@@ -545,3 +550,154 @@ def check_all(*, refresh=False):
     )
     cache.set(_CACHE_KEY, groups, HEALTH_CACHE_TTL if all_up else HEALTH_DEGRADED_TTL)
     return groups
+
+
+# --- deploy records -----------------------------------------------------------
+#
+# Beside the manifests, zai-ops records every provision run per service under
+# deploys/<host>/<started>.json and .log in the same bucket (zai-ops ADR-0013).
+# The writer is an Ansible callback on the control node; this module only reads,
+# with the same read-only key, so what the deploys pages show is what the
+# control node wrote. `<host>` is the inventory name, the same key STACK uses,
+# so a record is shown under the row's display name. The pages still list what
+# the bucket holds, so a host with no row here appears under its own name.
+#
+# Read on request and never cached: these pages are opened to find out how a
+# deploy went, usually right after one. Every reader answers None when it
+# cannot say, and never raises.
+
+DEPLOYS_PREFIX = "deploys/"
+DEPLOY_HISTORY_LIMIT = 25
+_DEPLOY_HOST = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_DEPLOY_STAMP = re.compile(r"^\d{8}T\d{6}Z$")
+_DISPLAY_NAMES = {p.host: p.name for _, probes in STACK for p in probes}
+
+
+def display_name(host):
+    """How the page names an inventory host: its STACK row, or the host itself."""
+    return _DISPLAY_NAMES.get(host, host)
+
+
+def valid_host(host):
+    """Whether `host` has the shape of a name zai-ops would write."""
+    return bool(_DEPLOY_HOST.match(host or ""))
+
+
+def _deploy_record(client, key):
+    """One deploy record as the pages show it, or None. Never raises."""
+    try:
+        response = client.get_object(Bucket=settings.MANIFEST_BUCKET, Key=key)
+        data = json.loads(response["Body"].read())
+        result, started = data["result"], data["started_at"]
+        if not (isinstance(result, str) and isinstance(started, str)):
+            raise TypeError("result and started_at must be strings")
+    except (BotoCoreError, ClientError) as exc:
+        log.warning("health: deploy record %s unavailable: %s", key, exc)
+        return None
+    except (ValueError, KeyError, TypeError) as exc:
+        log.warning("health: deploy record %s is malformed: %s", key, exc)
+        return None
+    except Exception:  # noqa: BLE001 (same reasoning as _safely)
+        log.exception("health: reading deploy record %s raised", key)
+        return None
+
+    return {
+        "host": (host := key[len(DEPLOYS_PREFIX):].split("/", 1)[0]),
+        "name": display_name(host),
+        "stamp": key.rsplit("/", 1)[1].removesuffix(".json"),
+        "result": result,
+        "succeeded": result == "succeeded",
+        "failed_task": data.get("failed_task") or "",
+        "version": data.get("version") or "",
+        "zai_ops": data.get("zai_ops") or "",
+        "trigger": data.get("trigger") or "",
+        "started_at": started,
+        "finished_at": data.get("finished_at") or "",
+    }
+
+
+def _list(client, **kwargs):
+    """Every page of a ListObjectsV2, as (keys, common prefixes)."""
+    keys, prefixes = [], []
+    for page in client.get_paginator("list_objects_v2").paginate(
+            Bucket=settings.MANIFEST_BUCKET, **kwargs):
+        keys += [o["Key"] for o in page.get("Contents", [])]
+        prefixes += [p["Prefix"] for p in page.get("CommonPrefixes", [])]
+    return keys, prefixes
+
+
+def _record_keys(client, host):
+    """A host's record keys, newest first. The stamp sorts as time."""
+    keys, _ = _list(client, Prefix=f"{DEPLOYS_PREFIX}{host}/")
+    return sorted((k for k in keys if k.endswith(".json")), reverse=True)
+
+
+def last_deploys():
+    """Each recorded host's most recent deploy, by host; None when unreadable.
+
+    An empty list means nothing has been recorded yet, which is a different
+    answer from None (cannot read the bucket), and the page says which.
+    """
+    client = _manifest_client()
+    if client is None:
+        return None
+    try:
+        _, prefixes = _list(client, Prefix=DEPLOYS_PREFIX, Delimiter="/")
+        hosts = sorted(p[len(DEPLOYS_PREFIX):].rstrip("/") for p in prefixes)
+        latest = []
+        for host in hosts:
+            keys = _record_keys(client, host)
+            record = _deploy_record(client, keys[0]) if keys else None
+            if record:
+                latest.append(record)
+        return latest
+    except (BotoCoreError, ClientError) as exc:
+        log.warning("health: cannot list deploy records: %s", exc)
+        return None
+    except Exception:  # noqa: BLE001
+        log.exception("health: listing deploy records raised")
+        return None
+
+
+def deploy_history(host):
+    """A host's newest DEPLOY_HISTORY_LIMIT records, [] when it has none; None
+    when unreadable or when `host` is not a name zai-ops would write."""
+    if not valid_host(host):
+        return None
+    client = _manifest_client()
+    if client is None:
+        return None
+    try:
+        keys = _record_keys(client, host)[:DEPLOY_HISTORY_LIMIT]
+    except (BotoCoreError, ClientError) as exc:
+        log.warning("health: cannot list %s's deploy records: %s", host, exc)
+        return None
+    except Exception:  # noqa: BLE001
+        log.exception("health: listing %s's deploy records raised", host)
+        return None
+    return [r for r in (_deploy_record(client, k) for k in keys) if r]
+
+
+def deploy_log(host, stamp):
+    """One run's record and its log text, as (record, text); None when either
+    name is malformed or the record is not there. A missing log alone is an
+    empty text, so the record still shows."""
+    if not (valid_host(host) and _DEPLOY_STAMP.match(stamp or "")):
+        return None
+    client = _manifest_client()
+    if client is None:
+        return None
+    base = f"{DEPLOYS_PREFIX}{host}/{stamp}"
+    record = _deploy_record(client, base + ".json")
+    if record is None:
+        return None
+    try:
+        response = client.get_object(Bucket=settings.MANIFEST_BUCKET, Key=base + ".log")
+        text = response["Body"].read().decode("utf-8", errors="replace")
+    except (BotoCoreError, ClientError) as exc:
+        log.warning("health: deploy log %s.log unavailable: %s", base, exc)
+        text = ""
+    except Exception:  # noqa: BLE001
+        log.exception("health: reading deploy log %s.log raised", base)
+        text = ""
+    return record, text

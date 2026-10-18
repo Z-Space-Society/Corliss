@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% comment %}
+One provision run: its record, then its log as the control node wrote it, one
+line per task with the tail of a failed task's output. Rendered as text, never
+as markup.
+{% endcomment %}
+
+{% block title %}Deploy log: {{ record.name }}{% endblock %}
+
+{% block content %}
+<div class="account-view console-view">
+  <h1>Deploy log: {{ record.name }}</h1>
+
+  <p class="page-text page-text--note"><a href="{% url 'systems_deploy_history' record.host %}">All runs for {{ record.name }}</a></p>
+
+  <p class="page-text">
+    <span class="status">
+      <span class="status__dot status__dot--{% if record.succeeded %}up{% else %}down{% endif %}"></span>
+      {% if record.succeeded %}Succeeded{% else %}Failed{% endif %}
+    </span>{% if record.failed_task %} at <span class="inline-code">{{ record.failed_task }}</span>{% endif %}.
+    Started {{ record.started_at }}{% if record.finished_at %}, finished {{ record.finished_at }}{% endif %},
+    {{ record.trigger }} trigger, zai-ops {{ record.zai_ops }}{% if record.version %}, installed {{ record.version }}{% endif %}.
+  </p>
+
+  {% if log %}
+    <div class="code-block"><pre><code>{{ log }}</code></pre></div>
+  {% else %}
+    <p class="page-text">This run's log can't be read.</p>
+  {% endif %}
+</div>
+{% endblock %}

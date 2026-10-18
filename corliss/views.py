@@ -1462,6 +1462,45 @@ def systems(request):
     )
 
 
+@require_http_methods(["GET"])
+@admin_required
+def systems_deploys(request):
+    """Each service's most recent provision run, as zai-ops recorded it.
+
+    The records are written by the control node, never by Corliss (zai-ops
+    ADR-0013), and read here with the manifest key, which is read-only. Gated
+    with `/systems/` and for the same reason: the logs name hosts and paths.
+    """
+    return render(request, "systems_deploys.html", {"deploys": health.last_deploys()})
+
+
+@require_http_methods(["GET"])
+@admin_required
+def systems_deploy_history(request, host):
+    """One service's recent runs, newest first. Every /systems/ row links here,
+    so a service with no records yet gets the page saying so; only a name
+    zai-ops would never write is a 404."""
+    if not health.valid_host(host):
+        raise Http404
+    return render(request, "systems_deploy_history.html", {
+        "host": host,
+        "name": health.display_name(host),
+        "records": health.deploy_history(host),
+        "limit": health.DEPLOY_HISTORY_LIMIT,
+    })
+
+
+@require_http_methods(["GET"])
+@admin_required
+def systems_deploy_log(request, host, stamp):
+    """One run's record and its log. 404 for a run that is not there."""
+    found = health.deploy_log(host, stamp)
+    if found is None:
+        raise Http404
+    record, text = found
+    return render(request, "systems_deploy_log.html", {"record": record, "log": text})
+
+
 @require_http_methods(["GET", "POST"])
 @admin_required
 def manage(request):

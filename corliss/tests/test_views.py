@@ -526,6 +526,7 @@ class SystemsViewTests(NoRosterMixin, TestCase):
                 "name": group,
                 "services": [
                     {
+                        "host": probe.host,
                         "name": probe.name,
                         "purpose": probe.purpose,
                         "note": probe.note,
@@ -626,6 +627,14 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         _grant()
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(reverse("systems")).status_code, 404)
+
+    def test_systems_links_to_the_deploys_and_each_rows_history(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("systems"))
+        self.assertContains(resp, reverse("systems_deploys"))
+        # Linked by inventory name, shown by display name.
+        self.assertContains(resp, reverse("systems_deploy_history", args=["object-store"]))
 
     @override_settings(GARAGE_S3_URL="", MANIFEST_BUCKET="")
     def test_the_real_probes_render_with_nothing_reachable(self):
@@ -2332,3 +2341,72 @@ class ParascribeViewTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
         self.assertContains(resp, f'<a class="nav__dropdown-item" href="{reverse("parascribe")}">')
+
+
+_RECORD = {
+    "host": "corliss", "name": "Corliss", "stamp": "20261018T140211Z", "result": "failed",
+    "succeeded": False, "failed_task": "corliss : Sync the venv", "version": "",
+    "zai_ops": "v0.12.0", "trigger": "timer",
+    "started_at": "2026-10-18T14:02:11Z", "finished_at": "2026-10-18T14:04:40Z",
+}
+
+
+class SystemsDeploysViewTests(NoRosterMixin, TestCase):
+    """The deploys pages under `/systems/`: gated like it, and honest about
+    what they could not read. The reading itself is `test_health`'s."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+
+    def _as_cluster_admin(self):
+        patcher = patch("corliss.membership.is_cluster_admin", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.client.force_login(self.user)
+
+    def test_a_non_admin_gets_404_on_every_deploys_page(self):
+        # The logs name hosts, addresses and paths.
+        _grant()
+        self.client.force_login(self.user)
+        with patch("corliss.health.last_deploys", return_value=[_RECORD]), \
+                patch("corliss.health.deploy_history", return_value=[_RECORD]), \
+                patch("corliss.health.deploy_log", return_value=(_RECORD, "log")):
+            for url in (reverse("systems_deploys"),
+                        reverse("systems_deploy_history", args=["corliss"]),
+                        reverse("systems_deploy_log", args=["corliss", "20261018T140211Z"])):
+                self.assertEqual(self.client.get(url).status_code, 404, url)
+
+    def test_the_last_deploy_shows_its_result_and_failed_task(self):
+        self._as_cluster_admin()
+        with patch("corliss.health.last_deploys", return_value=[_RECORD]):
+            resp = self.client.get(reverse("systems_deploys"))
+        self.assertContains(resp, "Failed")
+        self.assertContains(resp, "corliss : Sync the venv")
+        self.assertContains(resp, reverse("systems_deploy_log", args=["corliss", "20261018T140211Z"]))
+
+    def test_unreadable_and_empty_say_different_things(self):
+        self._as_cluster_admin()
+        with patch("corliss.health.last_deploys", return_value=None):
+            self.assertContains(self.client.get(reverse("systems_deploys")), "can't be read")
+        with patch("corliss.health.last_deploys", return_value=[]):
+            self.assertContains(self.client.get(reverse("systems_deploys")), "No deploys recorded yet")
+
+    def test_a_service_with_no_records_says_so(self):
+        # Every /systems/ row links here, so "none yet" is a page, not a 404.
+        self._as_cluster_admin()
+        with patch("corliss.health.deploy_history", return_value=[]):
+            resp = self.client.get(reverse("systems_deploy_history", args=["object-store"]))
+        self.assertContains(resp, "No deploys recorded for Garage yet")
+
+    def test_a_name_zai_ops_would_not_write_is_404(self):
+        self._as_cluster_admin()
+        resp = self.client.get(reverse("systems_deploy_history", args=["Not_A_Host"]))
+        self.assertEqual(resp.status_code, 404)
+
+    def test_the_log_renders_as_text(self):
+        self._as_cluster_admin()
+        with patch("corliss.health.deploy_log", return_value=(_RECORD, "<b>FAILED</b>")):
+            resp = self.client.get(reverse("systems_deploy_log", args=["corliss", "20261018T140211Z"]))
+        self.assertContains(resp, "&lt;b&gt;FAILED&lt;/b&gt;")
+        self.assertNotContains(resp, "<b>FAILED</b>")

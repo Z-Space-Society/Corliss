@@ -103,9 +103,9 @@ class PdsProbeTests(TestCase):
             self.assertEqual(health._pds(), health.UNKNOWN)
         get.assert_not_called()
 
-    def test_its_row_reads_the_pds_manifest(self):
+    def test_its_row_is_keyed_by_the_pds_inventory_name(self):
         rows = {p.name: p for _, probes in health.STACK for p in probes}
-        self.assertEqual(rows["PDS"].manifest, "pds")
+        self.assertEqual(rows["PDS"].host, "pds")
 
 
 @override_settings(SCN_CHAT_URL="http://10.1.1.122:3000")
@@ -135,9 +135,9 @@ class ScnChatProbeTests(TestCase):
             self.assertEqual(health._scn_chat(), health.UNKNOWN)
         get.assert_not_called()
 
-    def test_its_row_reads_the_scn_chat_manifest(self):
+    def test_its_row_is_keyed_by_the_scn_chat_inventory_name(self):
         rows = {p.name: p for _, probes in health.STACK for p in probes}
-        self.assertEqual(rows["scn-chat"].manifest, "scn-chat")
+        self.assertEqual(rows["scn-chat"].host, "scn-chat")
 
 
 @override_settings(SYNC_RELAY_URL="http://10.1.1.113:7030")
@@ -361,7 +361,7 @@ class BrokenProbeTests(TestCase):
     """Our bug is not their outage."""
 
     def test_a_probe_that_raises_reads_unknown_not_down(self):
-        probe = health.Probe("Anything", "…", MagicMock(side_effect=RuntimeError("boom")))
+        probe = health.Probe("anything", "Anything", "…", MagicMock(side_effect=RuntimeError("boom")))
         with self.assertLogs("corliss.health", level="ERROR"):
             self.assertEqual(health._safely(probe), health.UNKNOWN)
 
@@ -506,15 +506,23 @@ class CheckAllTests(TestCase):
 
         versions = {s["name"]: s["version"] for g in groups for s in g["services"]}
         self.assertEqual(versions, {
-            p.name: f"{p.manifest}-1" for _, ps in health.STACK for p in ps
+            p.name: f"{p.host}-1" for _, ps in health.STACK for p in ps
         })
 
-    def test_every_row_names_a_manifest_key(self):
-        # A row with no key would render blank forever and read as a service
-        # zai-ops never provisioned.
-        for _, probes in health.STACK:
-            for probe in probes:
-                self.assertTrue(probe.manifest, probe.name)
+    def test_rows_are_keyed_by_zai_ops_inventory_names(self):
+        # The manifest is <inventory_hostname>.json since zai-ops v0.11.1. The
+        # two that once named the software, caddy.json and garage.json, are the
+        # ones a drift would hit first.
+        hosts = {p.name: p.host for _, ps in health.STACK for p in ps}
+        self.assertEqual(hosts["Caddy"], "proxy")
+        self.assertEqual(hosts["Garage"], "object-store")
+        self.assertEqual(len(set(hosts.values())), len(hosts))
+        for host in hosts.values():
+            self.assertTrue(health.valid_host(host), host)
+
+    def test_a_host_is_shown_by_its_rows_name_or_else_as_itself(self):
+        self.assertEqual(health.display_name("object-store"), "Garage")
+        self.assertEqual(health.display_name("not-in-stack"), "not-in-stack")
 
     @override_settings(**_MANIFEST_SETTINGS)
     def test_an_unreadable_garage_changes_no_state_and_no_cache_window(self):
@@ -533,3 +541,100 @@ class CheckAllTests(TestCase):
         states = [s["state"] for g in groups for s in g["services"]]
         self.assertEqual(set(states), {health.UP})
         self.assertEqual(cache_set.call_args.args[2], health.HEALTH_CACHE_TTL)
+
+
+def _record_body(**fields):
+    body = {"service": "corliss", "result": "succeeded", "failed_task": None,
+            "version": "v1.4.3", "zai_ops": "v0.12.0", "trigger": "timer",
+            "started_at": "2026-10-18T14:02:11Z", "finished_at": "2026-10-18T14:04:40Z"}
+    body.update(fields)
+    return {"Body": io.BytesIO(json.dumps(body).encode())}
+
+
+def _pages(keys=(), prefixes=()):
+    paginator = MagicMock()
+    paginator.paginate.return_value = [{
+        "Contents": [{"Key": k} for k in keys],
+        "CommonPrefixes": [{"Prefix": p} for p in prefixes],
+    }]
+    return paginator
+
+
+@override_settings(**_MANIFEST_SETTINGS)
+class DeployRecordTests(TestCase):
+    """The deploys pages: zai-ops' records, read back and never guessed at."""
+
+    def _client(self):
+        patcher = patch("corliss.health.boto3.session.Session")
+        session = patcher.start()
+        self.addCleanup(patcher.stop)
+        return session.return_value.client.return_value
+
+    def test_a_record_reads_back_with_its_host_and_stamp(self):
+        client = MagicMock()
+        client.get_object.return_value = _record_body(result="failed", failed_task="corliss : Sync")
+        record = health._deploy_record(client, "deploys/corliss/20261018T140211Z.json")
+        self.assertEqual(record["host"], "corliss")
+        self.assertEqual(record["name"], "Corliss")
+        self.assertEqual(record["stamp"], "20261018T140211Z")
+        self.assertFalse(record["succeeded"])
+        self.assertEqual(record["failed_task"], "corliss : Sync")
+
+    def test_a_malformed_record_is_none(self):
+        client = MagicMock()
+        client.get_object.return_value = {"Body": io.BytesIO(b'{"result": "succeeded"}')}
+        with self.assertLogs("corliss.health", "WARNING"):
+            self.assertIsNone(health._deploy_record(client, "deploys/corliss/x.json"))
+
+    def test_last_deploys_takes_the_newest_record_per_host(self):
+        client = self._client()
+
+        def paginator(_name):
+            return paginators.pop(0)
+        paginators = [
+            _pages(prefixes=["deploys/corliss/", "deploys/proxy/"]),
+            _pages(keys=["deploys/corliss/20261017T000000Z.json",
+                         "deploys/corliss/20261018T000000Z.json",
+                         "deploys/corliss/20261018T000000Z.log"]),
+            _pages(keys=["deploys/proxy/20261001T000000Z.json"]),
+        ]
+        client.get_paginator.side_effect = paginator
+        client.get_object.side_effect = lambda Bucket, Key: _record_body()
+
+        deploys = health.last_deploys()
+
+        self.assertEqual([d["host"] for d in deploys], ["corliss", "proxy"])
+        self.assertEqual(deploys[0]["stamp"], "20261018T000000Z")
+
+    def test_an_unreadable_bucket_is_none_not_an_empty_list(self):
+        # The page says "can't be read" for None and "nothing yet" for [].
+        client = self._client()
+        client.get_paginator.return_value.paginate.side_effect = EndpointConnectionError(
+            endpoint_url="http://10.1.1.101:3900")
+        with self.assertLogs("corliss.health", "WARNING"):
+            self.assertIsNone(health.last_deploys())
+
+    @override_settings(MANIFEST_BUCKET="")
+    def test_without_manifest_settings_there_is_nothing_to_read(self):
+        self.assertIsNone(health.last_deploys())
+
+    def test_a_name_zai_ops_would_not_write_is_never_asked_for(self):
+        client = self._client()
+        self.assertIsNone(health.deploy_history("../corliss"))
+        self.assertIsNone(health.deploy_log("corliss", "../../garage.json"))
+        client.get_object.assert_not_called()
+        client.get_paginator.assert_not_called()
+
+    def test_a_missing_log_still_shows_the_record(self):
+        client = self._client()
+
+        def get_object(Bucket, Key):
+            if Key.endswith(".log"):
+                raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
+            return _record_body()
+        client.get_object.side_effect = get_object
+
+        with self.assertLogs("corliss.health", "WARNING"):
+            record, text = health.deploy_log("corliss", "20261018T140211Z")
+        self.assertEqual(record["version"], "v1.4.3")
+        self.assertEqual(text, "")

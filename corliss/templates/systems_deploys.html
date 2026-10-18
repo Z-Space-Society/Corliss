@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% comment %}
+Each service's most recent provision run, for cluster admins.
+
+The records are written by zai-ops on the control node at the end of every
+provision.yml run, success or failure (zai-ops ADR-0013), and read here with the
+read-only manifest key. Records are keyed by zai-ops' inventory name and shown
+under the /systems/ row's display name (health.display_name).
+
+`deploys` is None when the bucket cannot be read and [] when nothing has been
+recorded yet; the page says which.
+{% endcomment %}
+
+{% block title %}Deploys{% endblock %}
+
+{% block content %}
+<div class="account-view console-view">
+  <h1>Deploys</h1>
+
+  <p class="page-text">The last provisioning run for each service, as the
+  control node recorded it. A run started by the autodeploy timer reads
+  <em>timer</em>; anything else reads <em>cli</em>. Open a service for its
+  earlier runs and their logs.</p>
+
+  <p class="page-text page-text--note"><a href="{% url 'systems' %}">Back to Systems</a></p>
+
+  {% if deploys is None %}
+    <p class="page-text">The deploy records can't be read right now. The
+    manifest bucket is unreachable or not configured.</p>
+  {% elif not deploys %}
+    <p class="page-text">No deploys recorded yet. A record appears after the
+    next provisioning run.</p>
+  {% else %}
+    <div class="card">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Service</th>
+              <th>Finished</th>
+              <th>Version</th>
+              <th>zai-ops</th>
+              <th>Trigger</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for d in deploys %}
+              <tr>
+                <td><a href="{% url 'systems_deploy_history' d.host %}">{{ d.name }}</a></td>
+                <td class="data-table__version" title="Started {{ d.started_at }}">{{ d.finished_at|default:d.started_at }}</td>
+                <td class="data-table__version">{{ d.version|default:"not recorded" }}</td>
+                <td class="data-table__version">{{ d.zai_ops }}</td>
+                <td class="data-table__muted">{{ d.trigger }}</td>
+                <td>
+                  <a class="status" href="{% url 'systems_deploy_log' d.host d.stamp %}">
+                    <span class="status__dot status__dot--{% if d.succeeded %}up{% else %}down{% endif %}"></span>
+                    {% if d.succeeded %}Succeeded{% else %}Failed{% endif %}
+                  </a>{% if d.failed_task %}
+                  <span class="status__note">at {{ d.failed_task }}</span>{% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% comment %}
+One service's recent provision runs, newest first, for cluster admins. Capped
+at `limit` so the page stays one screen of reads; zai-ops keeps every record.
+`records` is None when the bucket can't be read and [] when this service has
+none yet.
+{% endcomment %}
+
+{% block title %}Deploys: {{ name }}{% endblock %}
+
+{% block content %}
+<div class="account-view console-view">
+  <h1>Deploys: {{ name }}</h1>
+
+  <p class="page-text page-text--note"><a href="{% url 'systems_deploys' %}">All services</a>.
+  Showing up to the {{ limit }} most recent runs.</p>
+
+  {% if records is None %}
+    <p class="page-text">The deploy records can't be read right now. The
+    manifest bucket is unreachable or not configured.</p>
+  {% elif not records %}
+    <p class="page-text">No deploys recorded for {{ name }} yet. A record
+    appears after its next provisioning run.</p>
+  {% else %}
+  <div class="card">
+    <div class="table-scroll">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Started</th>
+            <th>Version</th>
+            <th>zai-ops</th>
+            <th>Trigger</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in records %}
+            <tr>
+              <td class="data-table__version"><a href="{% url 'systems_deploy_log' r.host r.stamp %}">{{ r.started_at }}</a></td>
+              <td class="data-table__version">{{ r.version|default:"not recorded" }}</td>
+              <td class="data-table__version">{{ r.zai_ops }}</td>
+              <td class="data-table__muted">{{ r.trigger }}</td>
+              <td>
+                <span class="status">
+                  <span class="status__dot status__dot--{% if r.succeeded %}up{% else %}down{% endif %}"></span>
+                  {% if r.succeeded %}Succeeded{% else %}Failed{% endif %}
+                </span>{% if r.failed_task %}
+                <span class="status__note">at {{ r.failed_task }}</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

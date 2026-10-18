@@ -34,6 +34,10 @@ platform is what other services consume, applications are what members use.
   since the blueprint changed. Beside a status other than Up, do not trust the
   version.</p>
 
+  <p class="page-text page-text--note"><a href="{% url 'systems_deploys' %}">Deploys</a>:
+  how each service's last provisioning run went, with its log. A service's
+  name opens its own runs.</p>
+
   {% for group in groups %}
     <h2 class="section-title">{{ group.name }}</h2>
     <div class="card">
@@ -51,7 +55,7 @@ platform is what other services consume, applications are what members use.
           <tbody>
             {% for service in group.services %}
               <tr>
-                <td>{{ service.name }}</td>
+                <td><a href="{% url 'systems_deploy_history' service.host %}" title="Deploys of {{ service.host }}">{{ service.name }}</a></td>
                 <td class="data-table__muted">{{ service.purpose }}{% if service.note %}
                   <span class="status__note">— {{ service.note }}</span>{% endif %}</td>
                 {% if service.version %}
