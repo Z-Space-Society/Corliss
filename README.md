@@ -97,11 +97,7 @@ to activate. `uv run python manage.py …` is the explicit equivalent.
 Configuration is entirely env-driven — see [`.env.example`](.env.example) for
 the full list. `.env` is git-ignored; **never commit secrets or private keys**.
 `OPENWEBUI_URL` drives the nav's "Open WebUI" entry under Tools, `CHAT_URL` the nav's
-**Chat** entry (scn-chat's public origin), `MANAGE_URL` the one remaining link to
-the Manage Console — the fallback offered on `/manage/` to an admin whose
-sign-in picked up no registry session (the nav entry is **gone**: `/manage/`
-covers everything that console did, roster editing included, and the setting
-itself goes when the `manage_console` role is removed) — and `API_URL` both the
+**Chat** entry (scn-chat's public origin), and `API_URL` both the
 endpoint shown on `/api/` and the
 "LiteLLM" entry in the Manage menu (`API_URL` + `/ui/`, cluster admins
 only — derived rather than configured separately, since a second setting for the
@@ -718,8 +714,7 @@ any one service, and nothing else in Corliss has business knowing Garage exists.
 
 Every row is something that can be asked. The list carried a **Manage Console**
 entry until `v0.9.3`, describing static files that had already been deleted
-along with the `manage_console` role — `/manage/` replaced it, which is also why
-`MANAGE_URL` is blank on the cluster. A page whose claim is that it does not
+along with the `manage_console` role. A page whose claim is that it does not
 guess has no business listing what is not there, so a service earns a row here
 only if there is something to probe.
 
@@ -900,7 +895,7 @@ reached by address elsewhere and their probes reuse `MEMBERSHIP_REGISTRY_URL`
 thing to get wrong.
 
 **Every address is internal, without exception.** A probe pointed at a public
-origin measures the edge in front of the service rather than the service. `API_URL`, `OPENWEBUI_URL`, `CHAT_URL` and `MANAGE_URL` are hrefs for a
+origin measures the edge in front of the service rather than the service. `API_URL`, `OPENWEBUI_URL` and `CHAT_URL` are hrefs for a
 browser and are never probe targets.
 
 **`REDIS_URL` is a probe target and nothing else.** Corliss holds no Redis

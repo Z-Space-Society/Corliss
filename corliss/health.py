@@ -10,7 +10,7 @@ knowing that Garage exists.
 guessing.** It runs in its own CT on `vmbr1`, the same bridge as every service
 below, so each probe is one hop to a neighbour. The addresses are therefore
 INTERNAL without exception: a probe pointed at a public origin measures the
-edge rather than the service, and `API_URL`/`OPENWEBUI_URL`/`MANAGE_URL` are
+edge rather than the service, and `API_URL`/`OPENWEBUI_URL`/`CHAT_URL` are
 hrefs for a browser, never probe targets.
 
 **Three states, and the third one is load-bearing.** `up` and `down` are
@@ -431,9 +431,7 @@ def _manifest(client, key):
 #
 # **Every entry here is a running service with an address.** The list carried a
 # "Manage Console" row until v0.9.3, describing static files that had already
-# been deleted along with the `manage_console` role — its own console at
-# `/manage/` replaced it, and zai-ops blanks `MANAGE_URL` for the same reason.
-# A page whose whole claim is that it does not guess has no business listing
+# been deleted along with the `manage_console` role. A page whose whole claim is that it does not guess has no business listing
 # something that is not there, so a row belongs here only if something can be
 # asked whether it is up.
 STACK = [

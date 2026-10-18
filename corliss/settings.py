@@ -154,11 +154,6 @@ CHAT_URL = env("CHAT_URL", default="")
 # inside the cluster, and the two must not be conflated — see that comment.
 API_URL = env("API_URL", default="")
 
-# Public origin of the Manage Console, linked from the home page's admin block.
-# Blank hides that one link (the Django admin link beside it always renders) —
-# the console is deployed separately, so a Corliss without one is a real state.
-MANAGE_URL = env("MANAGE_URL", default="")
-
 # Public origin of HappyView, the membership registry (view.<domain>). Linked
 # from the nav's Manage menu for cluster admins. Blank hides the link.
 #

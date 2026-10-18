@@ -470,19 +470,15 @@ makes it sound otherwise.
     {% endif %}
 
     {% comment %}
-    What used to stand here sent the admin to the Manage Console, because a
-    grant needs the approving admin's own DPoP-authenticated session and Corliss
-    held none. It holds one now — provisioned from the registry during an
-    admin's login — so the buttons above are that link's replacement. What has
-    not moved is roster editing, which the console still owns.
+    A grant needs the approving admin's own DPoP-authenticated registry
+    session, provisioned during an admin's login. Without one there is no
+    other surface to send them to: this page is the only admin write surface.
     {% endcomment %}
     {% if not can_decide %}
       <p class="hint-text">Deciding needs a registry session, and this sign-in
       picked one up. <a href="{% url 'logout' %}">Sign out and in again</a> to
       get one — or if the registry was unreachable when you signed in, once it
-      is back.{% if MANAGE_URL %} The
-      <a href="{{ MANAGE_URL }}">Manage Console</a> still works in the
-      meantime.{% endif %}</p>
+      is back.</p>
     {% endif %}
   </div>
 

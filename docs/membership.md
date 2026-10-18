@@ -82,8 +82,7 @@ The home page's apply form posts to `/membership/apply`, which writes the record
 straight into the member's own repo with `com.atproto.repo.putRecord`
 (`membership.submit_application` → `atproto.write_record`). Corliss already
 holds that member's PDS tokens and DPoP key from login, so it needs no HappyView
-session and no registry procedure to do it — which is the one structural
-difference from how the Manage Console does the same thing.
+session and no registry procedure to do it.
 
 - **Applying confers nothing, and never touches `MembershipCache`.** The record
   asks; only an admin's grant in the registry space answers. Nothing on the
@@ -185,8 +184,6 @@ tier and **Set tier**, plus **Revoke**. All three go to the registry as
 - **It needs a registry session, which only an admin's login picks up** — see
   [Signing in as an admin](#signing-in-as-an-admin). Without one the controls
   render disabled with the reason rather than failing at the click.
-
-Roster editing is the one thing still left to the Manage Console.
 
 ## Reconciliation — rebuilding the cache from the registry
 
@@ -311,7 +308,7 @@ Four things worth holding onto:
   path works on it unchanged. `registry_session_at` exists only so the console
   can offer a disabled button with a reason.
 
-Corliss is a **public** client here, as the SPA is: a client key
+Corliss is a **public** client here: a client key
 (`MEMBERSHIP_REGISTRY_CLIENT_KEY`, which reads do not require but writes do) and
 a PKCE verifier binding the provisioning to the registration. That verifier is a
 *second* one, for a different server than the PDS OAuth's, and the two are named

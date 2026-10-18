@@ -194,12 +194,6 @@
         opens onto nothing. `Membership` is unconditional for a cluster admin
         because it is served by this app: there is no setting that can leave it
         pointing nowhere.
-
-        The Manage Console (the SPA) is deliberately no longer offered here:
-        `/manage/` covers everything it did, roster editing included, so a
-        second entry onto the same job could only ask the reader which one was
-        current. `MANAGE_URL` still renders on `/manage/` itself, as the
-        fallback for an admin whose sign-in picked up no registry session.
         {% endcomment %}
         {% if user.is_cluster_admin or user.is_superuser %}
           <div class="nav__menu">

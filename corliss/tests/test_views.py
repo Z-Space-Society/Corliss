@@ -88,9 +88,6 @@ class FooterTests(TestCase):
         self.assertContains(resp, "sharedcomputer.network")
 
 
-MANAGE_URL = "https://manage.example.com"
-
-
 def _at(text):
     """An aware UTC datetime from the registry's ISO-8601-with-Z format."""
     return datetime.fromisoformat(text.replace("Z", "+00:00"))
@@ -329,7 +326,6 @@ class NavMenuTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("home"))
         self.assertNotContains(resp, ">Manage<")
 
-    @override_settings(MANAGE_URL=MANAGE_URL)
     def test_cluster_admin_sees_the_console_but_not_the_django_admin(self):
         # The roster grants the console alone. Handing it the Django admin as
         # well would let a roster edit reach the session and OIDC client tables.
@@ -339,19 +335,6 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.assertContains(resp, reverse("manage"))
         self.assertNotContains(resp, ">Django<")
 
-    @override_settings(MANAGE_URL=MANAGE_URL)
-    def test_the_manage_console_is_not_in_the_nav_even_when_configured(self):
-        # A configured MANAGE_URL no longer buys a nav entry: /manage/ covers
-        # what that console did, and two entries onto the same job only ask the
-        # reader which one is current. The setting still feeds the fallback link
-        # on /manage/, so it is the *nav* this asserts about, not the setting.
-        self._as_cluster_admin()
-        self.client.force_login(self.user)
-        resp = self.client.get(reverse("home"))
-        self.assertNotContains(resp, MANAGE_URL)
-        self.assertNotContains(resp, "Manage Console")
-
-    @override_settings(MANAGE_URL=MANAGE_URL)
     def test_console_link_survives_an_empty_membership_cache(self):
         # The recovery path. The roster is read from the service DID's repo and
         # never depends on this table, so an admin locked out here would be
@@ -362,7 +345,6 @@ class NavMenuTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("home"))
         self.assertContains(resp, reverse("manage"))
 
-    @override_settings(MANAGE_URL=MANAGE_URL)
     def test_superuser_sees_the_django_admin_without_being_on_the_roster(self):
         self.user.is_superuser = True
         self.user.save(update_fields=["is_superuser"])
@@ -371,13 +353,10 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.assertContains(resp, reverse("admin:index"))
         self.assertNotContains(resp, "Manage Console")
 
-    @override_settings(MANAGE_URL="")
-    def test_cluster_admin_with_no_manage_url_still_gets_the_corliss_console(self):
-        # The menu-onto-nothing case this used to guard is now unreachable: the
-        # Corliss console is served by this app, so a cluster admin always has
-        # at least one entry and no setting can leave it pointing nowhere. The
-        # protection that still matters is that the *unconfigured* link stays
-        # absent rather than rendering an empty href.
+    def test_cluster_admin_always_gets_the_corliss_console(self):
+        # The Corliss console is served by this app, so a cluster admin always
+        # has at least one Manage entry and no setting can leave the menu
+        # opening onto nothing.
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
