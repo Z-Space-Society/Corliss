@@ -1569,7 +1569,16 @@ second confidential client, and **only roster admins may complete it**.
 - **PocketBase reads the `id_token`, not a userinfo endpoint.** Corliss has
   none. zai-ops points the hub's token and JWKS URLs at Corliss's internal
   address and its issuer at the public one, so the token's `iss` still
-  matches. `email` reaches the hub only with `email_verified` true.
+  matches.
+- **Beszel is sent `email_verified: true` for any email on file.** PocketBase
+  drops an unverified email, and its users collection requires one, so an
+  admin whose address was typed on `/account/` (never confirmed by their PDS)
+  could not sign in at all: production found this on the first admin to try.
+  Only roster admins reach this token, so the address is vouched for by the
+  gate rather than the PDS. The trade-off: PocketBase matches a returning user
+  by verified email, so an admin who types another hub user's address signs in
+  as that user. Every hub user is a cluster admin. Open WebUI still gets the
+  PDS's word.
 
 ## Deployment
 

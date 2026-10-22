@@ -191,6 +191,34 @@ class BeszelTokenTests(NoRosterMixin, TestCase):
         self.assertEqual(claims["sub"], ADMIN)
         self.assertEqual(claims["iss"], "https://auth.zai.test")
 
+    def test_an_unconfirmed_email_is_sent_as_verified_to_beszel(self):
+        # PocketBase drops an unverified email and then cannot create the user.
+        self.admin.email = "admin@example.test"
+        self.admin.email_confirmed = False
+        self.admin.save()
+        claims = jwt.decode(
+            self._redeem(self._code()).json()["id_token"],
+            options={"verify_signature": False},
+        )
+        self.assertEqual(claims["email"], "admin@example.test")
+        self.assertIs(claims["email_verified"], True)
+
+    def test_open_webui_still_gets_the_pds_word_on_the_same_email(self):
+        self.admin.email = "admin@example.test"
+        self.admin.email_confirmed = False
+        self.admin.save()
+        token = oidc.mint_id_token(self.admin, client_id=OWUI_ID)
+        claims = jwt.decode(token, options={"verify_signature": False})
+        self.assertIs(claims["email_verified"], False)
+
+    def test_no_email_on_file_still_sends_none(self):
+        claims = jwt.decode(
+            self._redeem(self._code()).json()["id_token"],
+            options={"verify_signature": False},
+        )
+        self.assertNotIn("email", claims)
+        self.assertNotIn("email_verified", claims)
+
     def test_a_wrong_secret_is_refused(self):
         resp = self._redeem(self._code(), secret="guess")
         self.assertEqual(resp.status_code, 401)
