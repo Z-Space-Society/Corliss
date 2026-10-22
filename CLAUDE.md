@@ -182,6 +182,11 @@ so widening one cannot widen the other.
   *inline* rather than by decorator, because the relying-party validation has to
   run first: a decorator would answer an unregistered `client_id` with a login
   form instead of `unauthorized_client`.
+- **The Beszel client is admins-only, and that is asked of
+  `membership.is_cluster_admin`, the module function.** Never the
+  `User.is_cluster_admin` property, whose `is_superuser` clause would hand a
+  Django superuser a session in another system. The gate lives in code on the
+  client table (`oidc.confidential_clients`), never in a setting.
 - **The resume after login does not gate; the target does.** `/auth/login` is
   never gated and neither is the hop back — a refused member is refused by the
   page they were heading for, one redirect later, rather than by a second copy

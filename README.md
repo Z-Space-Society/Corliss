@@ -101,19 +101,21 @@ the full list. `.env` is git-ignored; **never commit secrets or private keys**.
 endpoint shown on `/api/` and the
 "LiteLLM" entry in the Manage menu (`API_URL` + `/ui/`, cluster admins
 only — derived rather than configured separately, since a second setting for the
-same origin could only ever disagree with the first). `HAPPYVIEW_URL` and
-`PROXMOX_URL` add the other two service consoles to that menu; each is dropped
-when blank. `PROXMOX_URL` is the odd one out — the Proxmox UI runs on the host
-rather than behind the edge, so it has no subdomain of ours and points at the
-LAN instead (self-signed cert, not reachable from outside).
+same origin could only ever disagree with the first). `HAPPYVIEW_URL`,
+`PROXMOX_URL` and `BESZEL_URL` add the other service consoles to that menu;
+each is dropped when blank. `PROXMOX_URL` is the odd one out — the Proxmox UI
+runs on the host rather than behind the edge, so it has no subdomain of ours
+and points at the LAN instead (self-signed cert, not reachable from outside).
+Beszel sits directly under it, and is the one console that signs in through
+Corliss: see [Beszel: an admins-only relying party](#beszel-an-admins-only-relying-party).
 
 `THEME` picks the folder under [`themes/`](themes/README.md) that dresses the
 site. It defaults to the host in `PUBLIC_BASE_URL`, so it is normally left
 unset; see [Theming](#theming).
 
-Those three link *other systems'* admin UIs. Each authenticates on its own terms
-with credentials Corliss does not hold, so they open a login rather than a
-session — offered to cluster admins because that is who would have those
+Those four link *other systems'* admin UIs. LiteLLM, HappyView and Proxmox each
+authenticate on their own terms with credentials Corliss does not hold, so they
+open a login rather than a session — offered to cluster admins because that is who would have those
 credentials, not because Corliss grants anything by linking them. Each can be
 left blank, which simply hides what it feeds. The `LITELLM_*` trio is what makes
 `/api/` able to issue keys rather than only describe them — see
@@ -394,7 +396,8 @@ non-member is exactly who the page is for), `@member_required` (a member or a
 roster admin), `@admin_required` (a cluster admin, refusing with 404 rather than
 403 so a non-admin does not learn the page is there). `/oidc/authorize` asks the
 same question as `@member_required` but inline, because its relying-party
-validation has to run first. Levels are cumulative for *entry*; what a member
+validation has to run first; for the Beszel client it then asks the roster as
+well, which makes that one flow admins-only. Levels are cumulative for *entry*; what a member
 then *receives* is the separate question their tier answers.
 
 `/membership/apply`, `/manage/unlock` and `/manage/lock` act on POST only — a
@@ -868,11 +871,12 @@ services that answer in milliseconds. Do not add Redis for it.
 | `SYNC_RELAY_URL` | The Automerge sync server's **internal** origin (`http://10.1.1.<ctid>:7030`). |
 | `PDS_URL` | The in-house PDS's **internal** origin (`http://10.1.1.<ctid>:3000`). Blank on a cluster with no PDS. |
 | `SCN_CHAT_URL` | scn-chat's **internal** origin (`http://10.1.1.<ctid>:3000`). Blank on a cluster that has not assigned scn-chat. |
+| `BESZEL_HUB_URL` | The Beszel monitoring hub's **internal** origin (`http://10.1.1.<ctid>:8090`), probed at `/api/health`. Not `BESZEL_URL`, the public origin the Manage menu links. |
 | `REDIS_URL` | Redis as something to **dial** — not a cache backend. See below. |
 | `GARAGE_S3_URL` | Garage's S3 port (`http://10.1.1.<ctid>:3900`), not its admin API. |
 | `CADDY_HEALTH_URL` | Caddy's health endpoint (`http://10.1.1.<ctid>/healthz`). |
 
-All five are blank-tolerant, and **blank means `unknown`, never `down`**. Local
+Every one is blank-tolerant, and **blank means `unknown`, never `down`**. Local
 development sets none of them and the page is correct with every row grey.
 
 The version columns have settings of their own, kept apart because they carry a
@@ -1500,9 +1504,9 @@ logout endpoint in `OIDC_BACKCHANNEL_LOGOUT_URI` — its *internal* address, sin
 that call is service-to-service and has no business routing out through public
 DNS and back in through the edge.
 
-**This is the confidential client, and there is exactly one.** Claude, Claude
-Code and SCN Sync are not wired up this way: they register nothing here and
-hold no secret. A public client needs its document's origin or URL in
+**There are two confidential clients: this one, and the Beszel hub below.**
+Claude, Claude Code and SCN Sync are not wired up this way: they register
+nothing here and hold no secret. A public client needs its document's origin or URL in
 `OIDC_CLIENT_METADATA_ALLOWLIST` (Corliss's own SCN Sync document needs
 nothing) and the resource it asks for in `OIDC_RESOURCES`. See "Public
 clients: Claude, Claude Code and SCN Sync".
@@ -1535,6 +1539,37 @@ will name), plus `name` and `email` + `email_verified` when the member has them.
 `events` claim naming `http://schemas.openid.net/event/backchannel-logout`. No
 `nonce` — the spec forbids one and relying parties reject a token that carries
 it.
+
+### Beszel: an admins-only relying party
+
+The Beszel monitoring hub (`monitor.<domain>`) signs in through Corliss as a
+second confidential client, and **only roster admins may complete it**.
+
+| Setting | Meaning |
+| ------- | ------- |
+| `BESZEL_OIDC_CLIENT_ID` | The hub's `client_id`. Default `beszel`; must differ from `OIDC_CLIENT_ID` (`corliss.E005`). |
+| `BESZEL_OIDC_CLIENT_SECRET` | Its secret. Blank leaves the client unregistered, so the hub meets `unauthorized_client`. |
+| `BESZEL_OIDC_REDIRECT_URIS` | `https://monitor.<domain>/api/oauth2-redirect`. |
+| `BESZEL_URL` | The hub's public origin, for the Manage menu. Blank hides the link. |
+
+- **Who may finish a client's flow is code, not configuration.** The
+  confidential clients are a fixed table in `oidc.confidential_clients`, each
+  built from its own flat settings. A list setting with a per-entry "admins
+  only" field would put the monitoring hub one typo away from every member.
+- **The roster is asked at `/oidc/authorize`, after GATE.** A non-member is
+  sent home as for Open WebUI. A member who is not an admin gets a 403
+  `access_denied` page and no code: home would tell them they are a member,
+  which they already know.
+- **It asks `membership.is_cluster_admin`, never `User.is_cluster_admin`.**
+  The property lets a Django superuser see the admin pages here. Handing a
+  session into another system is an action, and actions answer to the roster.
+- **No back-channel logout.** PocketBase implements none, so a dismissed
+  admin keeps their hub session until its auth token expires. zai-ops sets
+  that lifetime on the hub; nothing here can shorten it.
+- **PocketBase reads the `id_token`, not a userinfo endpoint.** Corliss has
+  none. zai-ops points the hub's token and JWKS URLs at Corliss's internal
+  address and its issuer at the public one, so the token's `iss` still
+  matches. `email` reaches the hub only with `email_verified` true.
 
 ## Deployment
 

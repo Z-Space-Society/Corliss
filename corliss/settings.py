@@ -106,6 +106,19 @@ OIDC_REDIRECT_URIS = env.list("OIDC_REDIRECT_URIS", default=[])
 # reasons the RP's own token lifetime must stay short even with this wired up.
 OIDC_BACKCHANNEL_LOGOUT_URI = env("OIDC_BACKCHANNEL_LOGOUT_URI", default="")
 
+# The second confidential relying party: the Beszel monitoring hub, which only
+# roster admins may sign in to (`corliss.oidc.confidential_clients`). Its
+# redirect is `https://monitor.<domain>/api/oauth2-redirect`. A blank secret
+# leaves the client unregistered, so the hub's sign-in button meets
+# `unauthorized_client` rather than a half-configured client.
+#
+# No back-channel logout: PocketBase does not implement one. A dismissed admin
+# keeps their Beszel session until the hub's own auth token expires, and that
+# lifetime is set on the hub, not here.
+BESZEL_OIDC_CLIENT_ID = env("BESZEL_OIDC_CLIENT_ID", default="beszel")
+BESZEL_OIDC_CLIENT_SECRET = env("BESZEL_OIDC_CLIENT_SECRET", default="")
+BESZEL_OIDC_REDIRECT_URIS = env.list("BESZEL_OIDC_REDIRECT_URIS", default=[])
+
 # The resources a public client (Claude, Claude Code, the SCN Sync plugin) can
 # be issued an access token for: the sync relay's public sync URL and its
 # public MCP URL. A JSON list of objects, one per resource:
@@ -173,6 +186,11 @@ HAPPYVIEW_URL = env("HAPPYVIEW_URL", default="")
 # cert warning, and no reachability from outside the LAN.
 PROXMOX_URL = env("PROXMOX_URL", default="")
 
+# Public origin of the Beszel monitoring hub (monitor.<domain>), linked from
+# the Manage menu for cluster admins under Proxmox. Blank hides the link. Not
+# BESZEL_HUB_URL, the internal address /systems/ probes.
+BESZEL_URL = env("BESZEL_URL", default="")
+
 # Which theme dresses this deployment. A theme is a folder under themes/ named
 # for the domain it serves, holding `templates/` and `static/` that shadow this
 # app's own files by path, one file at a time. Whatever a theme leaves out falls
@@ -227,12 +245,12 @@ LITELLM_MAX_KEYS_PER_MEMBER = env.int("LITELLM_MAX_KEYS_PER_MEMBER", default=5)
 # because it is the mistake this section invites: a probe pointed at a public
 # origin measures the edge, not the service.
 #
-# **All five are blank-tolerant and blank means "unknown", never "down".** A
+# **Every one is blank-tolerant and blank means "unknown", never "down".** A
 # deployment that has not been told where Redis lives has not discovered an
 # outage; it has been asked a question it cannot answer. Local development sets
 # none of them and the page is correct with every row grey.
 #
-# The five services below need settings at all only because Corliss has no other
+# The services below need settings at all only because Corliss has no other
 # relationship with them. HappyView, LiteLLM and Open WebUI are already reached
 # by address elsewhere in this file and their probes reuse those — a second
 # setting naming the same host is a second thing to get wrong.
@@ -274,6 +292,11 @@ PDS_URL = env("PDS_URL", default="")
 # against its database, so "up" means its storage answered too. A cluster that
 # has not assigned scn-chat leaves this blank and the row reads "unknown".
 SCN_CHAT_URL = env("SCN_CHAT_URL", default="")
+
+# The Beszel monitoring hub (its CT, port 8090), at its INTERNAL address.
+# Probed at /api/health, PocketBase's liveness endpoint. Not BESZEL_URL, the
+# public origin the Manage menu links to.
+BESZEL_HUB_URL = env("BESZEL_HUB_URL", default="")
 
 # Redis, as something to dial — NOT as a cache backend. Corliss holds no Redis
 # client and no redis dependency; the probe writes `PING` to a socket and reads

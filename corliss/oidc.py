@@ -31,7 +31,7 @@ import re
 import secrets
 import socket
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from urllib.parse import urlsplit
 
@@ -67,9 +67,16 @@ def base_url() -> str:
 
 # --- Clients ----------------------------------------------------------------
 #
-# Two kinds. The confidential one is Open WebUI, described by settings exactly
-# as it always was. A public client has no secret and no row here: its
-# `client_id` is the URL of a metadata document that says what it is.
+# Two kinds. A confidential client has a secret and is described by settings:
+# Open WebUI, exactly as it always was, and the Beszel monitoring hub. A public
+# client has no secret and no row here: its `client_id` is the URL of a
+# metadata document that says what it is.
+#
+# The confidential clients are a fixed table in code, each built from its own
+# flat settings, and **who may finish each one's flow is decided here, never by
+# configuration.** Open WebUI admits members; Beszel admits roster admins only.
+# A list setting with an "admins only" field per entry would put that line one
+# typo away from opening the monitoring hub to every member.
 
 CONFIDENTIAL = "confidential"
 PUBLIC = "public"
@@ -94,10 +101,57 @@ class Client:
     # the app by. Blank for the confidential client, which has no URL.
     host: str = ""
     grant_types: tuple = ("authorization_code",)
+    # A confidential client's secret. Blank for a public client, which has none.
+    secret: str = field(default="", repr=False)
+    # Whether only roster admins may complete this client's flow. `authorize`
+    # asks it after GATE; see there.
+    admins_only: bool = False
 
     @property
     def is_public(self) -> bool:
         return self.kind == PUBLIC
+
+
+def confidential_clients() -> tuple:
+    """The relying parties that authenticate with a secret.
+
+    Beszel is left out until its secret is set, so an unconfigured hub is an
+    unknown `client_id` rather than one whose blank secret every request
+    would have to be refused against. Open WebUI keeps its old shape: it is
+    listed whatever its secret, and a blank one refuses it at the token
+    endpoint, as it always has.
+    """
+    clients = [
+        Client(
+            client_id=settings.OIDC_CLIENT_ID,
+            kind=CONFIDENTIAL,
+            redirect_uris=tuple(settings.OIDC_REDIRECT_URIS),
+            name=settings.OIDC_CLIENT_ID,
+            secret=settings.OIDC_CLIENT_SECRET,
+        )
+    ]
+    if settings.BESZEL_OIDC_CLIENT_SECRET:
+        clients.append(
+            Client(
+                client_id=settings.BESZEL_OIDC_CLIENT_ID,
+                kind=CONFIDENTIAL,
+                redirect_uris=tuple(settings.BESZEL_OIDC_REDIRECT_URIS),
+                name=settings.BESZEL_OIDC_CLIENT_ID,
+                secret=settings.BESZEL_OIDC_CLIENT_SECRET,
+                admins_only=True,
+            )
+        )
+    return tuple(clients)
+
+
+def confidential_client(client_id):
+    """The confidential client a `client_id` names, or None."""
+    if not client_id:
+        return None
+    for client in confidential_clients():
+        if client.client_id == client_id:
+            return client
+    return None
 
 
 def plugin_client_id() -> str:
@@ -146,13 +200,9 @@ def resolve_client(client_id) -> Client:
     fetched over HTTP: with two gunicorn workers a request to our own origin
     can wait on itself.
     """
-    if client_id and client_id == settings.OIDC_CLIENT_ID:
-        return Client(
-            client_id=client_id,
-            kind=CONFIDENTIAL,
-            redirect_uris=tuple(settings.OIDC_REDIRECT_URIS),
-            name=client_id,
-        )
+    client = confidential_client(client_id)
+    if client is not None:
+        return client
     if client_id and client_id == plugin_client_id():
         return _client_from_document(plugin_client_metadata())
     if isinstance(client_id, str) and client_id.startswith("https://"):
@@ -953,8 +1003,10 @@ def _deliver_logout_token(uri, token) -> bool:
 def registered_logout_endpoints():
     """Every relying party we would tell about a logout: `(client_id, uri)`.
 
-    One registered client today, mirroring `settings.OIDC_CLIENT_ID` — the same
-    single-RP shape `views.authorize` validates against. A second RP turns this
+    Open WebUI only. Beszel is a relying party too, but PocketBase implements
+    no back-channel logout, so there is nowhere to send it a token. What
+    bounds a dismissed admin's session there is the hub's own auth token
+    lifetime, which zai-ops sets. A later RP that does implement it turns this
     into a mapping and nothing else in this module has to change.
 
     Empty when unconfigured, which is inert by design: the gate still holds and

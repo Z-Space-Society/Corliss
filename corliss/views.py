@@ -2412,6 +2412,20 @@ def authorize(request):
     if denial is not None:
         return denial
 
+    # The monitoring hub admits roster admins only. Asked of
+    # `membership.is_cluster_admin`, the module function, and never of the
+    # `User.is_cluster_admin` property: that one lets a Django superuser see
+    # the admin pages here, and handing a session into another system is an
+    # action, which the roster decides. Shown as a page rather than sent home,
+    # because this person is a member and home would tell them so.
+    if client.admins_only and not membership.is_cluster_admin(request.user.did):
+        return _oauth_error_page(
+            request,
+            "access_denied",
+            f"{client.name} is for cluster admins only.",
+            status=403,
+        )
+
     code = oidc.issue_code(
         request.user,
         client_id=client_id,
@@ -2675,15 +2689,16 @@ def _token_public(request, cid):
 @require_http_methods(["POST"])
 def token(request):
     cid, secret = _client_credentials(request)
-    if cid != settings.OIDC_CLIENT_ID:
+    client = oidc.confidential_client(cid)
+    if client is None:
         return _token_public(request, cid)
 
     # Constant-time comparison so the token endpoint doesn't leak the secret.
     # A blank configured secret must refuse, not match. Comparing against ""
     # would accept a request that also sent nothing, so a deployment that had
     # not set one would hand tokens to anyone naming the client.
-    secret_ok = bool(settings.OIDC_CLIENT_SECRET) and hmac.compare_digest(
-        secret or "", settings.OIDC_CLIENT_SECRET
+    secret_ok = bool(client.secret) and hmac.compare_digest(
+        secret or "", client.secret
     )
     if not secret_ok:
         return _error("invalid_client", "client authentication failed", status=401)
