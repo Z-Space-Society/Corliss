@@ -862,7 +862,16 @@ def mint_id_token(user, *, client_id, nonce="", sid="") -> str:
         payload["name"] = user.display_name
     if user.email:
         payload["email"] = user.email
-        payload["email_verified"] = user.email_confirmed
+        # Normally the PDS's word, carried at login. The admins-only client is
+        # sent `true` for any address on file: Beszel (PocketBase) ignores an
+        # unverified email and then cannot create the user at all, and only a
+        # roster admin can reach this token. PocketBase also matches a returning
+        # user by verified email, so an admin who types another hub user's
+        # address signs in as that user; every hub user is a cluster admin.
+        client = confidential_client(client_id)
+        payload["email_verified"] = user.email_confirmed or bool(
+            client and client.admins_only
+        )
     if nonce:
         payload["nonce"] = nonce  # OIDC requires echoing the RP's nonce
     if sid:
