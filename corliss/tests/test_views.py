@@ -412,7 +412,31 @@ class NavMenuTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("home"))
         self.assertContains(resp, ">Proxmox<")
 
-    @override_settings(PROXMOX_URL="", HAPPYVIEW_URL="")
+    @override_settings(
+        PROXMOX_URL="https://pve.example.lan:8006",
+        BESZEL_URL="https://monitor.example.com",
+    )
+    def test_cluster_admin_sees_beszel_directly_under_proxmox(self):
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+        html = self.client.get(reverse("home")).content.decode()
+        self.assertIn(
+            'href="https://monitor.example.com" target="_blank" rel="noopener">Beszel<',
+            html,
+        )
+        proxmox, beszel = html.index(">Proxmox<"), html.index(">Beszel<")
+        self.assertLess(proxmox, beszel)
+        # Nothing between them: directly under, not merely somewhere below.
+        self.assertNotIn("nav__dropdown-item", html[proxmox + 1:html.rindex("<a", 0, beszel)])
+
+    @override_settings(BESZEL_URL="https://monitor.example.com")
+    def test_a_plain_member_never_sees_the_beszel_link(self):
+        _grant()
+        self.client.force_login(self.user)
+        resp = self.client.get(reverse("home"))
+        self.assertNotContains(resp, ">Beszel<")
+
+    @override_settings(PROXMOX_URL="", HAPPYVIEW_URL="", BESZEL_URL="")
     def test_unconfigured_service_consoles_are_absent_not_empty_hrefs(self):
         # Proxmox is blank on the cluster today — the host is LAN-only and not a
         # Caddy route — so this is the live case, not a hypothetical one.
@@ -421,6 +445,7 @@ class NavMenuTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("home"))
         self.assertNotContains(resp, ">Proxmox<")
         self.assertNotContains(resp, ">HappyView<")
+        self.assertNotContains(resp, ">Beszel<")
 
     def test_cluster_admin_sees_systems(self):
         self._as_cluster_admin()

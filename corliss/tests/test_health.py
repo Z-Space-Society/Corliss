@@ -46,6 +46,7 @@ class UnconfiguredTests(TestCase):
         SYNC_RELAY_URL="",
         PDS_URL="",
         SCN_CHAT_URL="",
+        BESZEL_HUB_URL="",
         REDIS_URL="",
         GARAGE_S3_URL="",
         CADDY_HEALTH_URL="",
@@ -56,7 +57,7 @@ class UnconfiguredTests(TestCase):
     def test_every_unset_probe_reads_unknown_and_dials_nothing(self):
         probes = (health._sync_relay, health._pds, health._redis, health._garage,
                   health._caddy, health._litellm, health._happyview,
-                  health._open_webui, health._scn_chat)
+                  health._open_webui, health._scn_chat, health._beszel)
         with patch("corliss.health.requests.get") as get, \
                 patch("corliss.health.socket.create_connection") as connect:
             for probe in probes:
@@ -138,6 +139,38 @@ class ScnChatProbeTests(TestCase):
     def test_its_row_is_keyed_by_the_scn_chat_inventory_name(self):
         rows = {p.name: p for _, probes in health.STACK for p in probes}
         self.assertEqual(rows["scn-chat"].host, "scn-chat")
+
+
+@override_settings(BESZEL_HUB_URL="http://10.1.1.124:8090")
+class BeszelProbeTests(TestCase):
+    """The Beszel hub is asked PocketBase's health endpoint, internally."""
+
+    def test_it_asks_the_health_endpoint(self):
+        with patch("corliss.health.requests.get", return_value=_response(200)) as get:
+            self.assertEqual(health._beszel(), health.UP)
+        self.assertEqual(
+            get.call_args.args[0], "http://10.1.1.124:8090/api/health"
+        )
+
+    def test_an_error_status_is_down(self):
+        with patch("corliss.health.requests.get", return_value=_response(503)):
+            self.assertEqual(health._beszel(), health.DOWN)
+
+    def test_an_unreachable_hub_is_down(self):
+        with patch("corliss.health.requests.get",
+                   side_effect=requests.ConnectionError("no route to host")):
+            self.assertEqual(health._beszel(), health.DOWN)
+
+    @override_settings(BESZEL_HUB_URL="")
+    def test_an_unset_hub_reads_unknown(self):
+        with patch("corliss.health.requests.get") as get:
+            self.assertEqual(health._beszel(), health.UNKNOWN)
+        get.assert_not_called()
+
+    def test_its_row_is_an_application_keyed_by_the_beszel_inventory_name(self):
+        groups = dict(health.STACK)
+        rows = {p.name: p for p in groups["Applications"]}
+        self.assertEqual(rows["Beszel"].host, "beszel")
 
 
 @override_settings(SYNC_RELAY_URL="http://10.1.1.113:7030")
@@ -370,6 +403,7 @@ class BrokenProbeTests(TestCase):
     SYNC_RELAY_URL="http://10.1.1.113:7030",
     PDS_URL="http://10.1.1.114:3000",
     SCN_CHAT_URL="http://10.1.1.122:3000",
+    BESZEL_HUB_URL="http://10.1.1.124:8090",
     REDIS_URL="redis://10.1.1.103:6379",
     GARAGE_S3_URL="http://10.1.1.101:3900",
     CADDY_HEALTH_URL="http://10.1.1.110/healthz",

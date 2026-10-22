@@ -335,6 +335,13 @@ def _scn_chat():
     return _http("scn-chat", origin + "/api/health" if origin else "")
 
 
+def _beszel():
+    """`/api/health`, PocketBase's liveness endpoint, at the hub's internal
+    address. The same request the beszel role's smoke test makes."""
+    origin = _origin(settings.BESZEL_HUB_URL)
+    return _http("beszel", origin + "/api/health" if origin else "")
+
+
 def _open_webui():
     """`/health`, at the internal address back-channel logout already names.
 
@@ -451,6 +458,7 @@ STACK = [
         Probe("corliss", "Corliss", "Login, membership, OIDC, and API keys", _corliss),
         Probe("open-webui", "Open WebUI", "Chat app", _open_webui),
         Probe("scn-chat", "scn-chat", "AI assistant chat, signed in with a member's own PDS", _scn_chat),
+        Probe("beszel", "Beszel", "Monitoring hub: per-machine metrics and pending updates", _beszel),
     ]),
 ]
 

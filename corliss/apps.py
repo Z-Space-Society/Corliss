@@ -112,6 +112,28 @@ def check_oidc_resources_parse(app_configs, **kwargs):
     ]
 
 
+def check_confidential_client_ids_differ(app_configs, **kwargs):
+    """Refuse two confidential clients under one `client_id`.
+
+    The first match wins, so Beszel named `open-webui` would never be reached
+    and every admin's sign-in would fail against Open WebUI's secret, with
+    nothing pointing at why.
+    """
+    if not (
+        settings.BESZEL_OIDC_CLIENT_SECRET
+        and settings.BESZEL_OIDC_CLIENT_ID == settings.OIDC_CLIENT_ID
+    ):
+        return []
+    return [
+        Error(
+            "BESZEL_OIDC_CLIENT_ID is the same as OIDC_CLIENT_ID "
+            f"({settings.OIDC_CLIENT_ID!r}).",
+            hint="Give the Beszel hub its own client id; the default is beszel.",
+            id="corliss.E005",
+        )
+    ]
+
+
 class CorlissConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "corliss"
@@ -121,3 +143,4 @@ class CorlissConfig(AppConfig):
         register(check_dev_admins_require_debug)
         register(check_explicit_theme_exists)
         register(check_oidc_resources_parse)
+        register(check_confidential_client_ids_differ)

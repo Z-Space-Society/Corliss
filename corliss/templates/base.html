@@ -208,7 +208,7 @@
                 <div class="nav__dropdown-rule"></div>
               {% endif %}
               {% comment %}
-              The three service consoles below are OTHER systems' admin UIs, not
+              The four service consoles below are OTHER systems' admin UIs, not
               Corliss surfaces. Each authenticates on its own terms — LiteLLM
               with the proxy's master key, HappyView and Proxmox with their own
               accounts — none of which this app holds or sends anywhere. So they
@@ -216,7 +216,12 @@
               because that is who would hold those credentials, not because
               clicking one grants anything.
 
-              All four below open in a new tab: each is an errand taken *from*
+              Beszel is the exception: it signs in through Corliss, as an OIDC
+              relying party only roster admins can complete. The link still
+              grants nothing; `/oidc/authorize` asks the roster when the hub
+              sends the admin back here.
+
+              All five below open in a new tab: each is an errand taken *from*
               the console — checking a key, a VM, a model row — and the reader
               is expected back. `rel="noopener"` because a tab opened this way
               can otherwise reach back through `window.opener`.
@@ -229,6 +234,9 @@
               {% endif %}
               {% if user.is_cluster_admin and PROXMOX_URL %}
                 <a class="nav__dropdown-item" href="{{ PROXMOX_URL }}" target="_blank" rel="noopener">Proxmox</a>
+              {% endif %}
+              {% if user.is_cluster_admin and BESZEL_URL %}
+                <a class="nav__dropdown-item" href="{{ BESZEL_URL }}" target="_blank" rel="noopener">Beszel</a>
               {% endif %}
               {% if user.is_superuser %}
                 <a class="nav__dropdown-item" href="{% url 'admin:index' %}" target="_blank" rel="noopener">Django</a>
