@@ -651,6 +651,35 @@ a {
   text-decoration: none;
 }
 
+/* The + that opens a form folded into a card (the notes page's New vault).
+   Out of flow and in the corner for the same reason as .card__dismiss: the
+   card's first row belongs to its content. A <details> summary rather than a
+   :target link, so it needs no close link and no script, and rotating it to
+   an x when open makes the same control the way to fold the form back up. */
+.card__add {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+  color: oklch(0.68 0.15 255);
+  transition: transform 0.15s;
+}
+
+.card__add::-webkit-details-marker {
+  display: none;
+}
+
+details[open] > .card__add {
+  transform: rotate(45deg);
+}
+
+.vault-new[open] {
+  margin-top: 20px;
+}
+
 .lock-form {
   display: inline;
 }
