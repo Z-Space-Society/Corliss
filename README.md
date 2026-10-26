@@ -1227,6 +1227,11 @@ else**: every client only ever picks from the list.
   name kept, and the member presses the button again.
 - **The instructions render in every state.** The list depends on the relay
   answering and the explanation does not.
+- **Notes and Size are the relay's figures, shown as given.** Size is the
+  bytes the vault takes on the relay, which is its Automerge history: it
+  grows with every edit and reads larger than the notes as files. Both show
+  "—" until the relay has walked the vault since it started, and against a
+  relay older than v0.3.0, which does not send them.
 
 | State | The page shows |
 | ----- | -------------- |

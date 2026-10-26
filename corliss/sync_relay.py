@@ -78,12 +78,21 @@ def _vault(raw):
         value = raw.get(key)
         return parse_datetime(value) if isinstance(value, str) else None
 
+    def count(key):
+        value = raw.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
     return {
         "name": raw["name"],
         "url": raw.get("url", ""),
         "created_at": when("created_at"),
         # Null from the relay until something has been written to the vault.
         "last_change_at": when("last_change_at"),
+        # Null until the relay has walked the vault since it started, and
+        # absent from a relay older than v0.3.0. `bytes` is stored Automerge
+        # history, not the notes as files.
+        "note_count": count("note_count"),
+        "bytes": count("bytes"),
     }
 
 

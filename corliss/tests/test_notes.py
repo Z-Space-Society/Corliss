@@ -38,13 +38,14 @@ RESOURCES = json.dumps(
 )
 
 
-def vault(name, *, last_change="2026-10-08T17:03:11.123456789Z"):
+def vault(name, *, last_change="2026-10-08T17:03:11.123456789Z", **sizes):
     return {
         "root_doc_id": "4NMNnkMhL8jXrdJ9jamS58PAVdXu",
         "url": "automerge:4NMNnkMhL8jXrdJ9jamS58PAVdXu",
         "name": name,
         "created_at": "2026-10-08T16:00:00Z",
         "last_change_at": last_change,
+        **sizes,
     }
 
 
@@ -146,6 +147,21 @@ class RelayClientTests(VaultsCase):
         self.assertEqual(first["last_change_at"].minute, 3)
         self.assertIsNone(second["last_change_at"])
 
+    def test_counts_are_read_and_anything_but_an_integer_is_none(self):
+        listing = [
+            vault("A", note_count=3, bytes=1234),
+            vault("B", note_count=0, bytes=0),
+            vault("C", note_count=None, bytes=None),
+            vault("D"),
+            vault("E", note_count="3", bytes=True),
+        ]
+        with Relay(listing=listing):
+            vaults = sync_relay.list_vaults(DID)
+        self.assertEqual(
+            [(v["note_count"], v["bytes"]) for v in vaults],
+            [(3, 1234), (0, 0), (None, None), (None, None), (None, None)],
+        )
+
     def test_the_relays_order_is_kept(self):
         with Relay(listing=[vault("First"), vault("Second")]):
             names = [v["name"] for v in sync_relay.list_vaults(DID)]
@@ -244,6 +260,14 @@ class PageStateTests(VaultsCase):
         self.assertContains(resp, "Notes")
         self.assertContains(resp, "Journal")
         self.assertContains(resp, self.FORM)
+
+    def test_a_vault_shows_its_notes_and_size_or_a_dash(self):
+        listing = [vault("Notes", note_count=42, bytes=1234), vault("Journal")]
+        with Relay(listing=listing):
+            resp = self.get()
+        self.assertContains(resp, "<td class=\"data-table__muted\">42</td>", html=True)
+        self.assertContains(resp, "1.2\xa0KB")
+        self.assertContains(resp, "<td class=\"data-table__muted\">—</td>", count=2, html=True)
 
     def test_answered_with_none_still_offers_the_form(self):
         with Relay(listing=[]):

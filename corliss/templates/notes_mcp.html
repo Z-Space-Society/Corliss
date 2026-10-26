@@ -31,7 +31,7 @@ No script. One form with one field.
 
   <p class="page-text">
     Your notes, kept on this network. Read and edit them in Obsidian on your laptop and your phone with the
-    <a target="_blank" href="https://github.com/Z-Space-Society/scn-obsidian">scn-sync plugin</a>.
+    <a target="_blank" href="https://community.obsidian.md/plugins/scn-sync">SCN Sync plugin</a>.
   </p>
 
   <!-- <p class="page-text page-text--note">Notes are not end-to-end encrypted.</p> -->
@@ -55,6 +55,8 @@ No script. One form with one field.
             <thead>
               <tr>
                 <th>Name</th>
+                <th>Notes</th>
+                <th>Size</th>
                 <th>Created</th>
                 <th>Last change</th>
               </tr>
@@ -63,6 +65,8 @@ No script. One form with one field.
               {% for vault in vaults %}
                 <tr>
                   <td>{{ vault.name }}</td>
+                  <td class="data-table__muted">{{ vault.note_count|default_if_none:"—" }}</td>
+                  <td class="data-table__muted">{% if vault.bytes is None %}—{% else %}{{ vault.bytes|filesizeformat }}{% endif %}</td>
                   <td class="data-table__muted">{{ vault.created_at|date:"Y-m-d"|default:"—" }}</td>
                   <td class="data-table__muted">{{ vault.last_change_at|date:"Y-m-d H:i"|default:"—" }}</td>
                 </tr>
@@ -96,7 +100,10 @@ No script. One form with one field.
       <ol class="page-text">
         <li>In Obsidian, create a new, empty vault. On iPhone, leave
         <strong>Store in iCloud</strong> off.</li>
-        <li>Install and enable the <strong>SCN Sync</strong> plugin.</li>
+        <li>In <strong>Settings → Community plugins</strong>, turn on
+        community plugins, then <strong>Browse</strong>, search for
+        <strong>SCN Sync</strong>, and <strong>Install</strong> and
+        <strong>Enable</strong> it.</li>
         <li>Paste the address above when it asks for the sync address.</li>
         <li>Sign in with your handle.</li>
         <li>Pick one of your vaults from the list.</li>
