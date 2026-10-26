@@ -79,7 +79,7 @@ In production the deployment owns the files and the rotation; see zai-ops.
 Requires [uv](https://docs.astral.sh/uv/) and a reachable Postgres.
 
 ```bash
-uv sync                         # builds .venv from uv.lock on Python 3.14
+uv sync                         # builds .venv from uv.lock on Python 3.15
 
 cp .env.example .env            # then edit DATABASE_URL etc.
 createdb corlissdb              # or point DATABASE_URL at an existing DB
@@ -1595,7 +1595,7 @@ at a pinned ref, provisions the venv with `uv sync --locked --no-dev`,
 migrates, collects static, and renders the env file. `--locked` makes the
 deploy fail loudly if `uv.lock` is stale against `pyproject.toml` rather than
 quietly resolving something else, so the cluster runs the exact tree committed
-here. The interpreter is a uv-managed CPython 3.14 — Debian 13's system Python
+here. The interpreter is a uv-managed CPython 3.15 — Debian 13's system Python
 is 3.13, so the role fetches its own rather than using the distro's.
 
 Because the role clones a pinned **tag** into a full checkout, the footer's build
