@@ -20,7 +20,10 @@ list, each said in words:
 
 A vault is made here and nowhere else. The plugin only picks from this list.
 
-No script. One form with one field.
+No script. One form with one field, inside a `<details>` opened by the + in
+the card's corner. It renders open after a failed create, so the error is not
+hidden behind the +, and when there are no vaults yet, since the empty-state
+line asks the member to make one.
 {% endcomment %}
 
 {% block title %}Notes{% endblock %}
@@ -36,8 +39,8 @@ No script. One form with one field.
 
   <!-- <p class="page-text page-text--note">Notes are not end-to-end encrypted.</p> -->
 
-  <h2 class="section-title">Your Note Vaults</h2>
-  <div class="card">
+  <h2 class="section-title">Your Vaults</h2>
+  <div class="card card--dismissable">
     {% if not configured %}
       <p class="alert alert--notice" role="status">
         <strong>Not set up.</strong> This deployment has no notes service
@@ -80,16 +83,19 @@ No script. One form with one field.
         exists.</p>
       {% endif %}
 
-      <form method="post" action="{% url 'notes' %}" class="stacked-form">
-        {% csrf_token %}
-        <div>
-          <label for="vault-name">New vault</label>
-          {% if name_error %}<ul class="errorlist"><li>{{ name_error }}</li></ul>{% endif %}
-          <input id="vault-name" name="name" type="text" maxlength="100"
-                 value="{{ name }}" placeholder="what to call it" required>
-        </div>
-        <button type="submit" class="btn-primary">Create vault</button>
-      </form>
+      <details class="vault-new"{% if name_error or not vaults %} open{% endif %}>
+        <summary class="card__add" title="New vault" aria-label="New vault">+</summary>
+        <form method="post" action="{% url 'notes' %}" class="stacked-form">
+          {% csrf_token %}
+          <div>
+            <label for="vault-name">New vault</label>
+            {% if name_error %}<ul class="errorlist"><li>{{ name_error }}</li></ul>{% endif %}
+            <input id="vault-name" name="name" type="text" maxlength="100"
+                   value="{{ name }}" placeholder="what to call it" required>
+          </div>
+          <button type="submit" class="btn-primary">Create vault</button>
+        </form>
+      </details>
     {% endif %}
   </div>
 
