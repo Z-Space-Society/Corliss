@@ -136,17 +136,6 @@ BESZEL_OIDC_REDIRECT_URIS = env.list("BESZEL_OIDC_REDIRECT_URIS", default=[])
 # nothing, and corliss.E004 fails the deploy over it.
 OIDC_RESOURCES = env("OIDC_RESOURCES", default="")
 
-# Which public clients may sign members in. A public client's `client_id` is
-# the URL of a metadata document that Corliss fetches, so this list is also
-# the whole of what Corliss can be made to fetch. Each entry is either an
-# exact `client_id` URL, or an origin (`https://claude.ai`) accepting any
-# `client_id` on exactly that scheme, host and port.
-#
-# The SCN Sync plugin's own document, which Corliss serves, is always accepted
-# and needs no entry. Blank therefore means the plugin can sign in and nothing
-# else can.
-OIDC_CLIENT_METADATA_ALLOWLIST = env.list("OIDC_CLIENT_METADATA_ALLOWLIST", default=[])
-
 # --- UI ---------------------------------------------------------------------
 # Public origin of the cluster's Open WebUI. Blank hides the nav's "Open WebUI"
 # entry and the home page block entirely — e.g. local dev with none configured.

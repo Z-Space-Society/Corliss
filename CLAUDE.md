@@ -342,10 +342,13 @@ must not drift.
   a new client whose refresh tokens are dead. Nothing errors.
 - **Corliss never fetches its own client document over HTTP.** Two workers
   can deadlock on a request to their own origin.
-- **The allowlist is checked before any fetch, and only `authorize` fetches.**
-  `authorize` resolves the client before it asks anyone to sign in, so the
-  allowlist is all that stands between an anonymous request and an arbitrary
-  outbound GET. The token endpoint reads the cache.
+- **Only a signed-in member who passes GATE can make Corliss fetch a client
+  document, and only `authorize` fetches.** `authorize` answers a stranger
+  with a shape check and a sign-in page, and that ordering is all that stands
+  between an anonymous request and an outbound GET. Do not move
+  `resolve_client` back ahead of sign-in for a fetched client, and do not
+  restore the allowlist to make that safe: any CIMD client may sign in. The
+  token endpoint reads the cache.
 - **The fetch connects to the address it checked.** Resolving, checking and
   then letting the HTTP library resolve again is the hole. Do not replace
   `_PinnedAdapter` with a plain `requests.get`.
