@@ -1107,7 +1107,8 @@ a.btn-primary {
    timestamps, and at 560 it scrolled sideways inside its card to show columns
    that fit a wider page easily. Applied per page rather than to .account-view
    so the account pages keep the reading measure they were set at — /api/ opted
-   in when it gained the key and usage tables. */
+   in when it gained the key and usage tables, and /notes/ when Connected apps
+   added a table with a button on every row. */
 .console-view {
   max-width: 900px;
 }
