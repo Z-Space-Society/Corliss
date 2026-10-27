@@ -471,6 +471,18 @@ class OidcRefreshToken(models.Model):
         ).delete()
 
     @classmethod
+    def live_for(cls, user):
+        """The member's tokens that a client can still redeem: unused, not
+        replaced, not expired. One per authorization, and each is an app that
+        can come back without asking the member."""
+        return cls.objects.filter(
+            user=user,
+            used_at__isnull=True,
+            superseded_at__isnull=True,
+            expires_at__gt=timezone.now(),
+        )
+
+    @classmethod
     def revoke_for_did(cls, did) -> int:
         """Delete every refresh token a member holds. Returns how many."""
         deleted, _ = cls.objects.filter(user__did=did).delete()

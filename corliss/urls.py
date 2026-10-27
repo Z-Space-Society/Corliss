@@ -87,6 +87,7 @@ urlpatterns = [
     # Notes kept on the sync relay: what they are, how to connect Obsidian
     # and an MCP client, and the member's vaults. Named for what the nav calls it.
     path("notes/", views.notes, name="notes"),
+    path("notes/apps/disconnect", views.notes_disconnect, name="notes_disconnect"),
     path("api/", views.api, name="api"),
     path("tools/parascribe/", views.parascribe, name="parascribe"),
     # The cluster console. Gated on the atproto admin roster, not on a Django

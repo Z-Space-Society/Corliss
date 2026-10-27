@@ -1372,6 +1372,74 @@ def parascribe(request):
     )
 
 
+def _connected_apps(user):
+    """The public clients that can reach this member's notes, newest use first.
+
+    An app is listed while it holds a refresh token it can still redeem, or
+    while Corliss remembers the member's consent to it. Either way it can come
+    back without the member deciding again, which is what this list is for.
+    Nothing is fetched: the name comes from the cached document, and an app
+    whose document is gone is listed by its host alone.
+    """
+    labels = {resource.url: resource.label for resource in oidc.resources()}
+    apps = {}
+
+    def entry(client_id):
+        if client_id not in apps:
+            client = oidc.known_client(client_id)
+            apps[client_id] = {
+                "client_id": client_id,
+                # The host is the headline, as on the consent screen: it is
+                # the part Corliss checked. The name is the app's own claim.
+                "host": urlsplit(client_id).hostname or client_id,
+                "name": client.name if client else "",
+                "resources": [],
+                "last_used_at": None,
+            }
+        return apps[client_id]
+
+    def opens(app, resource):
+        label = labels.get(resource, resource)
+        if label not in app["resources"]:
+            app["resources"].append(label)
+
+    for token in OidcRefreshToken.live_for(user):
+        app = entry(token.client_id)
+        opens(app, token.resource)
+        # Each refresh issues a new token, so the newest is the last use.
+        if app["last_used_at"] is None or token.created_at > app["last_used_at"]:
+            app["last_used_at"] = token.created_at
+    for consent in user.oidc_consents.all():
+        opens(entry(consent.client_id), consent.resource)
+
+    # Newest use first; apps known only by a remembered consent last.
+    return sorted(
+        apps.values(),
+        key=lambda app: (
+            -app["last_used_at"].timestamp() if app["last_used_at"] else float("inf")
+        ),
+    )
+
+
+@member_required
+@require_http_methods(["POST"])
+def notes_disconnect(request):
+    """End one app's access to the member's notes.
+
+    Deletes the member's refresh tokens for that client, so it cannot come
+    back, and their remembered consent, so its next sign-in asks again. An
+    access token already issued is not revocable and runs out within
+    `oidc.ACCESS_TOKEN_TTL_SECONDS`.
+
+    **No request chooses whose access.** Both deletes are filtered by
+    `request.user`, so a forged `client_id` reaches only the poster's own rows.
+    """
+    client_id = request.POST.get("client_id", "")
+    OidcRefreshToken.objects.filter(user=request.user, client_id=client_id).delete()
+    OidcConsent.objects.filter(user=request.user, client_id=client_id).delete()
+    return redirect("notes")
+
+
 @member_required
 @require_http_methods(["GET", "POST"])
 def notes(request):
@@ -1423,6 +1491,7 @@ def notes(request):
         request,
         "notes_mcp.html",
         {
+            "connected_apps": _connected_apps(request.user),
             "configured": configured,
             # None when the relay did not answer; a list, possibly empty, when
             # it did. The template tells the two apart.
