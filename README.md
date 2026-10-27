@@ -1278,20 +1278,27 @@ where the member's notes live. The design is in
 
 ### Client metadata documents
 
-Claude's and Claude Code's `client_id` is a URL on `claude.ai`, and Corliss
-fetches what is served there to learn the client's name and where it may be
-redirected. **This is the one request Corliss makes to an address somebody
-else chose**, and each rule is about what that could be turned into.
+A public client's `client_id` is a URL, such as Claude's on `claude.ai` or
+opencode's on `opencode.ai`, and Corliss fetches what is served there to learn
+the client's name and where it may be redirected. **Any client that publishes
+one may sign in**: there is no list of approved clients, and the member
+decides on the consent screen, which names the client by the host its
+document lives on. **This is the one request Corliss makes to an address
+somebody else chose**, and each rule is about what that could be turned into.
 
-- **Only allowlisted URLs are fetched, and the allowlist is checked before any
-  network call.** `authorize` resolves the client before it asks anyone to
-  sign in, so without the list an anonymous request could make Corliss fetch
-  any URL.
-- **An allowlist entry is an exact URL or an origin**, and an origin is
-  compared on its parsed scheme, host and port. `https://claude.ai.evil.test`
-  and `https://claude.ai@evil.test` both start with an allowed origin as
-  strings.
-- **`https` only, with a path, no credentials and no fragment.**
+- **Only a signed-in member's request is fetched, and only once GATE has
+  passed.** `authorize` checks the URL's shape with no network call, then asks
+  a stranger to sign in, and fetches nothing until the member is through
+  GATE. So nobody outside the network can make Corliss fetch anything, and a
+  member can make it fetch only a public address under the rules below. This
+  replaced an allowlist of client URLs, which an anonymous request was the
+  reason for. With the fetch behind sign-in, it protected nothing.
+- **Before sign-in, every refusal is a page.** The redirect URI is not known
+  to be the client's until its document has been read, so nothing is sent to
+  it until then, including "request too long to resume after sign-in".
+- **`https` only, with a path, no credentials and no fragment.** Checked
+  before sign-in, so a `client_id` that could never be fetched is an error
+  page rather than a sign-in that leads to one.
 - **Never an internal address.** The host is resolved first and refused if
   any answer is loopback, private, link-local, multicast or otherwise not
   public. One internal answer among public ones refuses the name.
@@ -1457,8 +1464,6 @@ An operator disconnects one client from one member by deleting its rows under
 | ------- | ------- |
 | `OIDC_RESOURCES` | The resources a public client can get a token for, as a JSON list of `{"url", "kind", "label"}`. `kind` is `sync` or `mcp`, at most one of each. Blank issues nothing to any public client. |
 
-| `OIDC_CLIENT_METADATA_ALLOWLIST` | Which `client_id` URLs may sign members in, comma separated: exact URLs, or origins such as `https://claude.ai`. Blank accepts only the SCN Sync plugin. |
-
 - **`url` becomes `aud` exactly as written**, and the relay compares it
   character for character against `SCN_SYNC_RELAY_SYNC_AUDIENCE` and
   `SCN_SYNC_RELAY_MCP_AUDIENCE`. A trailing slash on one side is a `401` with
@@ -1480,9 +1485,8 @@ bare `401` from the relay when it does not:
 | `SYNC_RELAY_SERVICE_TOKEN` | `SCN_SYNC_RELAY_SERVICE_TOKEN` | The same secret |
 
 The relay fetches keys from `/.well-known/jwks.json` at Corliss's **internal**
-address, and calls nothing else here. Set `OIDC_CLIENT_METADATA_ALLOWLIST` to
-`https://claude.ai` for Claude and Claude Code; the plugin needs no entry.
-Nothing in front of Corliss may block `160.79.104.0/21`, where Claude's
+address, and calls nothing else here. A public client needs no setting of its
+own. Nothing in front of Corliss may block `160.79.104.0/21`, where Claude's
 discovery and token requests come from.
 
 A member then makes a vault at `/notes/`, pastes the sync address shown
@@ -1511,9 +1515,8 @@ DNS and back in through the edge.
 
 **There are two confidential clients: this one, and the Beszel hub below.**
 Claude, Claude Code and SCN Sync are not wired up this way: they register
-nothing here and hold no secret. A public client needs its document's origin or URL in
-`OIDC_CLIENT_METADATA_ALLOWLIST` (Corliss's own SCN Sync document needs
-nothing) and the resource it asks for in `OIDC_RESOURCES`. See "Public
+nothing here and hold no secret. A public client needs only the resource it
+asks for in `OIDC_RESOURCES`. See "Public
 clients: Claude, Claude Code and SCN Sync".
 
 **Redis is not optional on the RP side, and not merely for logout.** Open WebUI

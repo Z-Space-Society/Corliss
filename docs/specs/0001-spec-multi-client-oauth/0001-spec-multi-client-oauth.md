@@ -185,6 +185,11 @@ comparison described under Current state must not stand.
 
 ### Which URLs are accepted
 
+**Replaced.** The allowlist below was removed after this spec shipped: any
+CIMD client may sign in, and a document is fetched only for a signed-in
+member who has passed GATE. See the README, "Client metadata documents". The
+original text follows as the record of what shipped.
+
 `OIDC_CLIENT_METADATA_ALLOWLIST` is a list. Each entry is one of:
 
 - an exact `client_id` URL, or

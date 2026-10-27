@@ -2365,6 +2365,29 @@ def authorize(request):
     state = request.GET.get("state", "")
     nonce = request.GET.get("nonce", "")
 
+    # A client described by a document somebody else hosts is fetched only for
+    # a signed-in member who passes GATE, so a stranger cannot make Corliss
+    # fetch anything. Its shape is still checked first: a `client_id` that
+    # could never be fetched is an error page, not a sign-in that leads to one.
+    # Nothing past that is known yet, the redirect URI included, so every
+    # answer before the fetch is a page here and never a redirect.
+    if oidc.is_fetched_client(client_id):
+        try:
+            oidc.check_client_id_url(client_id)
+        except oidc.ClientDocumentError as exc:
+            return _oauth_error_page(request, "invalid_client", str(exc))
+        if not request.user.is_authenticated:
+            if len(request.get_full_path()) > RESUME_MAX_LENGTH:
+                return _oauth_error_page(
+                    request,
+                    "invalid_request",
+                    "request too long to resume after sign-in",
+                )
+            return _bounce_through_login(request)
+        denial = membership_denial(request)
+        if denial is not None:
+            return denial
+
     # Validate the relying party before doing anything else.
     try:
         client = oidc.resolve_client(client_id)

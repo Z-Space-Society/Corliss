@@ -1,4 +1,4 @@
-"""Client ID Metadata Documents: which URLs are fetched, how, and the cache.
+"""Client ID Metadata Documents: when they are fetched, how, and the cache.
 
 Fetching a document is the one request Corliss makes to an address somebody
 else chose. These tests never touch the network: name resolution and the HTTP
@@ -10,6 +10,7 @@ import json
 import socket
 from datetime import timedelta
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 from django.contrib.auth import get_user_model
@@ -30,6 +31,7 @@ from corliss.tests.test_public_clients import (
     VERIFIER,
     challenge_for,
 )
+from corliss.views import POST_LOGIN_REDIRECT
 
 User = get_user_model()
 
@@ -124,42 +126,6 @@ class Network:
     @property
     def fetches(self):
         return len(self.session.calls)
-
-
-class AllowlistTests(SimpleTestCase):
-    @override_settings(OIDC_CLIENT_METADATA_ALLOWLIST=["https://claude.ai"])
-    def test_an_origin_accepts_any_path_on_exactly_that_origin(self):
-        for url in (URL, "https://claude.ai/x", "https://claude.ai:443/x"):
-            with self.subTest(url):
-                self.assertTrue(oidc.client_id_allowed(url))
-
-    @override_settings(OIDC_CLIENT_METADATA_ALLOWLIST=["https://claude.ai"])
-    def test_an_origin_is_compared_on_its_parts_never_as_a_prefix(self):
-        for url in (
-            "https://claude.ai.evil.test/x",
-            "https://claude.ai@evil.test/x",
-            "https://evil.test/https://claude.ai/x",
-            "https://sub.claude.ai/x",
-            "https://claude.ai:8443/x",
-            "http://claude.ai/x",
-            "https://claude.ai:notaport/x",
-        ):
-            with self.subTest(url):
-                self.assertFalse(oidc.client_id_allowed(url))
-
-    @override_settings(OIDC_CLIENT_METADATA_ALLOWLIST=[URL])
-    def test_an_exact_url_accepts_only_itself(self):
-        self.assertTrue(oidc.client_id_allowed(URL))
-        self.assertFalse(oidc.client_id_allowed(URL + "2"))
-        self.assertFalse(oidc.client_id_allowed("https://claude.ai/other"))
-
-    @override_settings(OIDC_CLIENT_METADATA_ALLOWLIST=[])
-    def test_an_empty_list_accepts_nothing(self):
-        self.assertFalse(oidc.client_id_allowed(URL))
-
-    @override_settings(OIDC_CLIENT_METADATA_ALLOWLIST=["claude.ai", "https://claude.ai/app"])
-    def test_an_entry_that_is_not_an_origin_is_not_treated_as_one(self):
-        self.assertFalse(oidc.client_id_allowed(URL))
 
 
 class FetchTests(SimpleTestCase):
@@ -347,7 +313,6 @@ class FetchTests(SimpleTestCase):
 @override_settings(
     PUBLIC_BASE_URL=BASE,
     OIDC_CLIENT_ID="open-webui",
-    OIDC_CLIENT_METADATA_ALLOWLIST=["https://claude.ai"],
 )
 class ResolveAndCacheTests(TestCase):
     def setUp(self):
@@ -356,7 +321,7 @@ class ResolveAndCacheTests(TestCase):
     def _expire(self, *, ago=timedelta(seconds=1)):
         OidcClientDocument.objects.update(expires_at=timezone.now() - ago)
 
-    def test_an_allowlisted_client_is_fetched_once_and_then_cached(self):
+    def test_a_client_is_fetched_once_and_then_cached(self):
         with Network() as net:
             client = oidc.resolve_client(URL)
             again = oidc.resolve_client(URL)
@@ -374,27 +339,12 @@ class ResolveAndCacheTests(TestCase):
         self.assertEqual(row.last_error, "")
         self.assertTrue(row.is_fresh)
 
-    def test_a_url_outside_the_allowlist_is_never_fetched(self):
-        with Network() as net:
-            with self.assertRaises(oidc.ClientError) as caught:
-                oidc.resolve_client("https://evil.test/client.json")
-            self.assertEqual(net.fetches, 0)
-            net.resolve.assert_not_called()
-        self.assertEqual(caught.exception.error, "unauthorized_client")
-        self.assertFalse(OidcClientDocument.objects.exists())
-
     def test_the_plugins_own_document_is_never_fetched(self):
         with Network() as net:
             client = oidc.resolve_client(PLUGIN)
             self.assertEqual(net.fetches, 0)
             net.resolve.assert_not_called()
         self.assertEqual(client.redirect_uris, ("obsidian://scn-obsidian",))
-
-    @override_settings(OIDC_CLIENT_METADATA_ALLOWLIST=[])
-    def test_with_an_empty_allowlist_only_the_plugin_can_sign_in(self):
-        self.assertTrue(oidc.resolve_client(PLUGIN).is_public)
-        with self.assertRaises(oidc.ClientError):
-            oidc.resolve_client(URL)
 
     def test_a_stale_document_is_refetched(self):
         with Network():
@@ -478,7 +428,6 @@ class ResolveAndCacheTests(TestCase):
     PUBLIC_BASE_URL=BASE,
     OIDC_RESOURCES=RESOURCES,
     OIDC_CLIENT_ID="open-webui",
-    OIDC_CLIENT_METADATA_ALLOWLIST=["https://claude.ai"],
 )
 class AuthorizeWithAFetchedClientTests(TestCase):
     def setUp(self):
@@ -509,16 +458,60 @@ class AuthorizeWithAFetchedClientTests(TestCase):
         self.assertEqual(resp.context["client_name"], "Claude Code")
         self.assertTrue(resp.context["loopback"])
 
-    def test_the_document_is_fetched_before_anyone_signs_in_and_only_if_allowed(self):
+    def test_a_stranger_fetches_nothing_and_is_sent_to_sign_in_with_the_request_kept(self):
         with Network() as net:
-            anonymous = self._authorize()
+            resp = self._authorize()
+            self.assertEqual(net.fetches, 0)
+            net.resolve.assert_not_called()
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(resp["Location"], reverse("login"))
+        stored = self.client.session[POST_LOGIN_REDIRECT]
+        self.assertEqual(parse_qs(urlsplit(stored).query)["client_id"], [URL])
+        self.assertFalse(OidcClientDocument.objects.exists())
+
+    def test_any_client_is_fetched_for_a_member_and_reaches_consent(self):
+        other = "https://opencode.ai/oauth/opencode/client.json"
+        self.client.force_login(self.user)
+        with Network(FakeResponse(body={**DOCUMENT, "client_id": other})) as net:
+            resp = self._authorize(client_id=other)
             self.assertEqual(net.fetches, 1)
-            refused = self._authorize(client_id="https://evil.test/c.json")
-            self.assertEqual(net.fetches, 1)
-        self.assertEqual(anonymous.status_code, 302)
-        self.assertEqual(anonymous["Location"], reverse("login"))
-        self.assertEqual(refused.status_code, 400)
-        self.assertTemplateUsed(refused, "oauth_error.html")
+        self.assertTemplateUsed(resp, "consent.html")
+        self.assertEqual(resp.context["client_host"], "opencode.ai")
+
+    def test_a_signed_in_non_member_fetches_nothing_and_is_sent_home(self):
+        outsider = User.objects.create_user(
+            username="mallory.bsky.social", did="did:plc:notamember"
+        )
+        self.client.force_login(outsider)
+        # Only the fetch is counted. GATE reads the admin roster for a DID
+        # with no grant, and that lookup resolves a name of its own.
+        with Network() as net:
+            resp = self._authorize()
+            self.assertEqual(net.fetches, 0)
+        self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
+        self.assertFalse(OidcClientDocument.objects.exists())
+
+    def test_a_client_id_that_could_never_be_fetched_is_a_page_before_sign_in(self):
+        for bad in (
+            "https://evil.test",
+            "https://user@evil.test/c.json",
+            "https://evil.test/c.json#frag",
+            "https://evil.test:notaport/c.json",
+        ):
+            with self.subTest(bad), Network() as net:
+                resp = self._authorize(client_id=bad)
+                self.assertEqual(net.fetches, 0)
+                self.assertEqual(resp.status_code, 400)
+                self.assertTemplateUsed(resp, "oauth_error.html")
+                self.assertNotIn(POST_LOGIN_REDIRECT, self.client.session)
+
+    def test_a_stranger_with_a_request_too_long_to_resume_gets_a_page_not_a_redirect(self):
+        with Network() as net:
+            resp = self._authorize(state="s" * 2100)
+            self.assertEqual(net.fetches, 0)
+        self.assertEqual(resp.status_code, 400)
+        self.assertTemplateUsed(resp, "oauth_error.html")
+        self.assertNotIn(POST_LOGIN_REDIRECT, self.client.session)
 
     def test_a_document_that_cannot_be_fetched_is_an_error_page(self):
         self.client.force_login(self.user)

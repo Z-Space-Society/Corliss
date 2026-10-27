@@ -123,7 +123,9 @@ class ResolveClientTests(TestCase):
         self.assertIn("refresh_token", client.grant_types)
 
     def test_anything_else_is_an_unauthorized_client(self):
-        for client_id in ("evil", "", None, PLUGIN + "x", "http://auth.zai.test/x"):
+        # A near miss of the plugin's URL is not here: any https `client_id`
+        # is a document to fetch, and `test_cimd` covers that.
+        for client_id in ("evil", "", None, "http://auth.zai.test/x"):
             with self.subTest(client_id=client_id):
                 with self.assertRaises(oidc.ClientError) as caught:
                     oidc.resolve_client(client_id)
@@ -621,9 +623,12 @@ class PublicAuthorizeTests(PublicFlowCase):
         self.assertTemplateUsed(resp, "oauth_error.html")
         self.assertFalse(OidcAuthCode.objects.exists())
 
-    def test_the_client_is_checked_before_anyone_is_asked_to_sign_in(self):
+    def test_corliss_own_client_is_checked_before_anyone_is_asked_to_sign_in(self):
+        # Only a fetched client waits for sign-in; see `test_cimd`. One Corliss
+        # can read without a request is checked up front, as it always was.
         resp = self.authorize(redirect_uri="https://evil.test/cb")
         self.assertEqual(resp.status_code, 400)
+        self.assertNotIn(POST_LOGIN_REDIRECT, self.client.session)
 
     # --- request faults go back to the client ------------------------------
 
@@ -980,6 +985,12 @@ class OpenWebUIUnchangedTests(PublicFlowCase):
         code = OidcAuthCode.objects.get(code=self.query(resp)["code"][0])
         self.assertEqual(code.code_challenge, "")
         self.assertEqual(code.resource, "")
+
+    def test_it_is_still_checked_before_anyone_is_asked_to_sign_in(self):
+        resp = self._authorize(redirect_uri="https://evil.test/cb")
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.json()["error"], "invalid_request")
+        self.assertNotIn(POST_LOGIN_REDIRECT, self.client.session)
 
     def test_openid_is_still_required_and_errors_are_still_json(self):
         self.client.force_login(self.user)

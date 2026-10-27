@@ -203,16 +203,31 @@ def resolve_client(client_id) -> Client:
     client = confidential_client(client_id)
     if client is not None:
         return client
-    if client_id and client_id == plugin_client_id():
+    if is_own_document(client_id):
         return _client_from_document(plugin_client_metadata())
     if isinstance(client_id, str) and client_id.startswith("https://"):
-        # The allowlist comes before everything else about a URL, because
-        # `authorize` resolves the client before it asks anyone to sign in.
-        # Without it an anonymous request could make Corliss fetch any URL.
-        if not client_id_allowed(client_id):
-            raise ClientError("unauthorized_client", "client_id is not allowed here")
+        # This fetches. `authorize` calls it for a URL `client_id` only once a
+        # member has signed in and passed GATE; see `is_fetched_client`.
         return _document_client(client_id)
     raise ClientError("unauthorized_client", "unknown client_id")
+
+
+def is_own_document(client_id) -> bool:
+    return bool(client_id) and client_id == plugin_client_id()
+
+
+def is_fetched_client(client_id) -> bool:
+    """Whether resolving this `client_id` would fetch a document.
+
+    `authorize` asks this before anything else, and for these it asks the
+    member to sign in and passes GATE first, so a stranger cannot make
+    Corliss fetch anything.
+    """
+    return (
+        isinstance(client_id, str)
+        and client_id.startswith("https://")
+        and not is_own_document(client_id)
+    )
 
 
 # --- Client ID Metadata Documents -------------------------------------------
@@ -221,10 +236,16 @@ def resolve_client(client_id) -> Client:
 # the client is: its name and where it may be redirected. Corliss fetches
 # that document when the client first appears at `authorize` and caches it.
 #
+# Any client that publishes a document may sign in. Who it is, is the
+# member's call on the consent screen, which names it by the host the
+# document lives on.
+#
 # This is the one place Corliss makes a request to an address somebody else
 # chose, so every rule below is about what that could be turned into:
 #
-# - **Only allowlisted URLs are fetched**, checked before any network call.
+# - **Only a signed-in member's request is fetched**, and only once GATE has
+#   passed. A stranger's `authorize` gets a shape check and a sign-in page and
+#   makes no network call.
 # - **Never an internal address.** The host is resolved first and every
 #   address it resolves to must be a public one. The connection then goes to
 #   the address that was checked, not to the name, so a second DNS answer
@@ -256,42 +277,30 @@ class ClientDocumentError(Exception):
     """A client metadata document could not be fetched or is not valid."""
 
 
-def client_id_allowed(client_id) -> bool:
-    """Whether `OIDC_CLIENT_METADATA_ALLOWLIST` accepts this `client_id` URL.
+def check_client_id_url(url):
+    """Refuse a `client_id` URL that could never be fetched, with no network call.
 
-    An entry is either an exact URL or an origin such as `https://claude.ai`,
-    which accepts any `client_id` on that scheme, host and port. Compared on
-    parsed components and never by string prefix: `https://claude.ai.evil.test`
-    and `https://claude.ai@evil.test` both begin with an allowed origin.
+    Returns `(parts, port)`. Raises `ClientDocumentError`. `authorize` asks it
+    before sign-in so that a malformed `client_id` is an error page rather than
+    a sign-in that leads to one, and the fetch asks it again.
     """
     try:
-        parts = urlsplit(client_id)
+        parts = urlsplit(url)
         port = parts.port or 443
-    except ValueError:
-        return False
-    for entry in settings.OIDC_CLIENT_METADATA_ALLOWLIST:
-        if entry == client_id:
-            return True
-        try:
-            allowed = urlsplit(entry)
-            allowed_port = allowed.port or 443
-        except ValueError:
-            continue
-        is_origin = (
-            allowed.scheme == "https"
-            and allowed.hostname
-            and allowed.path in ("", "/")
-            and not allowed.query
-            and not allowed.fragment
-            and allowed.username is None
+    except ValueError as exc:
+        raise ClientDocumentError("client_id is not a usable URL") from exc
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.path in ("", "/")
+        or parts.username is not None
+        or parts.fragment
+    ):
+        raise ClientDocumentError(
+            "client_id must be an https URL with a path, no credentials and "
+            "no fragment"
         )
-        if is_origin and (parts.scheme, parts.hostname, port) == (
-            "https",
-            allowed.hostname,
-            allowed_port,
-        ):
-            return True
-    return False
+    return parts, port
 
 
 def _public_address(host, port):
@@ -403,23 +412,7 @@ def fetch_client_document(url):
     Returns `(document, fresh_for)`. Raises `ClientDocumentError` for every
     way this can go wrong, and nothing else.
     """
-    try:
-        parts = urlsplit(url)
-        port = parts.port or 443
-    except ValueError as exc:
-        raise ClientDocumentError("client_id is not a usable URL") from exc
-    if (
-        parts.scheme != "https"
-        or not parts.hostname
-        or parts.path in ("", "/")
-        or parts.username is not None
-        or parts.fragment
-    ):
-        raise ClientDocumentError(
-            "client_id must be an https URL with a path, no credentials and "
-            "no fragment"
-        )
-
+    parts, port = check_client_id_url(url)
     address = _public_address(parts.hostname, port)
     literal = f"[{address}]" if address.version == 6 else str(address)
     target = parts._replace(netloc=f"{literal}:{port}").geturl()
@@ -534,7 +527,7 @@ def known_client(client_id):
     comes from the function that builds it, anyone else's from the row
     `authorize` cached when the member signed in. None when there is neither.
     """
-    if client_id and client_id == plugin_client_id():
+    if is_own_document(client_id):
         return _client_from_document(plugin_client_metadata())
     row = OidcClientDocument.objects.filter(client_id=client_id).first()
     if row is not None and row.document:
