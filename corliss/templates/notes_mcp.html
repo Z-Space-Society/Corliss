@@ -20,6 +20,13 @@ list, each said in words:
 
 A vault is made here and nowhere else. The plugin only picks from this list.
 
+**Connected apps** lists the apps that can reach this member's notes without
+asking again, from `views._connected_apps`. Each is headed by its host, the
+part Corliss checked, with the name it gives itself beneath, as on the consent
+screen. Those names come from the apps' own documents, so the rule above about
+naming no AI product is about this template's words, not the member's rows.
+Disconnect is a one-button form per row.
+
 No script. One form with one field, inside a `<details>` opened by the + in
 the card's corner. It renders open after a failed create, so the error is not
 hidden behind the +, and when there are no vaults yet, since the empty-state
@@ -133,6 +140,45 @@ line asks the member to make one.
     {% else %}
       <p class="hint-text">No MCP address is configured on this deployment
       yet.</p>
+    {% endif %}
+  </div>
+
+  <h2 class="section-title">Connected apps</h2>
+  <div class="card">
+    {% if connected_apps %}
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>App</th>
+              <th>Opens</th>
+              <th>Last used</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for app in connected_apps %}
+              <tr>
+                <td>
+                  {{ app.host }}
+                  {% if app.name %}<div class="data-table__sub">{{ app.name }}</div>{% endif %}
+                </td>
+                <td class="data-table__muted">{{ app.resources|join:", " }}</td>
+                <td class="data-table__muted">{{ app.last_used_at|date:"Y-m-d H:i"|default:"—" }}</td>
+                <td>
+                  <form method="post" action="{% url 'notes_disconnect' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="client_id" value="{{ app.client_id }}">
+                    <button type="submit" class="btn-secondary">Disconnect</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="hint-text">No apps are connected.</p>
     {% endif %}
   </div>
 </div>

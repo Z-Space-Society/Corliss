@@ -10,6 +10,7 @@ codes are the ones pinned in scn-sync-relay's spec, section Z3.
 """
 
 import json
+from datetime import timedelta
 from unittest.mock import patch
 
 import requests
@@ -17,9 +18,15 @@ from django.contrib.auth import get_user_model
 from django.test import Client as HttpClient
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
-from corliss import sync_relay
-from corliss.models import MembershipCache
+from corliss import oidc, sync_relay
+from corliss.models import (
+    MembershipCache,
+    OidcClientDocument,
+    OidcConsent,
+    OidcRefreshToken,
+)
 from corliss.tests.test_provider import _grant
 
 User = get_user_model()
@@ -396,3 +403,171 @@ class CreateTests(VaultsCase):
             resp = browser.post(reverse("notes"), {"name": "Notes"})
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(relay.calls, [])
+
+
+OPENCODE = "https://opencode.ai/oauth/opencode/client.json"
+CLAUDE = "https://claude.ai/oauth/mcp-oauth-client-metadata"
+
+
+def _cache_document(client_id, name):
+    now = timezone.now()
+    OidcClientDocument.objects.create(
+        client_id=client_id,
+        document={
+            "client_id": client_id,
+            "client_name": name,
+            "redirect_uris": ["http://127.0.0.1/callback"],
+            "grant_types": ["authorization_code", "refresh_token"],
+        },
+        fetched_at=now,
+        expires_at=now + timedelta(hours=1),
+    )
+
+
+@override_settings(
+    SYNC_RELAY_URL=RELAY, SYNC_RELAY_SERVICE_TOKEN=TOKEN, OIDC_RESOURCES=RESOURCES
+)
+class ConnectedAppsTests(VaultsCase):
+    def setUp(self):
+        super().setUp()
+        _cache_document(OPENCODE, "opencode")
+        _cache_document(CLAUDE, "Claude")
+
+    def connect(self, client_id, *, user=None, resource=MCP):
+        raw, row = OidcRefreshToken.issue(
+            user=user or self.user,
+            client_id=client_id,
+            resource=resource,
+            scope="",
+            ttl=oidc.REFRESH_TOKEN_TTL,
+        )
+        return raw, row
+
+    def apps(self):
+        with Relay():
+            resp = self.get()
+        self.assertEqual(resp.status_code, 200)
+        return resp, resp.context["connected_apps"]
+
+    def disconnect(self, client_id):
+        return self.client.post(reverse("notes_disconnect"), {"client_id": client_id})
+
+    def test_an_app_with_a_live_token_is_listed_by_host_with_its_own_name(self):
+        _, row = self.connect(OPENCODE)
+        resp, apps = self.apps()
+        self.assertEqual(len(apps), 1)
+        self.assertEqual(apps[0]["host"], "opencode.ai")
+        self.assertEqual(apps[0]["name"], "opencode")
+        self.assertEqual(apps[0]["resources"], ["Notes for Claude"])
+        self.assertEqual(apps[0]["last_used_at"], row.created_at)
+        self.assertContains(resp, "opencode.ai")
+        self.assertContains(resp, "Disconnect")
+
+    def test_both_resources_are_one_row_and_the_newest_token_is_the_last_use(self):
+        self.connect(OPENCODE, resource=SYNC)
+        _, newest = self.connect(OPENCODE)
+        _, apps = self.apps()
+        self.assertEqual(len(apps), 1)
+        self.assertEqual(apps[0]["resources"], ["Notes sync", "Notes for Claude"])
+        self.assertEqual(apps[0]["last_used_at"], newest.created_at)
+
+    def test_newest_use_first_and_a_consent_alone_last(self):
+        OidcConsent.record(self.user, client_id=CLAUDE, resource=MCP)
+        _, old = self.connect(OPENCODE)
+        OidcRefreshToken.objects.filter(pk=old.pk).update(
+            created_at=timezone.now() - timedelta(days=2)
+        )
+        plugin = oidc.plugin_client_id()
+        self.connect(plugin, resource=SYNC)
+        _, apps = self.apps()
+        self.assertEqual([app["client_id"] for app in apps], [plugin, OPENCODE, CLAUDE])
+        self.assertEqual(apps[1]["name"], "opencode")
+        self.assertEqual(apps[0]["name"], "SCN Sync")
+        self.assertIsNone(apps[2]["last_used_at"])
+
+    def test_spent_superseded_and_expired_tokens_list_nothing(self):
+        now = timezone.now()
+        for change in (
+            {"used_at": now},
+            {"superseded_at": now},
+            {"expires_at": now - timedelta(seconds=1)},
+        ):
+            with self.subTest(change):
+                OidcRefreshToken.objects.all().delete()
+                _, row = self.connect(OPENCODE)
+                OidcRefreshToken.objects.filter(pk=row.pk).update(**change)
+                resp, apps = self.apps()
+                self.assertEqual(apps, [])
+                self.assertContains(resp, "No apps are connected.")
+
+    def test_an_app_whose_document_is_gone_is_listed_by_host_alone(self):
+        OidcClientDocument.objects.filter(client_id=OPENCODE).delete()
+        self.connect(OPENCODE)
+        _, apps = self.apps()
+        self.assertEqual(apps[0]["host"], "opencode.ai")
+        self.assertEqual(apps[0]["name"], "")
+
+    def test_another_members_apps_never_appear(self):
+        other = User.objects.create_user(username="bob.bsky.social", did=OTHER)
+        self.connect(OPENCODE, user=other)
+        OidcConsent.record(other, client_id=CLAUDE, resource=MCP)
+        _, apps = self.apps()
+        self.assertEqual(apps, [])
+
+    def test_disconnect_ends_that_app_for_this_member_and_nothing_else(self):
+        other = User.objects.create_user(username="bob.bsky.social", did=OTHER)
+        raw, _ = self.connect(OPENCODE)
+        self.connect(OPENCODE, resource=SYNC)
+        OidcConsent.record(self.user, client_id=OPENCODE, resource=MCP)
+        self.connect(CLAUDE)
+        self.connect(OPENCODE, user=other)
+        OidcConsent.record(other, client_id=OPENCODE, resource=MCP)
+
+        resp = self.disconnect(OPENCODE)
+
+        self.assertRedirects(resp, reverse("notes"), fetch_redirect_response=False)
+        self.assertFalse(
+            OidcRefreshToken.objects.filter(user=self.user, client_id=OPENCODE).exists()
+        )
+        self.assertFalse(
+            OidcConsent.objects.filter(user=self.user, client_id=OPENCODE).exists()
+        )
+        self.assertTrue(
+            OidcRefreshToken.objects.filter(user=self.user, client_id=CLAUDE).exists()
+        )
+        self.assertTrue(OidcRefreshToken.objects.filter(user=other).exists())
+        self.assertTrue(OidcConsent.objects.filter(user=other).exists())
+
+        refreshed = self.client.post(
+            reverse("token"),
+            {"grant_type": "refresh_token", "refresh_token": raw, "client_id": OPENCODE},
+        )
+        self.assertEqual(refreshed.status_code, 400)
+        self.assertEqual(refreshed.json()["error"], "invalid_grant")
+
+    def test_disconnecting_an_app_the_member_never_connected_changes_nothing(self):
+        self.connect(OPENCODE)
+        resp = self.disconnect("https://nobody.test/c.json")
+        self.assertRedirects(resp, reverse("notes"), fetch_redirect_response=False)
+        self.assertEqual(OidcRefreshToken.objects.count(), 1)
+
+    def test_disconnect_answers_only_a_post(self):
+        self.connect(OPENCODE)
+        resp = self.client.get(reverse("notes_disconnect"), {"client_id": OPENCODE})
+        self.assertEqual(resp.status_code, 405)
+        self.assertEqual(OidcRefreshToken.objects.count(), 1)
+
+    def test_disconnect_needs_a_csrf_token(self):
+        self.connect(OPENCODE)
+        browser = HttpClient(enforce_csrf_checks=True)
+        browser.force_login(self.user)
+        resp = browser.post(reverse("notes_disconnect"), {"client_id": OPENCODE})
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(OidcRefreshToken.objects.count(), 1)
+
+    def test_a_non_member_cannot_disconnect(self):
+        self.connect(OPENCODE)
+        MembershipCache.objects.filter(did=DID).update(active=False)
+        resp = self.disconnect(OPENCODE)
+        self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
+        self.assertEqual(OidcRefreshToken.objects.count(), 1)

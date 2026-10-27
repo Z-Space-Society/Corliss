@@ -367,6 +367,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | API keys — issue, revoke, usage (members) | `/api/` |
 | Parascribe — transcription quickstart (signed in) | `/tools/parascribe/` |
 | Notes: the notes service, your vaults, create a vault (members) | `/notes/` |
+| Disconnect one of your connected apps (members, POST) | `/notes/apps/disconnect` |
 | Workspaces — the ones you are in (members) | `/workspaces/` |
 | New workspace (members) | `/workspaces/new` |
 | A workspace — rename, add/remove members (its own members) | `/workspaces/<id>/` |
@@ -1367,6 +1368,14 @@ Rules with a plausible wrong answer:
   can present another client's `client_id`.
 - **GATE is asked at `authorize` and again when the form is posted.** The
   screen can sit open while a member is revoked.
+- **A member can undo an Allow.** `/notes/` lists every app holding a refresh
+  token it can still redeem, or a remembered consent, named by host as on the
+  consent screen. Disconnect deletes both for that client, filtered by the
+  signed-in member and never by anything in the request. It matters more
+  since any CIMD client may sign in: an Allow given to the wrong host is
+  otherwise permanent while the member stays a member. An access token
+  already issued cannot be revoked and lasts out its 15 minutes, which is one
+  reason that lifetime stays short.
 - **The redirect to `obsidian://` uses a response class that allows exactly
   that scheme.** Django refuses anything but http, https and ftp. The scheme
   allowed is the one on a URI already matched against the client's list.
