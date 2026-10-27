@@ -15,6 +15,7 @@ from unittest.mock import patch
 
 import requests
 from django.contrib.auth import get_user_model
+from django.contrib.staticfiles import finders
 from django.test import Client as HttpClient
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -320,13 +321,10 @@ class PageStateTests(VaultsCase):
         self.assertEqual(resp.context["sync_url"], "")
         self.assertEqual(resp.context["mcp_url"], "")
 
-    def test_the_page_names_no_ai_product(self):
-        """The site is AI agnostic. The MCP address is offered as an MCP
-        service, for whatever the member uses."""
-        with Relay(listing=[vault("Notes")]):
+    def test_the_page_links_the_connect_script_at_its_published_path(self):
+        with Relay(listing=[]):
             resp = self.get()
-        self.assertNotContains(resp, "Claude")
-        self.assertContains(resp, MCP)
+        self.assertContains(resp, 'href="/static/help/scripts/connect-opencode.sh"')
 
     def test_the_nav_offers_the_page_to_a_member_and_closes_it_to_a_non_member(self):
         with Relay():
@@ -571,3 +569,12 @@ class ConnectedAppsTests(VaultsCase):
         resp = self.disconnect(OPENCODE)
         self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
         self.assertEqual(OidcRefreshToken.objects.count(), 1)
+
+
+class ConnectScriptTests(TestCase):
+    """`/static/help/scripts/connect-opencode.sh` is an address members are
+    told to fetch. Moving the file passes every page test and breaks those
+    instructions, so its path is pinned here."""
+
+    def test_the_connect_script_is_at_its_published_path(self):
+        self.assertIsNotNone(finders.find("help/scripts/connect-opencode.sh"))

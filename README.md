@@ -380,6 +380,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | JWKS | `/.well-known/jwks.json` |
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
 | Consent — allow or refuse a public client (POST, members; reached from authorize) | `/oidc/consent` |
+| opencode connect script for a machine with no browser (public, a static file) | `/static/help/scripts/connect-opencode.sh` |
 | Membership push (from the registry) | `/membership/events` |
 | Apply for membership (signed-in non-members) | `/membership/apply` |
 | About — what this is, the system, the team (public) | `/about/`, `/about/system/`, `/about/team/` |
@@ -1208,11 +1209,6 @@ explains the service, lists the member's vaults, creates one, and gives the
 two addresses to connect with. **A vault is created here and nowhere
 else**: every client only ever picks from the list.
 
-- **The page names no AI product.** This site is AI agnostic. The MCP
-  address is shown under **MCP service**, as something any assistant that
-  speaks MCP can use, and no assistant is recommended. A test holds the page
-  to it.
-
 - **Nothing about a vault is stored in Corliss.** The page asks the relay each
   time it renders. A vault exists when the relay says so.
 - **No request chooses whose vaults.** The relay's service token can list and
@@ -1501,6 +1497,43 @@ discovery and token requests come from.
 A member then makes a vault at `/notes/`, pastes the sync address shown
 there into the SCN Sync plugin, and adds the MCP address to whatever MCP
 client they use.
+
+### A headless agent: `connect-opencode.sh`
+
+An agent running opencode on a VM or server has no browser, so the sign-in
+starts on that machine and is finished in a browser somewhere else. The
+browser lands on a dead `http://127.0.0.1:<port>/callback?…` page, and that
+address has to be carried back to the listener opencode left waiting.
+[`corliss/static/help/scripts/connect-opencode.sh`](corliss/static/help/scripts/connect-opencode.sh)
+does that, and adds the server and its permission rules on the way. A member
+downloads it and runs it as the agent's user:
+
+```bash
+curl -fsSLO https://sharedcomputer.network/static/help/scripts/connect-opencode.sh
+bash connect-opencode.sh https://mcp.sharedcomputer.network
+```
+
+- **The path is an interface.** Members are told to fetch it, and whitenoise
+  serves the unhashed name beside the manifest copy, so it stays put across
+  releases. `ConnectScriptTests` fails if the file moves.
+- **`/notes/` links it under MCP service**, at the unhashed path. The MCP
+  address is passed as an argument because the file is static and staging's
+  differs; production's is the default.
+- **Download, then run, rather than `curl | bash`.** The script reads the
+  pasted address from the terminal, and it is short enough to read first.
+- **The defect it was written for: an unquoted paste.** Handed to bash
+  unquoted, `…/callback?code=X&state=Y` splits at the `&`: curl runs in the
+  background with the code and no state, and opencode 2.2.0 reports "OAuth
+  state mismatch" while the address on screen looks right. Corliss returns
+  `state` byte for byte, and opencode keeps it in memory for the one attempt.
+  The script checks port and state before delivering and sends the address
+  from a quoted variable. `echo http://127.0.0.1:1/callback?code=a&state=b`
+  in bash is the one-line demonstration.
+- **Permissions go in `opencode.json`, never `opencode.jsonc`.** opencode
+  loads both and `opencode mcp add` writes plain JSON, so jq can edit it
+  safely. A hand-commented file stops the script with the rules to paste.
+  The rules are opencode 2.2's ordered `permissions` list, last match wins:
+  `scnnotes_*` asks, then the four read-only tools are allowed.
 
 ## Wiring up a relying party (Open WebUI shown)
 

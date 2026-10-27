@@ -630,8 +630,7 @@ What the page shows, top to bottom:
 2. **Your vaults.** Name, created and last change for each, and a form to
    create one: a name and a button. A member can have any number.
 3. **MCP service.** The public MCP URL, and that any assistant or tool that
-   supports MCP servers can use it. The page names no AI product: the site
-   is AI agnostic, and the service works with any MCP client.
+   supports MCP servers can use it.
 4. **Connect Obsidian.** Create a new empty vault in Obsidian, install SCN
    Sync, paste the public sync URL, sign in, pick a vault. On iPhone, leave
    **Store in iCloud** off.

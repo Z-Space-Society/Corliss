@@ -1,13 +1,12 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% comment %}
 The Obsidian page: what the notes service is, the member's vaults, and how to
 connect Obsidian and an MCP client. See `views.notes`.
 
-**No AI product is named here.** The relay serves the notes over MCP, which
-any assistant that speaks it can use, and this site does not point members at
-one. The section is called MCP service and says what the address is, not
-whose app to put it in.
+The link to `connect-opencode.sh` uses the unhashed static path, the
+address the README documents, rather than `{% static %}`'s versioned one.
 
 **The instructions always render.** The vault list depends on the sync relay
 answering, and the rest of the page does not: a member reading how this works
@@ -23,9 +22,7 @@ A vault is made here and nowhere else. The plugin only picks from this list.
 **Connected apps** lists the apps that can reach this member's notes without
 asking again, from `views._connected_apps`. Each is headed by its host, the
 part Corliss checked, with the name it gives itself beneath, as on the consent
-screen. Those names come from the apps' own documents, so the rule above about
-naming no AI product is about this template's words, not the member's rows.
-Disconnect is a one-button form per row.
+screen. Disconnect is a one-button form per row.
 
 No script. One form with one field, inside a `<details>` opened by the + in
 the card's corner. It renders open after a failed create, so the error is not
@@ -137,6 +134,9 @@ line asks the member to make one.
       address to any assistant or tool that supports MCP servers, then sign in
       with your handle when it asks. It can read and edit the notes in your
       vaults, with or without Obsidian.</p>
+      <p class="hint-text">To connect an OpenCode harness running in a
+      terminal, use this script:
+      <a href="{% get_static_prefix %}help/scripts/connect-opencode.sh">connect-opencode.sh</a>.</p>
     {% else %}
       <p class="hint-text">No MCP address is configured on this deployment
       yet.</p>
