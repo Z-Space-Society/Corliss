@@ -163,8 +163,9 @@ page, and this one is the page itself, so closing does not scroll anywhere.
 
   {% comment %}
   The workspace's notes: one vault, shared by everyone above. This is the one
-  place a workspace's vault is shown or made. The Notes page is about a
-  member's private vaults and never lists it.
+  place a workspace's vault is shown, and rendering it is what makes it: the
+  relay makes the vault the first time Corliss asks. The Notes page is about a
+  member's private vault and never lists it.
 
   Hidden entirely when notes are not set up on this cluster, as the nav hides
   Notes. When the relay does not answer, the section stays and says so, the way
@@ -177,7 +178,7 @@ page, and this one is the page itself, so closing does not scroll anywhere.
       {% if not vault_reachable %}
         <p class="page-text">The notes service is not answering right now, so
         this workspace's vault cannot be shown. Try again shortly.</p>
-      {% elif vault %}
+      {% else %}
         <dl class="modal__facts">
           <div class="modal__fact">
             <dt>Vault</dt>
@@ -204,16 +205,6 @@ page, and this one is the page itself, so closing does not scroll anywhere.
         <p class="hint-text">Someone removed from the workspace loses the
         vault within fifteen minutes, and keeps whatever their devices
         already hold.</p>
-      {% else %}
-        <p class="page-text">This workspace has no notes vault yet. Make one
-        and everyone in the workspace can sync it in Obsidian and reach it
-        over MCP. It takes the workspace's name.</p>
-        <form method="post" class="row-form"
-              action="{% url 'workspace_edit' pk=workspace.pk %}">
-          {% csrf_token %}
-          <input type="hidden" name="action" value="create_vault">
-          <button type="submit" class="btn-primary">Create notes vault</button>
-        </form>
       {% endif %}
     </div>
   {% endif %}

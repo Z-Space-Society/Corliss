@@ -33,7 +33,7 @@ only by being genuinely standalone.
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
 | `corliss/oidc.py` | OIDC provider core: discovery document, client lookup, auth-code issuance, `id_token` and access token minting, the request checks for public clients, fetching and caching their metadata documents, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
 | `corliss/membership.py` | The whole registry relationship: consuming its membership push, reconciling the cache against it, reading the application queue, writing grants and revocations as the acting admin, and resolving whether a DID is currently a member. |
-| `corliss/sync_relay.py` | Vaults on scn-sync-relay: a member's private ones and a workspace's, listed, created, and a workspace's renamed with it. The only place the relay's service token is used. |
+| `corliss/sync_relay.py` | Vaults on scn-sync-relay: a member's private vault and a workspace's, each made by the relay the first time it is asked, and a workspace's kept under the workspace's name. The only place the relay's service token is used. |
 | `corliss/litellm.py` | Provisioning members into LiteLLM and issuing their API keys — the only place a gateway credential is used (same one-relationship-one-module rule). |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
@@ -366,7 +366,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Account — your own name and email (signed in) | `/account/` |
 | API keys — issue, revoke, usage (members) | `/api/` |
 | Parascribe — transcription quickstart (signed in) | `/tools/parascribe/` |
-| Notes: the notes service, your vaults, create a vault (members) | `/notes/` |
+| Notes: the notes service and your private vault (members) | `/notes/` |
 | Disconnect one of your connected apps (members, POST) | `/notes/apps/disconnect` |
 | Workspaces — the ones you are in (members) | `/workspaces/` |
 | New workspace (members) | `/workspaces/new` |
@@ -1162,10 +1162,14 @@ roster. Making one takes a cluster membership; changing one takes being in it.
 
 ### A workspace's notes vault
 
-A workspace can have one notes vault on
+A workspace has one notes vault on
 [scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay), shared by
-everyone in it. It is made and shown on the workspace's page and nowhere
-else: `/notes/` is about a member's private vaults and never lists it.
+everyone in it. It is shown on the workspace's page and nowhere else:
+`/notes/` is about a member's private vault and never lists it. There is no
+button to make it: rendering the page asks the relay for it with
+`PUT /internal/vaults/workspace` (relay v0.5.0 or later), and the relay makes
+it the first time it is asked. A new workspace lands on its page, so it has its
+vault from the start.
 
 - **Nothing about the vault is stored here.** The relay records which
   workspace holds which vault, keyed by the workspace's pk, and the page asks
@@ -1177,21 +1181,24 @@ else: `/notes/` is about a member's private vaults and never lists it.
   whoever's token lists it. Adding or removing a member therefore calls
   nothing: a removal takes effect at the member's next token, within fifteen
   minutes, the same bound as leaving the cluster.
+- **Corliss asks, and only Corliss.** The relay sees workspace IDs, never
+  names, so a sync or MCP listing cannot make a workspace's vault with the
+  right name. Corliss sends the name with every ask.
 - **The relay is asked only after `_workspace_for_member`.** The service token
   can make or rename any workspace's vault, so the workspace in the URL is
   trusted only once the signed-in member has been found in it. A stranger gets
   the 404 before the relay is called.
-- **The vault takes the workspace's name and follows it.** A save that changes
-  the name calls the relay's rename. If the relay misses it, the workspace
-  keeps its new name and the page says the vault kept the old one; saving the
-  name again is the retry, and nothing is queued. A name over the relay's 100
-  characters is cut to fit, the same way at create and at rename.
+- **The vault takes the workspace's name and follows it.** Every render sends
+  the current name, and the relay renames the vault when it differs, so a save
+  that changes the name reaches the vault on the page it redirects to. If the
+  relay misses it, the next render is the retry, and nothing is queued. A name
+  over the relay's 100 characters is cut to fit.
 - **The card names the vault by the relay's `path`**, such as
   `Workspaces/Garden Club`, the name MCP and SCN Sync both use. The relay is
   the one place "Workspaces" is spelled; nothing here builds the string, and a
   relay older than v0.4.2, which sends no `path`, gets no such line.
-- **A second "Create notes vault" is not a failure.** Two members pressing it
-  at once find the relay already holding one, which is what they wanted.
+- **Two members opening the page at once get one vault.** The relay's unique
+  index decides the race and both get the winner's.
 
 ## The nav
 
@@ -1263,17 +1270,19 @@ touch-specific details follow from it, all in `base.css`:
 Members keep notes on the cluster and reach them from Obsidian and over MCP.
 The notes and the record of who owns which vault live on
 [scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay). This page
-explains the service, lists the member's vaults, creates one, and gives the
-two addresses to connect with. **A vault is created here and nowhere
-else**: every client only ever picks from the list.
+explains the service, shows the member's private vault, and gives the two
+addresses to connect with. **A member has one private vault, and nothing
+creates it by hand**: from relay v0.5.0 the relay makes it the first time any
+listing asks, this page's, SCN Sync's or an MCP client's, and its path is
+`Private`.
 
 - **Nothing about a vault is stored in Corliss.** The page asks the relay each
   time it renders. A vault exists when the relay says so.
-- **No request chooses whose vaults.** The relay's service token can list and
-  create for any DID, so the DID is the signed-in member's for both, and a
-  `did` in the query string or the form is never read. Handing one member
-  another's vault names would be this page's worst failure.
-- **Private vaults only.** The listing names no workspaces, so a workspace's
+- **No request chooses whose vault.** The relay's service token can list, and
+  so make, a vault for any DID, so the DID is the signed-in member's, and a
+  `did` in the query string is never read. The page takes no POST at all.
+  Handing one member another's vault would be this page's worst failure.
+- **The private vault only.** The listing names no workspaces, so a workspace's
   vault never appears here, even for a member of it. It is on the workspace's
   page.
 - **The relay is called at its internal address**, `SYNC_RELAY_URL`, never the
@@ -1281,9 +1290,9 @@ else**: every client only ever picks from the list.
   `/internal/` at all.
 - **Redirects are not followed**, so the service token cannot be carried to an
   address the relay did not answer from.
-- **Nothing is retried.** A failed create is shown beside the form with the
-  name kept, and the member presses the button again.
-- **The instructions render in every state.** The list depends on the relay
+- **Nothing is retried.** A failure says the service did not answer, and the
+  next load asks again.
+- **The instructions render in every state.** The vault depends on the relay
   answering and the explanation does not.
 - **Notes and Size are the relay's figures, shown as given.** Size is the
   bytes the vault takes on the relay, which is its Automerge history: it
@@ -1293,9 +1302,9 @@ else**: every client only ever picks from the list.
 
 | State | The page shows |
 | ----- | -------------- |
-| `SYNC_RELAY_URL` or `SYNC_RELAY_SERVICE_TOKEN` blank | The instructions, and that vaults are not set up on this deployment. No form. |
-| The relay unreachable, or any answer but `200` | The instructions, and that the service did not answer. No form. |
-| Answered | The list and the form, or that there are no vaults yet and the form. |
+| `SYNC_RELAY_URL` or `SYNC_RELAY_SERVICE_TOKEN` blank | The instructions, and that notes are not set up on this deployment. |
+| The relay unreachable, any answer but `200`, or a listing with no private vault | The instructions, and that the service did not answer. |
+| Answered | The member's private vault: its notes, size and last change, and its path. |
 
 The two addresses shown are the `sync` and `mcp` entries of `OIDC_RESOURCES`,
 so what a member pastes is the same string the relay checks tokens against.

@@ -1,9 +1,9 @@
 """The Obsidian page, and the sync relay client behind it.
 
 The property that matters most: **the relay is only ever asked about the
-signed-in member.** The service token can list and create vaults for any DID,
-so a request that could choose one would hand out other members' vault names
-and let anybody plant a vault in somebody else's account.
+signed-in member.** The service token can list, and so make, vaults for any
+DID, so a request that could choose one would hand out other members' vault
+details.
 
 The relay is stood in for at `requests.request`. Its JSON shapes and error
 codes are the ones pinned in scn-sync-relay's spec, section Z3.
@@ -47,15 +47,24 @@ RESOURCES = json.dumps(
 )
 
 
-def vault(name, *, last_change="2026-10-08T17:03:11.123456789Z", **sizes):
+def vault(name, *, last_change="2026-10-08T17:03:11.123456789Z", **extra):
+    """A vault as the relay sends it. A name of None is a member's private
+    vault, at the path `Private`; give `workspace` for a workspace's."""
+    workspace = extra.pop("workspace", None)
     return {
         "root_doc_id": "4NMNnkMhL8jXrdJ9jamS58PAVdXu",
         "url": "automerge:4NMNnkMhL8jXrdJ9jamS58PAVdXu",
         "name": name,
+        "workspace": workspace,
+        "path": f"Workspaces/{name}" if workspace else "Private",
         "created_at": "2026-10-08T16:00:00Z",
         "last_change_at": last_change,
-        **sizes,
+        **extra,
     }
+
+
+def private(**extra):
+    return vault(None, **extra)
 
 
 def answer(status=200, body=None, *, text=None):
@@ -71,29 +80,28 @@ def answer(status=200, body=None, *, text=None):
 class Relay:
     """Stand in for the relay for the length of a `with` block."""
 
-    def __init__(
-        self,
-        *,
-        listing=None,
-        created=None,
-        list_answer=None,
-        create_answer=None,
-        rename_answer=None,
-    ):
+    def __init__(self, *, listing=None, list_answer=None, workspace_answer=None):
         # `is None`, not `or`: a `requests.Response` is falsy when its status
         # is an error, which is exactly the answer these stand in for.
         self._list = (
-            answer(200, {"vaults": listing or []}) if list_answer is None else list_answer
+            answer(200, {"vaults": [private()] if listing is None else listing})
+            if list_answer is None
+            else list_answer
         )
-        self._create = (
-            answer(201, created or vault("Notes")) if create_answer is None else create_answer
-        )
-        self._rename = answer(204) if rename_answer is None else rename_answer
+        self._workspace = workspace_answer
         self.calls = []
 
     def _request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
-        outcome = {"GET": self._list, "POST": self._create, "PATCH": self._rename}[method]
+        if method == "GET":
+            outcome = self._list
+        elif method == "PUT":
+            outcome = self._workspace
+            if outcome is None:
+                sent = kwargs["json"]
+                outcome = answer(200, vault(sent["name"], workspace=sent["workspace"]))
+        else:
+            raise AssertionError(f"the relay has no {method} route Corliss uses")
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
@@ -122,15 +130,12 @@ class VaultsCase(TestCase):
     def get(self, **params):
         return self.client.get(reverse("notes"), params)
 
-    def create(self, name="Notes", **extra):
-        return self.client.post(reverse("notes"), {"name": name, **extra})
-
 
 class RelayClientTests(VaultsCase):
     """`corliss.sync_relay` on its own: what it sends and what it accepts."""
 
     def test_listing_asks_the_internal_address_with_the_service_token(self):
-        with Relay(listing=[vault("Notes")]) as relay:
+        with Relay() as relay:
             vaults = sync_relay.list_vaults(DID)
 
         method, url, kwargs = relay.calls[0]
@@ -139,18 +144,20 @@ class RelayClientTests(VaultsCase):
         self.assertEqual(kwargs["headers"], {"Authorization": f"Bearer {TOKEN}"})
         self.assertEqual(kwargs["timeout"], 5)
         self.assertIs(kwargs["allow_redirects"], False)
-        self.assertEqual(vaults[0]["name"], "Notes")
+        self.assertIsNone(vaults[0]["name"])
+        self.assertEqual(vaults[0]["path"], "Private")
 
-    def test_creating_posts_the_did_and_the_name(self):
-        with Relay(created=vault("Journal")) as relay:
-            created = sync_relay.create_vault(DID, "Journal")
+    def test_the_private_vault_is_the_one_with_no_workspace(self):
+        shared = vault("Garden Club", workspace="7")
+        with Relay(listing=[shared, private(note_count=3)]):
+            found = sync_relay.private_vault(DID)
+        self.assertIsNone(found["workspace"])
+        self.assertEqual(found["note_count"], 3)
 
-        method, url, kwargs = relay.calls[0]
-        self.assertEqual((method, url), ("POST", f"{RELAY}/internal/vaults"))
-        self.assertEqual(kwargs["json"], {"did": DID, "name": "Journal"})
-        self.assertEqual(kwargs["headers"], {"Authorization": f"Bearer {TOKEN}"})
-        self.assertIs(kwargs["allow_redirects"], False)
-        self.assertEqual(created["name"], "Journal")
+    def test_a_listing_with_no_private_vault_is_an_error(self):
+        with Relay(listing=[]):
+            with self.assertRaises(sync_relay.SyncRelayError):
+                sync_relay.private_vault(DID)
 
     @override_settings(SYNC_RELAY_URL=RELAY + "/")
     def test_a_trailing_slash_on_the_setting_does_not_double_up(self):
@@ -159,7 +166,7 @@ class RelayClientTests(VaultsCase):
         self.assertEqual(relay.calls[0][1], f"{RELAY}/internal/vaults")
 
     def test_timestamps_are_parsed_and_a_vault_never_written_to_has_none(self):
-        with Relay(listing=[vault("A"), vault("B", last_change=None)]):
+        with Relay(listing=[private(), private(last_change=None)]):
             first, second = sync_relay.list_vaults(DID)
         self.assertEqual(first["created_at"].isoformat(), "2026-10-08T16:00:00+00:00")
         self.assertEqual(first["last_change_at"].minute, 3)
@@ -167,11 +174,11 @@ class RelayClientTests(VaultsCase):
 
     def test_counts_are_read_and_anything_but_an_integer_is_none(self):
         listing = [
-            vault("A", note_count=3, bytes=1234),
-            vault("B", note_count=0, bytes=0),
-            vault("C", note_count=None, bytes=None),
-            vault("D"),
-            vault("E", note_count="3", bytes=True),
+            private(note_count=3, bytes=1234),
+            private(note_count=0, bytes=0),
+            private(note_count=None, bytes=None),
+            private(),
+            private(note_count="3", bytes=True),
         ]
         with Relay(listing=listing):
             vaults = sync_relay.list_vaults(DID)
@@ -181,37 +188,13 @@ class RelayClientTests(VaultsCase):
         )
 
     def test_the_relays_order_is_kept(self):
-        with Relay(listing=[vault("First"), vault("Second")]):
+        listing = [vault("First", workspace="1"), vault("Second", workspace="2")]
+        with Relay(listing=listing):
             names = [v["name"] for v in sync_relay.list_vaults(DID)]
         self.assertEqual(names, ["First", "Second"])
 
-    def test_a_duplicate_name_is_its_own_error(self):
-        with Relay(create_answer=answer(409, {"error": "name_taken"})):
-            with self.assertRaises(sync_relay.NameTaken):
-                sync_relay.create_vault(DID, "Notes")
-
-    def test_every_other_way_of_failing_is_one_error(self):
-        failures = [
-            answer(400, {"error": "invalid_name"}),
-            answer(400, {"error": "invalid_did"}),
-            answer(401, text="unauthorized\n"),
-            answer(500, {"error": "internal"}),
-            answer(302),
-            answer(200, vault("Notes")),
-            answer(201, text="not json"),
-            answer(201, {"name": 5}),
-            requests.ConnectionError("refused"),
-            requests.Timeout("slow"),
-        ]
-        for failure in failures:
-            with self.subTest(failure=failure), Relay(create_answer=failure):
-                with patch.object(sync_relay.log, "warning"):
-                    with self.assertRaises(sync_relay.SyncRelayError) as caught:
-                        sync_relay.create_vault(DID, "Notes")
-                self.assertNotIsInstance(caught.exception, sync_relay.NameTaken)
-
     def test_a_listing_that_is_not_the_expected_shape_is_an_error(self):
-        for body in ([], {"vaults": "none"}, {"vaults": [5]}, {"vaults": [{"name": None}]}):
+        for body in ([], {"vaults": "none"}, {"vaults": [5]}, {"vaults": [{"name": 5}]}):
             with self.subTest(body=body), Relay(list_answer=answer(200, body)):
                 with self.assertRaises(sync_relay.SyncRelayError):
                     sync_relay.list_vaults(DID)
@@ -231,102 +214,85 @@ class WorkspaceRelayClientTests(VaultsCase):
         super().setUp()
         self.workspace = Workspace.objects.create(name="Garden Club")
 
-    def test_a_workspace_vault_is_found_among_the_members_listing(self):
-        shared = vault("Garden Club") | {"workspace": str(self.workspace.pk)}
-        with Relay(listing=[vault("Notes"), shared]) as relay:
+    def test_asking_puts_the_member_the_workspace_id_and_its_name(self):
+        with Relay() as relay:
             found = sync_relay.workspace_vault(DID, self.workspace)
-        self.assertEqual(
-            relay.calls[0][2]["params"],
-            {"did": DID, "workspaces": str(self.workspace.pk)},
-        )
-        self.assertEqual(found["name"], "Garden Club")
-        self.assertEqual(found["workspace"], str(self.workspace.pk))
-
-    def test_a_workspace_with_no_vault_is_none(self):
-        with Relay(listing=[vault("Notes")]):
-            self.assertIsNone(sync_relay.workspace_vault(DID, self.workspace))
-
-    def test_creating_posts_the_workspace_id_and_its_name_cut_to_fit(self):
-        self.workspace.name = "x" * 150
-        with Relay() as relay:
-            sync_relay.create_workspace_vault(DID, self.workspace)
-        self.assertEqual(
-            relay.made("POST")[0][2]["json"],
-            {"did": DID, "name": "x" * 100, "workspace": str(self.workspace.pk)},
-        )
-
-    def test_a_workspace_that_has_its_vault_is_its_own_error(self):
-        taken = answer(409, {"error": "workspace_has_vault"})
-        with Relay(create_answer=taken):
-            with self.assertRaises(sync_relay.WorkspaceHasVault):
-                sync_relay.create_workspace_vault(DID, self.workspace)
-
-    def test_renaming_patches_the_workspace_id_and_its_name(self):
-        with Relay() as relay:
-            sync_relay.rename_workspace_vault(self.workspace)
         method, url, kwargs = relay.calls[0]
-        self.assertEqual((method, url), ("PATCH", f"{RELAY}/internal/vaults"))
+        self.assertEqual((method, url), ("PUT", f"{RELAY}/internal/vaults/workspace"))
         self.assertEqual(
             kwargs["json"],
-            {"workspace": str(self.workspace.pk), "name": "Garden Club"},
+            {"did": DID, "workspace": str(self.workspace.pk), "name": "Garden Club"},
         )
+        self.assertEqual(kwargs["headers"], {"Authorization": f"Bearer {TOKEN}"})
+        self.assertIs(kwargs["allow_redirects"], False)
+        self.assertEqual(found["workspace"], str(self.workspace.pk))
+        self.assertEqual(found["path"], "Workspaces/Garden Club")
 
-    def test_renaming_a_workspace_with_no_vault_is_not_an_error(self):
-        with Relay(rename_answer=answer(404, {"error": "no_vault"})):
-            sync_relay.rename_workspace_vault(self.workspace)
+    def test_the_name_is_cut_to_fit(self):
+        self.workspace.name = "x" * 150
+        with Relay() as relay:
+            sync_relay.workspace_vault(DID, self.workspace)
+        self.assertEqual(relay.made("PUT")[0][2]["json"]["name"], "x" * 100)
 
-    def test_any_other_rename_answer_is_an_error(self):
-        for failure in [answer(404, {}), answer(500), answer(405, text="")]:
-            with Relay(rename_answer=failure), patch.object(sync_relay.log, "warning"):
-                with self.assertRaises(sync_relay.SyncRelayError):
-                    sync_relay.rename_workspace_vault(self.workspace)
+    def test_every_way_of_failing_is_one_error(self):
+        failures = [
+            answer(400, {"error": "invalid_name"}),
+            answer(401, text="unauthorized\n"),
+            answer(404, text="not found"),
+            answer(500, {"error": "internal"}),
+            answer(302),
+            answer(200, text="not json"),
+            answer(200, {"name": 5}),
+            requests.ConnectionError("refused"),
+            requests.Timeout("slow"),
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure), Relay(workspace_answer=failure):
+                with patch.object(sync_relay.log, "warning"):
+                    with self.assertRaises(sync_relay.SyncRelayError):
+                        sync_relay.workspace_vault(DID, self.workspace)
 
 
 class WhoseVaultsTests(VaultsCase):
-    def test_the_list_is_asked_for_the_signed_in_member(self):
+    def test_the_vault_is_asked_for_the_signed_in_member(self):
         with Relay() as relay:
             self.get()
-        self.assertEqual(relay.calls[0][2]["params"], {"did": DID})
+        self.assertEqual([c[2]["params"] for c in relay.calls], [{"did": DID}])
 
     def test_the_notes_page_names_none_of_the_members_workspaces(self):
         """Workspace vaults are on the workspace's page, never here."""
         Workspace.objects.create(name="Garden Club").members.add(self.user)
         with Relay() as relay:
             self.get()
-        self.assertEqual(relay.calls[0][2]["params"], {"did": DID})
+        self.assertEqual([c[2]["params"] for c in relay.calls], [{"did": DID}])
 
     def test_a_did_in_the_query_string_is_ignored(self):
         with Relay() as relay:
             self.get(did=OTHER)
         self.assertEqual([c[2]["params"] for c in relay.calls], [{"did": DID}])
 
-    def test_a_did_in_the_form_is_ignored_for_create_and_for_the_list(self):
+    def test_the_page_takes_no_post_and_the_relay_is_not_asked(self):
         with Relay() as relay:
-            self.create("Notes", did=OTHER)
-            self.client.post(reverse("notes") + f"?did={OTHER}", {"name": "More"})
-        for _, _, kwargs in relay.made("POST"):
-            self.assertEqual(kwargs["json"]["did"], DID)
-        for _, _, kwargs in relay.made("GET"):
-            self.assertEqual(kwargs["params"], {"did": DID})
+            resp = self.client.post(reverse("notes"), {"name": "Notes", "did": OTHER})
+        self.assertEqual(resp.status_code, 405)
+        self.assertEqual(relay.calls, [])
 
-    def test_a_non_member_is_refused_on_get_and_on_post_and_the_relay_is_not_asked(self):
+    def test_a_non_member_is_refused_and_the_relay_is_not_asked(self):
         MembershipCache.objects.filter(did=DID).update(active=False)
         with Relay() as relay:
-            for resp in (self.get(), self.create()):
-                self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
+            resp = self.get()
+        self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
         self.assertEqual(relay.calls, [])
 
     def test_a_signed_out_visitor_is_sent_to_sign_in(self):
         self.client.logout()
         with Relay() as relay:
-            for resp in (self.get(), self.create()):
-                self.assertRedirects(resp, reverse("login"), fetch_redirect_response=False)
+            resp = self.get()
+        self.assertRedirects(resp, reverse("login"), fetch_redirect_response=False)
         self.assertEqual(relay.calls, [])
 
 
 class PageStateTests(VaultsCase):
-    FORM = 'name="name"'
-
     def assertInstructions(self, resp):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.context["sync_url"], SYNC)
@@ -334,51 +300,32 @@ class PageStateTests(VaultsCase):
         self.assertContains(resp, SYNC)
         self.assertContains(resp, MCP)
 
-    def test_answered_with_vaults_lists_them_and_offers_the_form(self):
-        with Relay(listing=[vault("Notes"), vault("Journal", last_change=None)]):
+    def test_answered_shows_the_private_vault(self):
+        with Relay(listing=[private(note_count=42, bytes=1234)]):
             resp = self.get()
         self.assertInstructions(resp)
         self.assertTrue(resp.context["configured"])
         self.assertTrue(resp.context["reachable"])
-        self.assertContains(resp, "Notes")
-        self.assertContains(resp, "Journal")
-        self.assertContains(resp, self.FORM)
+        self.assertEqual(resp.context["vault"]["path"], "Private")
+        self.assertEqual(resp.context["vault"]["note_count"], 42)
 
-    def test_a_vault_shows_its_notes_and_size_or_a_dash(self):
-        listing = [vault("Notes", note_count=42, bytes=1234), vault("Journal")]
-        with Relay(listing=listing):
-            resp = self.get()
-        self.assertContains(resp, "<td class=\"data-table__muted\">42</td>", html=True)
-        self.assertContains(resp, "1.2\xa0KB")
-        self.assertContains(resp, "<td class=\"data-table__muted\">—</td>", count=2, html=True)
-
-    def test_answered_with_none_still_offers_the_form(self):
-        with Relay(listing=[]):
-            resp = self.get()
-        self.assertInstructions(resp)
-        self.assertEqual(resp.context["vaults"], [])
-        self.assertTrue(resp.context["reachable"])
-        self.assertContains(resp, self.FORM)
-
-    def test_not_configured_shows_the_instructions_and_no_form(self):
+    def test_not_configured_shows_the_instructions_and_asks_nothing(self):
         for blank in ("SYNC_RELAY_SERVICE_TOKEN", "SYNC_RELAY_URL"):
             with self.subTest(blank=blank), override_settings(**{blank: ""}):
                 with Relay() as relay:
                     resp = self.get()
-                    posted = self.create()
                 self.assertEqual(relay.calls, [])
                 self.assertInstructions(resp)
                 self.assertFalse(resp.context["configured"])
-                self.assertNotContains(resp, self.FORM)
-                self.assertEqual(posted.status_code, 200)
-                self.assertNotContains(posted, self.FORM)
+                self.assertIsNone(resp.context["vault"])
 
-    def test_unreachable_or_a_bad_answer_shows_the_instructions_and_no_form(self):
+    def test_unreachable_or_a_bad_answer_shows_the_instructions(self):
         for failure in (
             requests.ConnectionError("refused"),
             answer(502, text="bad gateway"),
             answer(401, text="unauthorized\n"),
             answer(200, text="<html>"),
+            answer(200, {"vaults": []}),
         ):
             with self.subTest(failure=failure), Relay(list_answer=failure):
                 with patch.object(sync_relay.log, "warning"):
@@ -386,18 +333,17 @@ class PageStateTests(VaultsCase):
                 self.assertInstructions(resp)
                 self.assertTrue(resp.context["configured"])
                 self.assertFalse(resp.context["reachable"])
-                self.assertNotContains(resp, self.FORM)
 
     @override_settings(OIDC_RESOURCES="")
     def test_with_no_resources_configured_the_page_still_renders(self):
-        with Relay(listing=[vault("Notes")]):
+        with Relay():
             resp = self.get()
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.context["sync_url"], "")
         self.assertEqual(resp.context["mcp_url"], "")
 
     def test_the_page_links_the_connect_script_at_its_published_path(self):
-        with Relay(listing=[]):
+        with Relay():
             resp = self.get()
         self.assertContains(resp, 'href="/static/help/scripts/connect-opencode.sh"')
 
@@ -420,62 +366,6 @@ class PageStateTests(VaultsCase):
         MembershipCache.objects.filter(did=DID).update(active=False)
         html = self.client.get(reverse("home")).content.decode()
         self.assertNotIn(">Notes</span>", html)
-
-
-class CreateTests(VaultsCase):
-    def test_creating_redirects_to_the_page_which_then_lists_it(self):
-        with Relay(listing=[vault("Notes")]) as relay:
-            resp = self.create("Notes")
-            self.assertRedirects(resp, reverse("notes"))
-        self.assertEqual(len(relay.made("POST")), 1)
-
-    def test_the_name_is_trimmed(self):
-        with Relay() as relay:
-            self.create("  Notes  ")
-        self.assertEqual(relay.made("POST")[0][2]["json"]["name"], "Notes")
-
-    def test_an_empty_or_overlong_name_never_reaches_the_relay(self):
-        for name in ("", "   ", "n" * 101):
-            with self.subTest(name=name), Relay() as relay:
-                resp = self.create(name)
-                self.assertEqual(relay.made("POST"), [])
-                self.assertEqual(resp.status_code, 200)
-                self.assertTrue(resp.context["name_error"])
-
-    def test_a_hundred_characters_is_allowed(self):
-        with Relay() as relay:
-            resp = self.create("n" * 100)
-        self.assertEqual(resp.status_code, 302)
-        self.assertEqual(len(relay.made("POST")), 1)
-
-    def test_a_duplicate_name_says_so_beside_the_form_and_keeps_the_name(self):
-        taken = answer(409, {"error": "name_taken"})
-        with Relay(listing=[vault("Notes")], create_answer=taken):
-            resp = self.create("notes")
-        self.assertEqual(resp.status_code, 200)
-        self.assertIn("already", resp.context["name_error"])
-        self.assertEqual(resp.context["name"], "notes")
-        self.assertContains(resp, 'value="notes"')
-        self.assertContains(resp, resp.context["name_error"])
-
-    def test_any_other_failure_says_it_could_not_be_created_and_does_not_retry(self):
-        for failure in (answer(500, {"error": "internal"}), requests.ConnectionError("down")):
-            with self.subTest(failure=failure), Relay(create_answer=failure) as relay:
-                with self.assertLogs("corliss.sync_relay", level="WARNING"):
-                    resp = self.create("Notes")
-                self.assertEqual(resp.status_code, 200)
-                self.assertTrue(resp.context["name_error"])
-                self.assertNotIn("already", resp.context["name_error"])
-                self.assertEqual(resp.context["name"], "Notes")
-                self.assertEqual(len(relay.made("POST")), 1)
-
-    def test_creating_needs_a_csrf_token(self):
-        browser = HttpClient(enforce_csrf_checks=True)
-        browser.force_login(self.user)
-        with Relay() as relay:
-            resp = browser.post(reverse("notes"), {"name": "Notes"})
-        self.assertEqual(resp.status_code, 403)
-        self.assertEqual(relay.calls, [])
 
 
 OPENCODE = "https://opencode.ai/oauth/opencode/client.json"

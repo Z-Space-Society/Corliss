@@ -1,10 +1,12 @@
 """Members' and workspaces' vaults, which live on scn-sync-relay.
 
 The relay holds members' notes and the record of who holds which vault: a
-member, for a private vault, or a workspace. Corliss holds none of it. This
-module asks the relay what vaults a member or a workspace has, to make one, and
-to rename a workspace's when the workspace is renamed. It is the only place the
-relay's service token is used.
+member, for their one private vault, or a workspace. Corliss holds none of it.
+This module asks the relay for a member's private vault, which the relay makes
+the first time anyone asks, and for a workspace's vault under the workspace's
+name, which the relay makes the first time Corliss asks and renames whenever
+the name it is sent differs. It is the only place the relay's service token is
+used.
 
 Which workspaces a member is in reaches the relay another way: as the
 `workspaces` claim of the tokens `oidc.mint_access_token` issues. The relay
@@ -29,8 +31,8 @@ Three properties hold here, each with a plausible wrong answer:
   vault at once, and only `views.systems_notes`, behind `@admin_required`,
   calls it.
 - **Nothing is retried and nothing is stored.** A failure is shown to the
-  member, who can press the button again. A vault exists when the relay says
-  so and in no table of ours.
+  member, and the next page load asks again. A vault exists when the relay
+  says so and in no table of ours.
 """
 
 import logging
@@ -53,20 +55,12 @@ class SyncRelayError(Exception):
     """The relay could not be reached, refused us, or answered unusably."""
 
 
-class NameTaken(SyncRelayError):
-    """The member already has a vault with that name, whatever its case."""
-
-
-class WorkspaceHasVault(SyncRelayError):
-    """The workspace already has its vault. A workspace has one."""
-
-
 def vault_name_for(workspace):
     """The name a workspace's vault carries: the workspace's, cut to fit.
 
     A workspace's name may be longer than the relay allows a vault's, and
     refusing to make the vault over that would be a strange thing to tell
-    somebody. Cut the same way at create and at rename, so the two agree.
+    somebody.
     """
     return workspace.name.strip()[:VAULT_NAME_MAX]
 
@@ -100,7 +94,10 @@ def _count(value):
 
 def _vault(raw):
     """One vault as the page shows it, from the relay's JSON object."""
-    if not isinstance(raw, dict) or not isinstance(raw.get("name"), str):
+    if not isinstance(raw, dict):
+        raise SyncRelayError("a vault in the answer is not the expected shape")
+    name = raw.get("name")
+    if name is not None and not isinstance(name, str):
         raise SyncRelayError("a vault in the answer is not the expected shape")
 
     def when(key):
@@ -109,11 +106,13 @@ def _vault(raw):
 
     workspace = raw.get("workspace")
     return {
-        "name": raw["name"],
+        # The workspace's name for its vault. None for a member's private
+        # vault, which has none of its own from relay v0.5.0.
+        "name": name,
         "url": raw.get("url", ""),
         # The workspace's ID as a string, or None for a member's private vault.
         "workspace": workspace if isinstance(workspace, str) else None,
-        # The relay's name for it under its group, "Workspaces/Garden Club".
+        # The relay's path for it: "Private", or "Workspaces/Garden Club".
         # Shown as given, never built here; blank from a relay before v0.4.2.
         "path": raw["path"] if isinstance(raw.get("path"), str) else "",
         "created_at": when("created_at"),
@@ -135,10 +134,9 @@ def _json(response):
 
 
 def list_vaults(did, workspaces=()):
-    """The private vaults `did` holds, oldest first, plus the vaults of the
-    `workspaces` IDs named. Raises `SyncRelayError`.
-
-    The Notes page names no workspaces: it is about private vaults only.
+    """`did`'s private vault, plus the vaults of the `workspaces` IDs named,
+    oldest first. The relay makes the private vault if this is the first time
+    anyone has asked for it. Raises `SyncRelayError`.
     """
     params = {"did": did}
     if workspaces:
@@ -153,75 +151,44 @@ def list_vaults(did, workspaces=()):
     return [_vault(raw) for raw in body["vaults"]]
 
 
-def create_vault(did, name):
-    """Create a vault owned by `did`. Raises `NameTaken` or `SyncRelayError`."""
-    response = _call("POST", json={"did": did, "name": name})
-    if response.status_code == 409:
-        raise NameTaken(name)
-    if response.status_code != 201:
-        log.warning("sync relay: creating a vault answered %s", response.status_code)
-        raise SyncRelayError(f"HTTP {response.status_code}")
-    return _vault(_json(response))
+def private_vault(did):
+    """`did`'s private vault, made by the relay if this is the first time
+    anyone has asked for it. Raises `SyncRelayError`.
+
+    Asks with no workspaces, so the listing holds only the member's own.
+    """
+    for found in list_vaults(did):
+        if found["workspace"] is None:
+            return found
+    raise SyncRelayError("the listing held no private vault")
 
 
 def workspace_vault(did, workspace):
-    """The workspace's vault, or None if it has none yet. Raises
+    """The workspace's vault, carrying the workspace's current name. Raises
     `SyncRelayError`.
 
-    `did` is the signed-in member, who the caller has already found in the
-    workspace. The relay's listing needs a DID, and gives back their private
-    vaults too, which are dropped here.
+    The relay makes it if the workspace has none, and renames it if the name
+    sent differs from the one it carries, so this one call serves the
+    workspace's page and its rename. `did` is the signed-in member, whom the
+    caller has already found in the workspace: the relay records them as its
+    maker if it makes it now.
     """
-    wanted = str(workspace.pk)
-    for found in list_vaults(did, workspaces=[wanted]):
-        if found["workspace"] == wanted:
-            return found
-    return None
-
-
-def create_workspace_vault(did, workspace):
-    """Make the workspace's vault, named after it. `did` is the member making
-    it. Raises `WorkspaceHasVault` or `SyncRelayError`."""
     response = _call(
-        "POST",
+        "PUT",
+        path="/internal/vaults/workspace",
         json={
             "did": did,
-            "name": vault_name_for(workspace),
             "workspace": str(workspace.pk),
+            "name": vault_name_for(workspace),
         },
     )
-    if response.status_code == 409:
-        raise WorkspaceHasVault(workspace.pk)
-    if response.status_code != 201:
+    if response.status_code != 200:
         log.warning(
-            "sync relay: creating a workspace vault answered %s", response.status_code
+            "sync relay: asking for a workspace vault answered %s",
+            response.status_code,
         )
         raise SyncRelayError(f"HTTP {response.status_code}")
     return _vault(_json(response))
-
-
-def rename_workspace_vault(workspace):
-    """Give the workspace's vault the workspace's current name. Raises
-    `SyncRelayError`.
-
-    A workspace with no vault is not an error: there is nothing to rename. That
-    is a `404` saying `no_vault`, and only that: any other 404 is a relay that
-    is not the one we think, and is reported.
-    """
-    response = _call(
-        "PATCH",
-        json={"workspace": str(workspace.pk), "name": vault_name_for(workspace)},
-    )
-    if response.status_code == 204:
-        return
-    if response.status_code == 404:
-        body = _json(response)
-        if isinstance(body, dict) and body.get("error") == "no_vault":
-            return
-    log.warning(
-        "sync relay: renaming a workspace vault answered %s", response.status_code
-    )
-    raise SyncRelayError(f"HTTP {response.status_code}")
 
 
 def all_vaults():
