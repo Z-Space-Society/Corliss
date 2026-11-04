@@ -367,10 +367,11 @@ must not drift.
   secret out. `test_provider.py`, `test_gate.py` and `test_backchannel.py`
   pass without edits to their flow assertions.
 - **No request chooses whose vaults.** `views.notes` passes
-  `request.user.did` to the relay for list and for create, the same rule the
-  API keys section states for LiteLLM. A workspace's vault is asked about,
-  made or renamed only after `_workspace_for_member` has found the signed-in
-  member in that workspace.
+  `request.user.did` to the relay's listing, which makes the member's private
+  vault when they have none, the same rule the API keys section states for
+  LiteLLM. A workspace's vault is asked for, and so made or renamed, only
+  after `_workspace_for_member` has found the signed-in member in that
+  workspace.
 - **The `workspaces` claim is workspace access to notes, and carries IDs,
   never names.** The relay keeps no roster, so a member's workspaces reach it
   only through their tokens, and the token travels in a websocket URL. Do not

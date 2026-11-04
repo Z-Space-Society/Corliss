@@ -2,32 +2,26 @@
 {% load static %}
 
 {% comment %}
-The Obsidian page: what the notes service is, the member's vaults, and how to
-connect Obsidian and an MCP client. See `views.notes`.
+The Obsidian page: what the notes service is, the member's private vault, and
+how to connect Obsidian and an MCP client. See `views.notes`.
 
 The link to `connect-opencode.sh` uses the unhashed static path, the
 address the README documents, rather than `{% static %}`'s versioned one.
 
-**The instructions always render.** The vault list depends on the sync relay
+**The instructions always render.** The vault depends on the sync relay
 answering, and the rest of the page does not: a member reading how this works
-should not be shown an error where the explanation was. Three states for the
-list, each said in words:
+should not be shown an error where the explanation was. Three states, each
+said in words:
 
-- not configured: this deployment has no relay connected. No form.
-- unreachable: it has one and it did not answer. No form.
-- answered: the list, or that there are none yet, and the form.
-
-A vault is made here and nowhere else. The plugin only picks from this list.
+- not configured: this deployment has no relay connected.
+- unreachable: it has one and it did not answer.
+- answered: the member's private vault. Every member has one: the relay makes
+  it the first time anyone asks, this page included, so there is no form.
 
 **Connected apps** lists the apps that can reach this member's notes without
 asking again, from `views._connected_apps`. Each is headed by its host, the
 part Corliss checked, with the name it gives itself beneath, as on the consent
 screen. Disconnect is a one-button form per row.
-
-No script. One form with one field, inside a `<details>` opened by the + in
-the card's corner. It renders open after a failed create, so the error is not
-hidden behind the +, and when there are no vaults yet, since the empty-state
-line asks the member to make one.
 {% endcomment %}
 
 {% block title %}Notes{% endblock %}
@@ -43,63 +37,37 @@ line asks the member to make one.
 
   <!-- <p class="page-text page-text--note">Notes are not end-to-end encrypted.</p> -->
 
-  <h2 class="section-title">Your Private Vaults</h2>
-  <div class="card card--dismissable">
+  <h2 class="section-title">Your Private Vault</h2>
+  <div class="card">
     {% if not configured %}
       <p class="alert alert--notice" role="status">
         <strong>Not set up.</strong> This deployment has no notes service
-        connected, so vaults cannot be made here yet.
+        connected, so there are no vaults here yet.
       </p>
     {% elif not reachable %}
       <p class="alert" role="alert">
         <strong>Not reachable.</strong> The notes service did not answer just
-        now. Your vaults are unaffected. Try again in a moment.
+        now. Your notes are unaffected. Try again in a moment.
       </p>
     {% else %}
-      {% if vaults %}
-        <div class="table-scroll">
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Notes</th>
-                <th>Size</th>
-                <th>Created</th>
-                <th>Last change</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for vault in vaults %}
-                <tr>
-                  <td>{{ vault.name }}</td>
-                  <td class="data-table__muted">{{ vault.note_count|default_if_none:"—" }}</td>
-                  <td class="data-table__muted">{% if vault.bytes is None %}—{% else %}{{ vault.bytes|filesizeformat }}{% endif %}</td>
-                  <td class="data-table__muted">{{ vault.created_at|date:"Y-m-d"|default:"—" }}</td>
-                  <td class="data-table__muted">{{ vault.last_change_at|date:"Y-m-d H:i"|default:"—" }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+      <dl class="modal__facts">
+        <div class="modal__fact">
+          <dt>Notes</dt>
+          <dd>{{ vault.note_count|default_if_none:"—" }}</dd>
         </div>
-      {% else %}
-        <p class="hint-text">You have no vaults yet. Make one to start:
-        Obsidian and the MCP service both work on a vault that already
-        exists.</p>
-      {% endif %}
-
-      <details class="vault-new"{% if name_error or not vaults %} open{% endif %}>
-        <summary class="card__add" title="New vault" aria-label="New vault">+</summary>
-        <form method="post" action="{% url 'notes' %}" class="stacked-form">
-          {% csrf_token %}
-          <div>
-            <label for="vault-name">New vault</label>
-            {% if name_error %}<ul class="errorlist"><li>{{ name_error }}</li></ul>{% endif %}
-            <input id="vault-name" name="name" type="text" maxlength="100"
-                   value="{{ name }}" placeholder="what to call it" required>
-          </div>
-          <button type="submit" class="btn-primary">Create vault</button>
-        </form>
-      </details>
+        <div class="modal__fact">
+          <dt>Size</dt>
+          <dd>{% if vault.bytes is None %}—{% else %}{{ vault.bytes|filesizeformat }}{% endif %}</dd>
+        </div>
+        <div class="modal__fact">
+          <dt>Last change</dt>
+          <dd>{{ vault.last_change_at|date:"Y-m-d H:i"|default:"—" }}</dd>
+        </div>
+      </dl>
+      <p class="page-text">Only you can read these notes.{% if vault.path %}
+      SCN Sync in Obsidian and MCP clients both show them as
+      <code>{{ vault.path }}</code>.{% endif %} A workspace's notes are on
+      its own page.</p>
     {% endif %}
   </div>
 
@@ -116,7 +84,6 @@ line asks the member to make one.
         <strong>Enable</strong> it.</li>
         <li>Paste the address above when it asks for the sync address.</li>
         <li>Sign in with your handle.</li>
-        <li>Pick one of your vaults from the list.</li>
       </ol>
       <p class="hint-text">Do the same on each device. Notes sync as you add
       them.</p>

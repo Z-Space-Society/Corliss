@@ -381,10 +381,10 @@ class WorkspaceEditTests(NoRelayMixin, NoRosterMixin, TestCase):
     SYNC_RELAY_URL=RELAY, SYNC_RELAY_SERVICE_TOKEN=TOKEN, OIDC_RESOURCES=RESOURCES
 )
 class WorkspaceNotesTests(NoRosterMixin, TestCase):
-    """A workspace's notes vault: made, shown and renamed from its page.
+    """A workspace's notes vault: made and kept named by rendering its page.
 
     The relay holds the vault and Corliss stores nothing about it, so every
-    test here is about what is asked of the relay and what the page says.
+    test here is about what is asked of the relay and what the page is given.
     """
 
     def setUp(self):
@@ -396,108 +396,58 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
         self.url = reverse("workspace_edit", kwargs={"pk": self.workspace.pk})
         self.client.force_login(self.alice)
 
-    def shared(self, name="Garden Club", **extra):
-        return vault(name, **extra) | {
-            "workspace": str(self.workspace.pk),
-            "path": f"Workspaces/{name}",
-        }
+    def test_the_page_asks_for_the_vault_as_the_member_under_the_workspaces_name(self):
+        with Relay() as relay:
+            resp = self.client.get(self.url)
+        self.assertEqual(
+            [(c[0], c[2]["json"]) for c in relay.calls],
+            [("PUT", {"did": ALICE, "workspace": str(self.workspace.pk), "name": "Garden Club"})],
+        )
+        self.assertTrue(resp.context["vault_reachable"])
+        self.assertEqual(resp.context["vault"]["workspace"], str(self.workspace.pk))
 
     def test_the_vault_is_named_by_the_relays_path(self):
         """The page shows what the relay sends, so a path that is not simply
         the group and the name proves nothing here builds it."""
-        with Relay(listing=[self.shared() | {"path": "Shared/Garden Club"}]):
+        sent = vault("Garden Club", workspace=str(self.workspace.pk))
+        sent["path"] = "Shared/Garden Club"
+        with Relay(workspace_answer=answer(200, sent)):
             resp = self.client.get(self.url)
         self.assertContains(resp, "Shared/Garden Club")
         self.assertNotContains(resp, "Workspaces/Garden Club")
 
-    def test_a_relay_that_sends_no_path_gets_no_path_line(self):
-        older = vault("Garden Club") | {"workspace": str(self.workspace.pk)}
-        with Relay(listing=[older]):
-            resp = self.client.get(self.url)
-        self.assertContains(resp, "Garden Club")
-        self.assertNotContains(resp, "Workspaces/")
-
-    def test_with_no_vault_the_page_offers_to_make_one(self):
-        with Relay(listing=[vault("Private")]) as relay:
-            resp = self.client.get(self.url)
-        self.assertContains(resp, "Create notes vault")
-        self.assertNotContains(resp, "Private")
-        self.assertEqual(
-            relay.calls[0][2]["params"],
-            {"did": ALICE, "workspaces": str(self.workspace.pk)},
-        )
-
-    def test_with_a_vault_the_page_shows_it_and_how_to_reach_it(self):
-        with Relay(listing=[self.shared(note_count=3)]):
-            resp = self.client.get(self.url)
-        self.assertNotContains(resp, "Create notes vault")
-        self.assertContains(resp, "Workspaces/Garden Club")
-        self.assertContains(resp, reverse("notes"))
-
-    def test_creating_asks_the_relay_as_the_member_and_comes_back(self):
+    def test_a_new_workspace_lands_on_a_page_that_makes_its_vault(self):
         with Relay() as relay:
-            resp = self.client.post(self.url, {"action": "create_vault"})
-        self.assertRedirects(resp, self.url, fetch_redirect_response=False)
-        self.assertEqual(
-            relay.made("POST")[0][2]["json"],
-            {"did": ALICE, "name": "Garden Club", "workspace": str(self.workspace.pk)},
-        )
+            resp = self.client.post(reverse("workspace_new"), {"name": "Seed Library"}, follow=True)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([c[2]["json"]["name"] for c in relay.made("PUT")], ["Seed Library"])
 
-    def test_a_vault_someone_else_just_made_is_not_an_error(self):
-        taken = answer(409, {"error": "workspace_has_vault"})
-        with Relay(create_answer=taken, listing=[self.shared()]):
-            resp = self.client.post(self.url, {"action": "create_vault"}, follow=True)
-        self.assertNotContains(resp, "could not be created")
-        self.assertContains(resp, "Workspaces/Garden Club")
+    def test_a_rename_reaches_the_vault_on_the_page_it_lands_on(self):
+        with Relay() as relay:
+            self.client.post(self.url, {"action": "save", "name": "Seed Library"}, follow=True)
+        self.workspace.refresh_from_db()
+        self.assertEqual(self.workspace.name, "Seed Library")
+        self.assertEqual([c[2]["json"]["name"] for c in relay.made("PUT")], ["Seed Library"])
 
-    def test_a_relay_that_fails_to_create_says_so(self):
-        with Relay(create_answer=answer(500)), patch("corliss.sync_relay.log"):
-            resp = self.client.post(self.url, {"action": "create_vault"}, follow=True)
-        self.assertContains(resp, "could not be created right now")
-
-    def test_only_a_member_of_the_workspace_can_make_its_vault(self):
+    def test_a_non_member_of_the_workspace_never_reaches_the_relay(self):
         self.client.force_login(self.bob)
         with Relay() as relay:
-            resp = self.client.post(self.url, {"action": "create_vault"})
+            resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(relay.calls, [])
 
-    def test_renaming_the_workspace_renames_its_vault(self):
-        with Relay() as relay:
-            self.client.post(self.url, {"action": "save", "name": "Seed Library"})
-        self.assertEqual(
-            relay.made("PATCH")[0][2]["json"],
-            {"workspace": str(self.workspace.pk), "name": "Seed Library"},
-        )
-
-    def test_changing_only_the_description_leaves_the_vault_alone(self):
-        with Relay() as relay:
-            self.client.post(
-                self.url,
-                {"action": "save", "name": "Garden Club", "description": "Seeds"},
-            )
-        self.assertEqual(relay.made("PATCH"), [])
-
-    def test_a_rename_the_relay_misses_is_saved_and_said(self):
-        with Relay(rename_answer=answer(500)), patch("corliss.sync_relay.log"):
-            resp = self.client.post(
-                self.url, {"action": "save", "name": "Seed Library"}, follow=True
-            )
-        self.workspace.refresh_from_db()
-        self.assertEqual(self.workspace.name, "Seed Library")
-        self.assertContains(resp, "kept the old name")
-
-    def test_an_unreachable_relay_says_so_and_offers_nothing(self):
-        with Relay(list_answer=requests.ConnectionError()), patch(
+    def test_an_unreachable_relay_still_renders_the_page(self):
+        with Relay(workspace_answer=requests.ConnectionError()), patch(
             "corliss.sync_relay.log"
         ):
             resp = self.client.get(self.url)
-        self.assertContains(resp, "not answering")
-        self.assertNotContains(resp, "Create notes vault")
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.context["vault_reachable"])
+        self.assertIsNone(resp.context["vault"])
 
     @override_settings(SYNC_RELAY_URL="")
-    def test_with_notes_not_set_up_there_is_no_notes_section(self):
+    def test_with_notes_not_set_up_the_relay_is_not_asked(self):
         with Relay() as relay:
             resp = self.client.get(self.url)
-        self.assertNotContains(resp, "Create notes vault")
+        self.assertEqual(resp.status_code, 200)
         self.assertEqual(relay.calls, [])

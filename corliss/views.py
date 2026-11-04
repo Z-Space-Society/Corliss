@@ -1016,17 +1016,12 @@ def workspace_edit(request, pk):
             return _add_workspace_member(request, workspace)
         if action == "remove_member":
             return _remove_workspace_member(request, workspace)
-        if action == "create_vault":
-            return _create_workspace_vault(request, workspace)
 
-        # Read before the form is bound: validating a ModelForm writes the
-        # posted values onto its instance.
-        old_name = workspace.name
         form = WorkspaceForm(request.POST, instance=workspace)
         if form.is_valid():
             form.save()
-            if workspace.name != old_name:
-                _rename_workspace_vault(request, workspace)
+            # A rename reaches the vault on the page this lands on, which
+            # sends the relay the workspace's name every time it renders.
             return redirect("workspace_edit", pk=workspace.pk)
     else:
         form = WorkspaceForm(instance=workspace)
@@ -1046,8 +1041,11 @@ def workspace_edit(request, pk):
     )
 
     # The workspace's vault, asked of the relay as the signed-in member, whom
-    # `_workspace_for_member` has already found in it. None when the relay did
-    # not answer, which the page says rather than hiding the section.
+    # `_workspace_for_member` has already found in it. The relay makes it the
+    # first time anyone asks and gives it the name sent, which is how a new
+    # workspace gets its vault and a renamed one's vault follows. None when
+    # the relay did not answer, which the page says rather than hiding the
+    # section; the next render asks again.
     configured = sync_relay.is_configured()
     vault = None
     vault_reachable = False
@@ -1115,49 +1113,6 @@ def _add_workspace_member(request, workspace):
         workspace.members.add(user)
         request.session[WORKSPACE_NOTICE_SESSION_KEY] = f"Added {handle}."
     return redirect("workspace_edit", pk=workspace.pk)
-
-
-def _create_workspace_vault(request, workspace):
-    """Make the workspace's vault on the relay. Redirects back.
-
-    Anyone in the workspace may, the same flat rule as everything else here.
-    The vault takes the workspace's name, and follows it when the workspace is
-    renamed, so there is nothing to type.
-
-    A second press, or two members pressing at once, finds the relay already
-    holding one, and that is the outcome they wanted: it is not reported as a
-    failure.
-    """
-    if not sync_relay.is_configured():
-        request.session[WORKSPACE_ERROR_SESSION_KEY] = "Notes are not set up here."
-        return redirect("workspace_edit", pk=workspace.pk)
-    try:
-        sync_relay.create_workspace_vault(request.user.did, workspace)
-    except sync_relay.WorkspaceHasVault:
-        pass
-    except sync_relay.SyncRelayError:
-        request.session[WORKSPACE_ERROR_SESSION_KEY] = (
-            "The notes vault could not be created right now. Try again shortly."
-        )
-    return redirect("workspace_edit", pk=workspace.pk)
-
-
-def _rename_workspace_vault(request, workspace):
-    """Carry a new workspace name to its vault, if it has one.
-
-    The rename has already been saved here, so a relay that does not answer
-    leaves the two names apart. That is said on the page, and saving the name
-    again is the retry: nothing is queued to try later.
-    """
-    if not sync_relay.is_configured():
-        return
-    try:
-        sync_relay.rename_workspace_vault(workspace)
-    except sync_relay.SyncRelayError:
-        request.session[WORKSPACE_ERROR_SESSION_KEY] = (
-            "The workspace was renamed, but its notes vault kept the old name. "
-            "Save the name again shortly to rename it."
-        )
 
 
 def _remove_workspace_member(request, workspace):
@@ -1507,48 +1462,28 @@ def notes_disconnect(request):
 
 
 @member_required
-@require_http_methods(["GET", "POST"])
+@require_http_methods(["GET"])
 def notes(request):
-    """The Notes page: the notes service, and the member's vaults.
+    """The Notes page: the notes service, and the member's private vault.
 
-    The vaults are the relay's, not ours. This view asks `corliss.sync_relay`
-    for them and stores nothing.
+    The vault is the relay's, not ours. This view asks `corliss.sync_relay`
+    for it and stores nothing. The relay makes it the first time anyone asks,
+    so there is nothing here to create.
 
-    **No request chooses whose vaults.** The relay's service token can list
-    and create for any DID, so the DID is `request.user.did` for both, and a
-    `did` in the query string or the form is never read.
+    **No request chooses whose vault.** The relay's service token can list
+    for any DID, so the DID is `request.user.did`, and a `did` in the query
+    string is never read.
 
     No state of the relay raises here or hides the instructions: not
     configured and unreachable are both things the page says about itself.
     """
     did = request.user.did
     configured = sync_relay.is_configured()
-    name = ""
-    name_error = None
 
-    if request.method == "POST" and configured:
-        name = request.POST.get("name", "").strip()
-        if not name:
-            name_error = "Give the vault a name."
-        elif len(name) > sync_relay.VAULT_NAME_MAX:
-            name_error = (
-                f"A vault name can be at most {sync_relay.VAULT_NAME_MAX} characters."
-            )
-        else:
-            try:
-                sync_relay.create_vault(did, name)
-            except sync_relay.NameTaken:
-                name_error = "You already have a vault with that name."
-            except sync_relay.SyncRelayError:
-                name_error = "The vault could not be created right now. Try again shortly."
-            else:
-                # Back to the page, which now lists it.
-                return redirect("notes")
-
-    member_vaults = None
+    vault = None
     if configured:
         try:
-            member_vaults = sync_relay.list_vaults(did)
+            vault = sync_relay.private_vault(did)
         except sync_relay.SyncRelayError:
             pass
 
@@ -1559,12 +1494,9 @@ def notes(request):
         {
             "connected_apps": _connected_apps(request.user),
             "configured": configured,
-            # None when the relay did not answer; a list, possibly empty, when
-            # it did. The template tells the two apart.
-            "vaults": member_vaults,
-            "reachable": member_vaults is not None,
-            "name": name,
-            "name_error": name_error,
+            # None when the relay did not answer.
+            "vault": vault,
+            "reachable": vault is not None,
             "sync_url": by_kind.get("sync", ""),
             "mcp_url": by_kind.get("mcp", ""),
         },
