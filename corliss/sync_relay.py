@@ -110,6 +110,9 @@ def _vault(raw):
         "url": raw.get("url", ""),
         # The workspace's ID as a string, or None for a member's private vault.
         "workspace": workspace if isinstance(workspace, str) else None,
+        # The relay's name for it under its group, "Workspaces/Garden Club".
+        # Shown as given, never built here; blank from a relay before v0.4.2.
+        "path": raw["path"] if isinstance(raw.get("path"), str) else "",
         "created_at": when("created_at"),
         # Null from the relay until something has been written to the vault.
         "last_change_at": when("last_change_at"),

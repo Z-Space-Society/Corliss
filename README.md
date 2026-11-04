@@ -1157,6 +1157,10 @@ else: `/notes/` is about a member's private vaults and never lists it.
   keeps its new name and the page says the vault kept the old one; saving the
   name again is the retry, and nothing is queued. A name over the relay's 100
   characters is cut to fit, the same way at create and at rename.
+- **The card names the vault by the relay's `path`**, such as
+  `Workspaces/Garden Club`, the name MCP and SCN Sync both use. The relay is
+  the one place "Workspaces" is spelled; nothing here builds the string, and a
+  relay older than v0.4.2, which sends no `path`, gets no such line.
 - **A second "Create notes vault" is not a failure.** Two members pressing it
   at once find the relay already holding one, which is what they wanted.
 

@@ -1057,7 +1057,6 @@ def workspace_edit(request, pk):
             vault_reachable = True
         except sync_relay.SyncRelayError:
             pass
-    by_kind = {resource.kind: resource.url for resource in oidc.resources()}
 
     return render(
         request,
@@ -1070,7 +1069,6 @@ def workspace_edit(request, pk):
             "notes_configured": configured,
             "vault": vault,
             "vault_reachable": vault_reachable,
-            "sync_url": by_kind.get("sync", ""),
             "notice": request.session.pop(WORKSPACE_NOTICE_SESSION_KEY, None),
             "error": request.session.pop(WORKSPACE_ERROR_SESSION_KEY, None),
         },
