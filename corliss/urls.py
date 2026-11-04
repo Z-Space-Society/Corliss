@@ -109,6 +109,8 @@ urlpatterns = [
          name="systems_deploy_history"),
     path("systems/deploys/<str:host>/<str:stamp>/", views.systems_deploy_log,
          name="systems_deploy_log"),
+    # Every vault on the relay, counts and sizes only, for cluster admins.
+    path("systems/notes/", views.systems_notes, name="systems_notes"),
     path("", views.home, name="home"),
 ]
 

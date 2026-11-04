@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% comment %}
+Every vault on the sync relay, for cluster admins. Counts and sizes only: the
+relay's listing carries no note titles or text, and this page must not grow a
+way to show them. See the README, "Notes: /systems/notes/".
+
+Tables are handles only, with the DID on the cell's title.
+{% endcomment %}
+
+{% block title %}Notes{% endblock %}
+
+{% block content %}
+<div class="account-view console-view">
+  <h1>Notes</h1>
+
+  <p class="page-text">Every vault on the notes service, and how much each
+  member holds. Counts and sizes only: no note titles or text are shown here.</p>
+
+  <p class="page-text page-text--note">Sizes are what the notes take in
+  storage, including their edit history, so they read larger than the notes as
+  files. A workspace's vault counts toward the workspace, not the member who
+  made it.</p>
+
+  <p class="page-text page-text--note"><a href="{% url 'systems' %}">Back to Systems</a></p>
+
+  {% if not configured %}
+    <p class="alert" role="alert">
+      <strong>Not set up.</strong> This deployment has no notes service
+      connected.
+    </p>
+  {% elif not reachable %}
+    <p class="alert" role="alert">
+      <strong>Not reachable.</strong> The notes service did not answer just
+      now. Try again in a moment.
+    </p>
+  {% else %}
+    <h2 class="section-title">Members</h2>
+    {% if indexing %}
+      <p class="page-text page-text--note">The notes service is still indexing
+      after a restart, so notes outside every vault are not counted yet.</p>
+    {% endif %}
+    <div class="card">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Member</th>
+              <th>Private vaults</th>
+              <th>Notes</th>
+              <th>In vaults</th>
+              <th>Outside vaults</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in members %}
+              <tr>
+                <td title="{{ row.did }}">{{ row.handle|default:"unknown member" }}</td>
+                <td class="data-table__muted">{{ row.vaults }}</td>
+                <td class="data-table__muted">{{ row.notes }}</td>
+                <td class="data-table__muted">{{ row.vault_bytes|filesizeformat }}</td>
+                <td class="data-table__muted">{% if row.unfiled_docs is None %}—{% else %}{{ row.unfiled_docs }} ({{ row.unfiled_bytes|filesizeformat }}){% endif %}</td>
+                <td>{% if row.total_bytes is None %}—{% else %}{{ row.total_bytes|filesizeformat }}{% endif %}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="6" class="data-table__muted">No member holds anything yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <h2 class="section-title">Vaults</h2>
+    <div class="card">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Vault</th>
+              <th>Held by</th>
+              <th>Notes</th>
+              <th>Size</th>
+              <th>Last change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for vault in vaults %}
+              <tr>
+                <td>{{ vault.path|default:vault.name }}</td>
+                {% if vault.workspace %}
+                  <td>{{ vault.holder|default:"deleted workspace" }}</td>
+                {% else %}
+                  <td title="{{ vault.holder_did }}">{{ vault.holder|default:"unknown member" }}</td>
+                {% endif %}
+                <td class="data-table__muted">{{ vault.note_count|default_if_none:"—" }}</td>
+                <td class="data-table__muted">{% if vault.bytes is None %}—{% else %}{{ vault.bytes|filesizeformat }}{% endif %}</td>
+                <td class="data-table__muted">{{ vault.last_change_at|date:"Y-m-d H:i"|default:"—" }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="5" class="data-table__muted">No vaults yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -389,6 +389,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Lock: discard the stored service session so it can be authenticated again, e.g. after the account moved PDS (POST, cluster admins) | `/manage/lock` |
 | Systems — the stack, with live health checks and each service's provisioned version (cluster admins) | `/systems/` |
 | Deploys: each service's last provision run, its history, and each run's log, as zai-ops recorded them (cluster admins) | `/systems/deploys/`, `/systems/deploys/<host>/`, `/systems/deploys/<host>/<stamp>/` |
+| Notes: every vault on the sync relay, and how much each member holds, counts and sizes only (cluster admins) | `/systems/notes/` |
 | Django admin | `/admin/` |
 
 The parenthesised audiences above are the four access levels, and each is one
@@ -913,6 +914,34 @@ which is everything the page claims when it says "Up". A client library would
 buy a real credential's worth of complexity to learn what eleven bytes on a
 socket already prove. If Django's cache is ever pointed at Redis, do it
 deliberately; do not quietly adopt this setting for it.
+
+### Notes: `/systems/notes/`
+
+Every vault on scn-sync-relay with its holder, note count, size and last
+change, and per member their private vaults and what they hold in storage. It
+reads the relay's `GET /internal/vaults/all` (relay v0.4.3 or later) through
+`sync_relay.all_vaults`.
+
+- **Counts and sizes, never titles or text.** Seeing what members have stored
+  is a different decision from seeing what they wrote. The relay's listing
+  carries neither, so this page cannot show them by mistake.
+- **This view is the one caller of `sync_relay.all_vaults`.** The relay route
+  takes no parameters, so nothing in a request chooses whose vaults come back;
+  the admin gate is what decides who sees them. Another page calling it would
+  hand every member's vault names to whoever that page lets in.
+- **A workspace's vault counts toward the workspace, not its creator.** The
+  relay records who made it, but the member who pressed the button does not
+  hold it, so it is not in their total.
+- **"Not in a vault" is documents the member sent that no vault reaches**:
+  deleted entries, an interrupted move, files of a type the relay does not
+  index. With the vaults' sizes, it adds up to what they hold. The relay
+  reports it only once every vault has been indexed since it started, so just
+  after a relay restart those cells read "—".
+- **Holders are named from our tables**, one query each, never through
+  `membership.handles_for`, which would fetch a DID document per unknown DID.
+  A DID with no `User` row reads as an unknown member, with the DID on the
+  cell's title.
+- **Not set up and not reachable are both messages on the page**, never a 500.
 
 ## About: `/about/`
 

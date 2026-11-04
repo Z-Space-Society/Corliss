@@ -205,6 +205,8 @@
               {% endif %}
               {% if user.is_cluster_admin %}
                 <a class="nav__dropdown-item" href="{% url 'systems' %}">Systems</a>
+                <a class="nav__dropdown-item" href="{% url 'systems_deploys' %}">Deploys</a>
+                <a class="nav__dropdown-item" href="{% url 'systems_notes' %}">Notes</a>
                 <div class="nav__dropdown-rule"></div>
               {% endif %}
               {% comment %}

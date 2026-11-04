@@ -1636,6 +1636,105 @@ def systems_deploy_log(request, host, stamp):
     return render(request, "systems_deploy_log.html", {"record": record, "log": text})
 
 
+@require_http_methods(["GET"])
+@admin_required
+def systems_notes(request):
+    """Every vault on the relay, and how much each member holds.
+
+    Counts and sizes only, never a note's title or text: seeing what members
+    have stored is a different decision from seeing what they wrote, and the
+    relay's listing carries neither. Gated with `/systems/` and read-only, so
+    there is no write to re-ask authority for.
+
+    **The one caller of `sync_relay.all_vaults`.** Any other page that called
+    it would be handing every member's vault names to whoever that page lets
+    in.
+
+    Holders are named from our own tables, one query each, never through
+    `membership.handles_for`, whose fallback fetches a DID document per
+    unknown DID: this page has to render when the network does not.
+    """
+    configured = sync_relay.is_configured()
+    vaults = unfiled = None
+    if configured:
+        try:
+            vaults, unfiled = sync_relay.all_vaults()
+        except sync_relay.SyncRelayError:
+            pass
+
+    members = []
+    if vaults is not None:
+        private = [v for v in vaults if v["workspace"] is None]
+        dids = {v["owner_did"] for v in private} | {u["did"] for u in unfiled or []}
+        handles = dict(User.objects.filter(did__in=dids).values_list("did", "username"))
+        # A workspace ID is opaque to the relay; ours are primary keys.
+        ids = {int(v["workspace"]) for v in vaults if (v["workspace"] or "").isdigit()}
+        names = {
+            str(pk): name
+            for pk, name in Workspace.objects.filter(pk__in=ids).values_list("pk", "name")
+        }
+
+        by_did = {}
+
+        def member(did):
+            if did not in by_did:
+                by_did[did] = {
+                    "did": did,
+                    "handle": handles.get(did, ""),
+                    "vaults": 0,
+                    "notes": 0,
+                    "vault_bytes": 0,
+                    "unfiled_docs": None,
+                    "unfiled_bytes": None,
+                    "total_bytes": None,
+                }
+            return by_did[did]
+
+        for vault in vaults:
+            if vault["workspace"] is None:
+                vault["holder"] = handles.get(vault["owner_did"], "")
+                vault["holder_did"] = vault["owner_did"]
+                # A workspace's vault counts toward the workspace, not toward
+                # the member who happened to make it.
+                row = member(vault["owner_did"])
+                row["vaults"] += 1
+                row["notes"] += vault["note_count"] or 0
+                row["vault_bytes"] += vault["bytes"] or 0
+            else:
+                vault["holder"] = names.get(vault["workspace"], "")
+                vault["holder_did"] = ""
+
+        if unfiled is not None:
+            for row in by_did.values():
+                row["unfiled_docs"] = row["unfiled_bytes"] = 0
+            for entry in unfiled:
+                row = member(entry["did"])
+                row["unfiled_docs"] = entry["docs"]
+                row["unfiled_bytes"] = entry["bytes"]
+            for row in by_did.values():
+                row["total_bytes"] = row["vault_bytes"] + row["unfiled_bytes"]
+
+        members = sorted(
+            by_did.values(),
+            key=lambda row: (
+                -(row["total_bytes"] if row["total_bytes"] is not None else row["vault_bytes"]),
+                row["handle"] or row["did"],
+            ),
+        )
+
+    return render(
+        request,
+        "systems_notes.html",
+        {
+            "configured": configured,
+            "reachable": vaults is not None,
+            "vaults": vaults or [],
+            "members": members,
+            "indexing": vaults is not None and unfiled is None,
+        },
+    )
+
+
 @require_http_methods(["GET", "POST"])
 @admin_required
 def manage(request):
