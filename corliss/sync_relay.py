@@ -25,7 +25,9 @@ Three properties hold here, each with a plausible wrong answer:
   may choose one. `views.notes` passes `request.user.did` and nothing else.
   A workspace's vault is asked about only after `views._workspace_for_member`
   has found the signed-in member in that workspace, so the workspace ID in a
-  URL chooses nothing either.
+  URL chooses nothing either. `all_vaults` names nobody: it asks for every
+  vault at once, and only `views.systems_notes`, behind `@admin_required`,
+  calls it.
 - **Nothing is retried and nothing is stored.** A failure is shown to the
   member, who can press the button again. A vault exists when the relay says
   so and in no table of ours.
@@ -73,8 +75,8 @@ def is_configured() -> bool:
     return bool(settings.SYNC_RELAY_URL and settings.SYNC_RELAY_SERVICE_TOKEN)
 
 
-def _call(method, **kwargs):
-    url = settings.SYNC_RELAY_URL.rstrip("/") + "/internal/vaults"
+def _call(method, path="/internal/vaults", **kwargs):
+    url = settings.SYNC_RELAY_URL.rstrip("/") + path
     try:
         return requests.request(
             method,
@@ -87,8 +89,13 @@ def _call(method, **kwargs):
             **kwargs,
         )
     except requests.RequestException as exc:
-        log.warning("sync relay: %s /internal/vaults failed: %s", method, exc)
+        log.warning("sync relay: %s %s failed: %s", method, path, exc)
         raise SyncRelayError("unreachable") from exc
+
+
+def _count(value):
+    """An integer the relay sent, or None for anything else."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _vault(raw):
@@ -99,10 +106,6 @@ def _vault(raw):
     def when(key):
         value = raw.get(key)
         return parse_datetime(value) if isinstance(value, str) else None
-
-    def count(key):
-        value = raw.get(key)
-        return value if isinstance(value, int) and not isinstance(value, bool) else None
 
     workspace = raw.get("workspace")
     return {
@@ -119,8 +122,8 @@ def _vault(raw):
         # Null until the relay has walked the vault since it started, and
         # absent from a relay older than v0.3.0. `bytes` is stored Automerge
         # history, not the notes as files.
-        "note_count": count("note_count"),
-        "bytes": count("bytes"),
+        "note_count": _count(raw.get("note_count")),
+        "bytes": _count(raw.get("bytes")),
     }
 
 
@@ -219,3 +222,49 @@ def rename_workspace_vault(workspace):
         "sync relay: renaming a workspace vault answered %s", response.status_code
     )
     raise SyncRelayError(f"HTTP {response.status_code}")
+
+
+def all_vaults():
+    """Every vault on the relay, and each member's documents no vault reaches,
+    as `(vaults, unfiled)`. Raises `SyncRelayError`.
+
+    For the admin view only. Each vault is as `list_vaults` gives it, plus
+    `owner_did`: the member who made it, which for a workspace's vault is not
+    who holds it. `unfiled` is a list of `{did, docs, bytes}`, or None while
+    the relay is still indexing after a start, when it cannot tell an
+    unfiled note from one in a vault it has not walked yet.
+    """
+    response = _call("GET", path="/internal/vaults/all")
+    if response.status_code != 200:
+        log.warning("sync relay: listing every vault answered %s", response.status_code)
+        raise SyncRelayError(f"HTTP {response.status_code}")
+    body = _json(response)
+    if not isinstance(body, dict) or not isinstance(body.get("vaults"), list):
+        raise SyncRelayError("the answer was not a vault listing")
+
+    vaults = []
+    for raw in body["vaults"]:
+        found = _vault(raw)
+        owner = raw.get("owner_did")
+        if not isinstance(owner, str):
+            raise SyncRelayError("a vault in the answer names no owner")
+        found["owner_did"] = owner
+        vaults.append(found)
+
+    raw_unfiled = body.get("unfiled")
+    if raw_unfiled is None:
+        return vaults, None
+    if not isinstance(raw_unfiled, list):
+        raise SyncRelayError("unfiled is not a list")
+    unfiled = []
+    for entry in raw_unfiled:
+        if not isinstance(entry, dict) or not isinstance(entry.get("did"), str):
+            raise SyncRelayError("an unfiled entry is not the expected shape")
+        unfiled.append(
+            {
+                "did": entry["did"],
+                "docs": _count(entry.get("docs")) or 0,
+                "bytes": _count(entry.get("bytes")) or 0,
+            }
+        )
+    return vaults, unfiled

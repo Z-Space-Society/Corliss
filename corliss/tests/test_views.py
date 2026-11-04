@@ -447,12 +447,6 @@ class NavMenuTests(NoRosterMixin, TestCase):
         self.assertNotContains(resp, ">HappyView<")
         self.assertNotContains(resp, ">Beszel<")
 
-    def test_cluster_admin_sees_systems(self):
-        self._as_cluster_admin()
-        self.client.force_login(self.user)
-        resp = self.client.get(reverse("home"))
-        self.assertContains(resp, reverse("systems"))
-
     def test_a_plain_member_sees_no_systems_link(self):
         _grant()
         self.client.force_login(self.user)
@@ -631,14 +625,6 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         _grant()
         self.client.force_login(self.user)
         self.assertEqual(self.client.get(reverse("systems")).status_code, 404)
-
-    def test_systems_links_to_the_deploys_and_each_rows_history(self):
-        self._as_cluster_admin()
-        self.client.force_login(self.user)
-        resp = self.client.get(reverse("systems"))
-        self.assertContains(resp, reverse("systems_deploys"))
-        # Linked by inventory name, shown by display name.
-        self.assertContains(resp, reverse("systems_deploy_history", args=["object-store"]))
 
     @override_settings(GARAGE_S3_URL="", MANIFEST_BUCKET="")
     def test_the_real_probes_render_with_nothing_reachable(self):

@@ -653,3 +653,163 @@ class ConnectScriptTests(TestCase):
 
     def test_the_connect_script_is_at_its_published_path(self):
         self.assertIsNotNone(finders.find("help/scripts/connect-opencode.sh"))
+
+
+ALL = f"{RELAY}/internal/vaults/all"
+BOB = "did:plc:bobbobbobbobbobbobbobbob"
+
+
+def held(name, owner, *, workspace=None, path=None, **sizes):
+    return vault(name, **sizes) | {
+        "owner_did": owner,
+        "workspace": workspace,
+        "path": path or (f"Workspaces/{name}" if workspace else f"Private/{name}"),
+    }
+
+
+class AllVaultsClientTests(VaultsCase):
+    """`sync_relay.all_vaults`: the admin listing, on its own."""
+
+    def test_it_asks_the_all_route_with_the_service_token_and_no_parameters(self):
+        body = {"vaults": [held("Notes", DID)], "unfiled": []}
+        with Relay(list_answer=answer(200, body)) as relay:
+            vaults, unfiled = sync_relay.all_vaults()
+
+        method, url, kwargs = relay.calls[0]
+        self.assertEqual((method, url), ("GET", ALL))
+        self.assertNotIn("params", kwargs)
+        self.assertEqual(kwargs["headers"], {"Authorization": f"Bearer {TOKEN}"})
+        self.assertIs(kwargs["allow_redirects"], False)
+        self.assertEqual(vaults[0]["owner_did"], DID)
+        self.assertEqual(vaults[0]["path"], "Private/Notes")
+        self.assertEqual(unfiled, [])
+
+    def test_unfiled_is_read_and_null_stays_none(self):
+        entry = {"did": DID, "docs": 3, "bytes": 900}
+        with Relay(list_answer=answer(200, {"vaults": [], "unfiled": [entry]})):
+            self.assertEqual(sync_relay.all_vaults(), ([], [entry]))
+        with Relay(list_answer=answer(200, {"vaults": [], "unfiled": None})):
+            self.assertEqual(sync_relay.all_vaults(), ([], None))
+
+    def test_anything_but_a_good_answer_is_an_error(self):
+        failures = [
+            answer(401, text="unauthorized\n"),
+            answer(404, text=""),
+            answer(200, text="<html>"),
+            answer(200, {"vaults": "none"}),
+            answer(200, {"vaults": [vault("Notes")], "unfiled": []}),
+            answer(200, {"vaults": [], "unfiled": "none"}),
+            answer(200, {"vaults": [], "unfiled": [{"docs": 1}]}),
+            requests.ConnectionError("refused"),
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure), Relay(list_answer=failure):
+                with patch.object(sync_relay.log, "warning"):
+                    with self.assertRaises(sync_relay.SyncRelayError):
+                        sync_relay.all_vaults()
+
+
+@override_settings(SYNC_RELAY_URL=RELAY, SYNC_RELAY_SERVICE_TOKEN=TOKEN)
+class SystemsNotesTests(TestCase):
+    """`/systems/notes/`: every vault, for cluster admins only."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(username="alice.bsky.social", did=DID)
+        User.objects.create_user(username="bob.bsky.social", did=BOB)
+        self.workspace = Workspace.objects.create(name="Garden Club")
+        self.client.force_login(self.user)
+        self._admin(False)
+
+    def _admin(self, value):
+        patcher = patch("corliss.membership.is_cluster_admin", return_value=value)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def get(self, body=None, *, failure=None):
+        listing = failure or answer(200, body or {"vaults": [], "unfiled": []})
+        with Relay(list_answer=listing) as relay:
+            with patch.object(sync_relay.log, "warning"):
+                resp = self.client.get(reverse("systems_notes"))
+        return resp, relay
+
+    def test_a_member_who_is_not_an_admin_gets_a_404_and_the_relay_is_not_asked(self):
+        _grant(DID)
+        resp, relay = self.get()
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(relay.calls, [])
+
+    def test_a_signed_out_visitor_is_sent_to_sign_in_and_the_relay_is_not_asked(self):
+        self.client.logout()
+        resp, relay = self.get()
+        self.assertEqual(resp.status_code, 302)
+        self.assertEqual(relay.calls, [])
+
+    def test_an_admin_sees_every_vault_with_its_holder_and_each_members_total(self):
+        self._admin(True)
+        body = {
+            "vaults": [
+                held("Notes", DID, note_count=4, bytes=1000),
+                held("Work", DID, note_count=1, bytes=500),
+                held("Private", BOB, note_count=2, bytes=300),
+                held("Garden Club", DID, workspace=str(self.workspace.pk),
+                     note_count=9, bytes=7000),
+                held("Gone", BOB, workspace="999", note_count=0, bytes=10),
+            ],
+            "unfiled": [
+                {"did": BOB, "docs": 2, "bytes": 50},
+                {"did": OTHER, "docs": 1, "bytes": 20},
+            ],
+        }
+        resp, relay = self.get(body)
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual([c[1] for c in relay.calls], [ALL])
+
+        holders = [(v["path"], v["holder"]) for v in resp.context["vaults"]]
+        self.assertEqual(
+            holders,
+            [
+                ("Private/Notes", "alice.bsky.social"),
+                ("Private/Work", "alice.bsky.social"),
+                ("Private/Private", "bob.bsky.social"),
+                ("Workspaces/Garden Club", "Garden Club"),
+                ("Workspaces/Gone", ""),
+            ],
+        )
+
+        rows = {
+            row["did"]: (row["vaults"], row["notes"], row["vault_bytes"],
+                         row["unfiled_docs"], row["unfiled_bytes"], row["total_bytes"])
+            for row in resp.context["members"]
+        }
+        # Alice made the workspace's vault; it is not in her total.
+        self.assertEqual(rows[DID], (2, 5, 1500, 0, 0, 1500))
+        self.assertEqual(rows[BOB], (1, 2, 300, 2, 50, 350))
+        # Holds only unfiled documents, and has never signed in here.
+        self.assertEqual(rows[OTHER], (0, 0, 0, 1, 20, 20))
+        self.assertEqual(
+            [row["did"] for row in resp.context["members"]], [DID, BOB, OTHER]
+        )
+        self.assertFalse(resp.context["indexing"])
+
+    def test_while_the_relay_is_indexing_the_unfiled_figures_are_unknown(self):
+        self._admin(True)
+        body = {"vaults": [held("Notes", DID, note_count=1, bytes=100)], "unfiled": None}
+        resp, _ = self.get(body)
+        self.assertTrue(resp.context["indexing"])
+        (row,) = resp.context["members"]
+        self.assertIsNone(row["unfiled_docs"])
+        self.assertIsNone(row["total_bytes"])
+        self.assertEqual(row["vault_bytes"], 100)
+
+    def test_unreachable_or_not_configured_renders_rather_than_failing(self):
+        self._admin(True)
+        resp, _ = self.get(failure=requests.ConnectionError("refused"))
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.context["configured"])
+        self.assertFalse(resp.context["reachable"])
+
+        with override_settings(SYNC_RELAY_URL=""):
+            resp, relay = self.get()
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.context["configured"])
+        self.assertEqual(relay.calls, [])
