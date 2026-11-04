@@ -22,7 +22,13 @@ from django.urls import reverse
 
 from corliss import oidc, signing
 from corliss.apps import check_oidc_resources_parse
-from corliss.models import MembershipCache, OidcAuthCode, OidcConsent, OidcSession
+from corliss.models import (
+    MembershipCache,
+    OidcAuthCode,
+    OidcConsent,
+    OidcSession,
+    Workspace,
+)
 from corliss.tests.test_provider import _grant, _write_keys
 from corliss.views import CONSENT_SESSION_KEY, POST_LOGIN_REDIRECT
 
@@ -241,8 +247,43 @@ class AccessTokenContractTests(KeysMixin, TestCase):
         claims = jwt.decode(self._mint(), options={"verify_signature": False})
         self.assertEqual(
             set(claims),
-            {"iss", "sub", "aud", "iat", "exp", "jti", "scope", "client_id"},
+            {
+                "iss",
+                "sub",
+                "aud",
+                "iat",
+                "exp",
+                "jti",
+                "scope",
+                "client_id",
+                "workspaces",
+            },
         )
+
+    def test_workspaces_are_the_members_own_ids_as_strings_and_never_names(self):
+        """The relay opens a workspace's vault to whoever's token lists it, so
+        this claim is workspace access to notes. The token travels in a
+        websocket URL, which is why it carries IDs and not names."""
+        garden = Workspace.objects.create(name="Garden Club")
+        seeds = Workspace.objects.create(name="Seed Library")
+        Workspace.objects.create(name="Not hers")
+        garden.members.add(self.user)
+        seeds.members.add(self.user)
+
+        claims = jwt.decode(self._mint(), options={"verify_signature": False})
+        self.assertEqual(claims["workspaces"], [str(garden.pk), str(seeds.pk)])
+        self.assertNotIn("Garden Club", json.dumps(claims))
+
+    def test_a_member_in_no_workspace_carries_an_empty_list(self):
+        claims = jwt.decode(self._mint(MCP), options={"verify_signature": False})
+        self.assertEqual(claims["workspaces"], [])
+
+    def test_leaving_a_workspace_drops_it_from_the_next_token(self):
+        garden = Workspace.objects.create(name="Garden Club")
+        garden.members.add(self.user)
+        garden.members.remove(self.user)
+        claims = jwt.decode(self._mint(), options={"verify_signature": False})
+        self.assertEqual(claims["workspaces"], [])
 
     def test_an_empty_scope_is_carried_as_an_empty_string(self):
         claims = jwt.decode(self._mint(scope=""), options={"verify_signature": False})

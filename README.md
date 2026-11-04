@@ -33,7 +33,7 @@ only by being genuinely standalone.
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
 | `corliss/oidc.py` | OIDC provider core: discovery document, client lookup, auth-code issuance, `id_token` and access token minting, the request checks for public clients, fetching and caching their metadata documents, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
 | `corliss/membership.py` | The whole registry relationship: consuming its membership push, reconciling the cache against it, reading the application queue, writing grants and revocations as the acting admin, and resolving whether a DID is currently a member. |
-| `corliss/sync_relay.py` | A member's vaults on scn-sync-relay: list them, create one. The only place the relay's service token is used. |
+| `corliss/sync_relay.py` | Vaults on scn-sync-relay: a member's private ones and a workspace's, listed, created, and a workspace's renamed with it. The only place the relay's service token is used. |
 | `corliss/litellm.py` | Provisioning members into LiteLLM and issuing their API keys — the only place a gateway credential is used (same one-relationship-one-module rule). |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
@@ -370,7 +370,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Disconnect one of your connected apps (members, POST) | `/notes/apps/disconnect` |
 | Workspaces — the ones you are in (members) | `/workspaces/` |
 | New workspace (members) | `/workspaces/new` |
-| A workspace — rename, add/remove members (its own members) | `/workspaces/<id>/` |
+| A workspace — rename, add/remove members, its notes vault (its own members) | `/workspaces/<id>/` |
 | Login / logout | `/auth/login`, `/auth/logout` |
 | ATProto callback | `/auth/oauth/callback` |
 | ATProto client metadata (**is** the `client_id`) | `/auth/client-metadata.json` |
@@ -1130,10 +1130,35 @@ roster. Making one takes a cluster membership; changing one takes being in it.
   cache and the user table with no network call, so the page renders when the
   registry is down. The view re-asks both questions regardless: a datalist is a
   convenience, and a POST can carry anything.
-- **`automerge_root` is blank and unused.** It is where the notes editor will
-  hang this workspace's document. Declared `blank=True` rather than required,
-  because a required column with no default would mean no workspace could be
-  created at all before that lands.
+
+### A workspace's notes vault
+
+A workspace can have one notes vault on
+[scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay), shared by
+everyone in it. It is made and shown on the workspace's page and nowhere
+else: `/notes/` is about a member's private vaults and never lists it.
+
+- **Nothing about the vault is stored here.** The relay records which
+  workspace holds which vault, keyed by the workspace's pk, and the page asks
+  it on every render. Migration `0009` dropped `Workspace.automerge_root`,
+  which was reserved for this and would have been a second answer.
+- **Who can open it is the `workspaces` claim, not a call.** Corliss puts the
+  member's workspace IDs in every sync and MCP token (see
+  [Access tokens](#access-tokens)), and the relay opens a workspace's vault to
+  whoever's token lists it. Adding or removing a member therefore calls
+  nothing: a removal takes effect at the member's next token, within fifteen
+  minutes, the same bound as leaving the cluster.
+- **The relay is asked only after `_workspace_for_member`.** The service token
+  can make or rename any workspace's vault, so the workspace in the URL is
+  trusted only once the signed-in member has been found in it. A stranger gets
+  the 404 before the relay is called.
+- **The vault takes the workspace's name and follows it.** A save that changes
+  the name calls the relay's rename. If the relay misses it, the workspace
+  keeps its new name and the page says the vault kept the old one; saving the
+  name again is the retry, and nothing is queued. A name over the relay's 100
+  characters is cut to fit, the same way at create and at rename.
+- **A second "Create notes vault" is not a failure.** Two members pressing it
+  at once find the relay already holding one, which is what they wanted.
 
 ## The nav
 
@@ -1215,6 +1240,9 @@ else**: every client only ever picks from the list.
   create for any DID, so the DID is the signed-in member's for both, and a
   `did` in the query string or the form is never read. Handing one member
   another's vault names would be this page's worst failure.
+- **Private vaults only.** The listing names no workspaces, so a workspace's
+  vault never appears here, even for a member of it. It is on the workspace's
+  page.
 - **The relay is called at its internal address**, `SYNC_RELAY_URL`, never the
   public sync URL shown on the page. The relay's proxy does not route
   `/internal/` at all.
@@ -1393,11 +1421,20 @@ contract with the relay, which answers anything else with a bare `401`.
 | `aud` | One resource URL, a string, spelled as `OIDC_RESOURCES` spells it |
 | `exp` | 15 minutes after `iat` |
 | `jti`, `scope`, `client_id` | Unique ID, granted scope (may be empty), the client |
+| `workspaces` | The IDs of the member's workspaces, as strings, read at issue. Always present, `[]` for none |
 
 - **`typ` is what separates it from an `id_token`.** Both are signed by the
   same key, and the relay refuses a token that does not say `at+jwt`.
 - **No handle, name or email.** The plugin sends this token in a websocket
   URL.
+- **`workspaces` carries IDs, never names**, for the same reason: a name in
+  the URL would say in words which groups somebody is in. The relay keeps no
+  roster and opens a workspace's vault to whoever's token lists it, so this
+  claim *is* workspace access to notes. It needs scn-sync-relay v0.4.1 or
+  later; v0.4.0 expected objects with names and refuses these tokens.
+- **Deploy the relay before this Corliss.** A relay older than v0.4.0 ignores
+  the `workspace` field when a vault is made, so "Create notes vault" there
+  would quietly make a private vault in the pressing member's name.
 - **Fifteen minutes is the revocation bound.** Nothing revokes an access token
   once issued.
 

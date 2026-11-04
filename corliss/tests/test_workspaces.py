@@ -17,11 +17,13 @@ nav performs on every page, and `may_enter` is answered from the cache.
 
 from unittest.mock import patch
 
+import requests
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from corliss.models import MembershipCache, Workspace
+from corliss.tests.test_notes import RELAY, RESOURCES, SYNC, TOKEN, Relay, answer, vault
 
 User = get_user_model()
 
@@ -62,7 +64,19 @@ class NoRosterMixin:
         self.addCleanup(patcher.stop)
 
 
-class WorkspaceGateTests(NoRosterMixin, TestCase):
+class NoRelayMixin:
+    """Turn the notes relay off. The workspace page asks it for the vault, and
+    a development `.env` can name one, so without this the tests below that
+    are not about notes would dial whatever address it gives."""
+
+    def setUp(self):
+        super().setUp()
+        relay_off = override_settings(SYNC_RELAY_URL="")
+        relay_off.enable()
+        self.addCleanup(relay_off.disable)
+
+
+class WorkspaceGateTests(NoRelayMixin, NoRosterMixin, TestCase):
     """GATE covers all three pages: making a workspace is something the cluster
     gives you, so a signed-in non-member gets no further than the home page."""
 
@@ -93,7 +107,7 @@ class WorkspaceGateTests(NoRosterMixin, TestCase):
         self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
 
 
-class WorkspaceCreateTests(NoRosterMixin, TestCase):
+class WorkspaceCreateTests(NoRelayMixin, NoRosterMixin, TestCase):
     def setUp(self):
         super().setUp()
         self.alice = _member("alice.test", ALICE)
@@ -111,9 +125,6 @@ class WorkspaceCreateTests(NoRosterMixin, TestCase):
         )
         self.assertEqual(list(workspace.members.all()), [self.alice])
         self.assertEqual(workspace.created_by, self.alice)
-        # Reserved for the notes editor, and blank until then. A required
-        # column here would have made every create fail.
-        self.assertEqual(workspace.automerge_root, "")
 
     def test_the_new_workspace_is_on_the_list(self):
         self.client.post(reverse("workspace_new"), {"name": "Notes"})
@@ -150,7 +161,7 @@ class WorkspaceCreateTests(NoRosterMixin, TestCase):
         self.assertContains(resp, "not in a workspace yet")
 
 
-class WorkspaceVisibilityTests(NoRosterMixin, TestCase):
+class WorkspaceVisibilityTests(NoRelayMixin, NoRosterMixin, TestCase):
     """Only yours, and a workspace you are not in does not exist."""
 
     def setUp(self):
@@ -190,7 +201,7 @@ class WorkspaceVisibilityTests(NoRosterMixin, TestCase):
         self.assertEqual(list(self.his.members.all()), [self.bob])
 
 
-class WorkspaceEditTests(NoRosterMixin, TestCase):
+class WorkspaceEditTests(NoRelayMixin, NoRosterMixin, TestCase):
     def setUp(self):
         super().setUp()
         self.alice = _member("alice.test", ALICE, display_name="Alice Example")
@@ -364,3 +375,111 @@ class WorkspaceEditTests(NoRosterMixin, TestCase):
         # Including removing the person who made it.
         self.client.post(self.url, {"action": "remove_member", "did": ALICE})
         self.assertEqual(list(self.workspace.members.all()), [self.bob])
+
+
+@override_settings(
+    SYNC_RELAY_URL=RELAY, SYNC_RELAY_SERVICE_TOKEN=TOKEN, OIDC_RESOURCES=RESOURCES
+)
+class WorkspaceNotesTests(NoRosterMixin, TestCase):
+    """A workspace's notes vault: made, shown and renamed from its page.
+
+    The relay holds the vault and Corliss stores nothing about it, so every
+    test here is about what is asked of the relay and what the page says.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.alice = _member("alice.test", ALICE)
+        self.bob = _member("bob.test", BOB)
+        self.workspace = Workspace.objects.create(name="Garden Club")
+        self.workspace.members.add(self.alice)
+        self.url = reverse("workspace_edit", kwargs={"pk": self.workspace.pk})
+        self.client.force_login(self.alice)
+
+    def shared(self, name="Garden Club", **extra):
+        return vault(name, **extra) | {"workspace": str(self.workspace.pk)}
+
+    def test_with_no_vault_the_page_offers_to_make_one(self):
+        with Relay(listing=[vault("Private")]) as relay:
+            resp = self.client.get(self.url)
+        self.assertContains(resp, "Create notes vault")
+        self.assertNotContains(resp, "Private")
+        self.assertEqual(
+            relay.calls[0][2]["params"],
+            {"did": ALICE, "workspaces": str(self.workspace.pk)},
+        )
+
+    def test_with_a_vault_the_page_shows_it_and_how_to_reach_it(self):
+        with Relay(listing=[self.shared(note_count=3)]):
+            resp = self.client.get(self.url)
+        self.assertNotContains(resp, "Create notes vault")
+        self.assertContains(resp, "Workspaces/Garden Club")
+        self.assertContains(resp, SYNC)
+
+    def test_creating_asks_the_relay_as_the_member_and_comes_back(self):
+        with Relay() as relay:
+            resp = self.client.post(self.url, {"action": "create_vault"})
+        self.assertRedirects(resp, self.url, fetch_redirect_response=False)
+        self.assertEqual(
+            relay.made("POST")[0][2]["json"],
+            {"did": ALICE, "name": "Garden Club", "workspace": str(self.workspace.pk)},
+        )
+
+    def test_a_vault_someone_else_just_made_is_not_an_error(self):
+        taken = answer(409, {"error": "workspace_has_vault"})
+        with Relay(create_answer=taken, listing=[self.shared()]):
+            resp = self.client.post(self.url, {"action": "create_vault"}, follow=True)
+        self.assertNotContains(resp, "could not be created")
+        self.assertContains(resp, "Workspaces/Garden Club")
+
+    def test_a_relay_that_fails_to_create_says_so(self):
+        with Relay(create_answer=answer(500)), patch("corliss.sync_relay.log"):
+            resp = self.client.post(self.url, {"action": "create_vault"}, follow=True)
+        self.assertContains(resp, "could not be created right now")
+
+    def test_only_a_member_of_the_workspace_can_make_its_vault(self):
+        self.client.force_login(self.bob)
+        with Relay() as relay:
+            resp = self.client.post(self.url, {"action": "create_vault"})
+        self.assertEqual(resp.status_code, 404)
+        self.assertEqual(relay.calls, [])
+
+    def test_renaming_the_workspace_renames_its_vault(self):
+        with Relay() as relay:
+            self.client.post(self.url, {"action": "save", "name": "Seed Library"})
+        self.assertEqual(
+            relay.made("PATCH")[0][2]["json"],
+            {"workspace": str(self.workspace.pk), "name": "Seed Library"},
+        )
+
+    def test_changing_only_the_description_leaves_the_vault_alone(self):
+        with Relay() as relay:
+            self.client.post(
+                self.url,
+                {"action": "save", "name": "Garden Club", "description": "Seeds"},
+            )
+        self.assertEqual(relay.made("PATCH"), [])
+
+    def test_a_rename_the_relay_misses_is_saved_and_said(self):
+        with Relay(rename_answer=answer(500)), patch("corliss.sync_relay.log"):
+            resp = self.client.post(
+                self.url, {"action": "save", "name": "Seed Library"}, follow=True
+            )
+        self.workspace.refresh_from_db()
+        self.assertEqual(self.workspace.name, "Seed Library")
+        self.assertContains(resp, "kept the old name")
+
+    def test_an_unreachable_relay_says_so_and_offers_nothing(self):
+        with Relay(list_answer=requests.ConnectionError()), patch(
+            "corliss.sync_relay.log"
+        ):
+            resp = self.client.get(self.url)
+        self.assertContains(resp, "not answering")
+        self.assertNotContains(resp, "Create notes vault")
+
+    @override_settings(SYNC_RELAY_URL="")
+    def test_with_notes_not_set_up_there_is_no_notes_section(self):
+        with Relay() as relay:
+            resp = self.client.get(self.url)
+        self.assertNotContains(resp, "Create notes vault")
+        self.assertEqual(relay.calls, [])

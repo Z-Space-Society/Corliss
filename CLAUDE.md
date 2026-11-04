@@ -330,7 +330,8 @@ must not drift.
 
 - **The access token's shape is a contract with scn-sync-relay.** RS256,
   header `typ` `at+jwt`, `iss` the public base URL with no trailing slash,
-  `sub` the DID, `aud` one resource URL as a string. The relay answers
+  `sub` the DID, `aud` one resource URL as a string, `workspaces` the
+  member's workspace IDs as strings. The relay answers
   anything else with a bare `401`. A change to `oidc.mint_access_token` is a
   change to the relay's verifier, and `AccessTokenContractTests` is what
   notices.
@@ -367,7 +368,16 @@ must not drift.
   pass without edits to their flow assertions.
 - **No request chooses whose vaults.** `views.notes` passes
   `request.user.did` to the relay for list and for create, the same rule the
-  API keys section states for LiteLLM.
+  API keys section states for LiteLLM. A workspace's vault is asked about,
+  made or renamed only after `_workspace_for_member` has found the signed-in
+  member in that workspace.
+- **The `workspaces` claim is workspace access to notes, and carries IDs,
+  never names.** The relay keeps no roster, so a member's workspaces reach it
+  only through their tokens, and the token travels in a websocket URL. Do not
+  push the relay a copy of a workspace's roster: a second roster is a second
+  answer that can disagree.
+- **A workspace's vault is not stored here.** `Workspace` has no column for
+  it; the relay keys it by the workspace's pk. Do not reintroduce one.
 
 ## Development bypasses
 
