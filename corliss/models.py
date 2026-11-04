@@ -704,10 +704,9 @@ class Workspace(models.Model):
     # and `workspace_set` would make the one line anybody reads say less.
     members = models.ManyToManyField("User", blank=True, related_name="workspaces")
 
-    # Reserved for the notes editor: the automerge document this workspace's
-    # notes hang off. Blank until that lands, because a required column here
-    # would mean no workspace could be created at all before it does.
-    automerge_root = models.CharField(max_length=255, blank=True, default="")
+    # No column for the workspace's notes vault. The relay holds which vault a
+    # workspace has, keyed by this row's pk, and `sync_relay.workspace_vault`
+    # asks it; a copy here would be a second answer that could disagree.
 
     # Who made it, for the record. Nullable and `related_name="+"`: authorship is
     # history rather than authority. It grants nothing that being in `members`

@@ -27,6 +27,7 @@ from corliss.models import (
     OidcClientDocument,
     OidcConsent,
     OidcRefreshToken,
+    Workspace,
 )
 from corliss.tests.test_provider import _grant
 
@@ -70,7 +71,15 @@ def answer(status=200, body=None, *, text=None):
 class Relay:
     """Stand in for the relay for the length of a `with` block."""
 
-    def __init__(self, *, listing=None, created=None, list_answer=None, create_answer=None):
+    def __init__(
+        self,
+        *,
+        listing=None,
+        created=None,
+        list_answer=None,
+        create_answer=None,
+        rename_answer=None,
+    ):
         # `is None`, not `or`: a `requests.Response` is falsy when its status
         # is an error, which is exactly the answer these stand in for.
         self._list = (
@@ -79,11 +88,12 @@ class Relay:
         self._create = (
             answer(201, created or vault("Notes")) if create_answer is None else create_answer
         )
+        self._rename = answer(204) if rename_answer is None else rename_answer
         self.calls = []
 
     def _request(self, method, url, **kwargs):
         self.calls.append((method, url, kwargs))
-        outcome = self._list if method == "GET" else self._create
+        outcome = {"GET": self._list, "POST": self._create, "PATCH": self._rename}[method]
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
@@ -214,8 +224,73 @@ class RelayClientTests(VaultsCase):
             self.assertFalse(sync_relay.is_configured())
 
 
+class WorkspaceRelayClientTests(VaultsCase):
+    """The workspace half of `corliss.sync_relay`."""
+
+    def setUp(self):
+        super().setUp()
+        self.workspace = Workspace.objects.create(name="Garden Club")
+
+    def test_a_workspace_vault_is_found_among_the_members_listing(self):
+        shared = vault("Garden Club") | {"workspace": str(self.workspace.pk)}
+        with Relay(listing=[vault("Notes"), shared]) as relay:
+            found = sync_relay.workspace_vault(DID, self.workspace)
+        self.assertEqual(
+            relay.calls[0][2]["params"],
+            {"did": DID, "workspaces": str(self.workspace.pk)},
+        )
+        self.assertEqual(found["name"], "Garden Club")
+        self.assertEqual(found["workspace"], str(self.workspace.pk))
+
+    def test_a_workspace_with_no_vault_is_none(self):
+        with Relay(listing=[vault("Notes")]):
+            self.assertIsNone(sync_relay.workspace_vault(DID, self.workspace))
+
+    def test_creating_posts_the_workspace_id_and_its_name_cut_to_fit(self):
+        self.workspace.name = "x" * 150
+        with Relay() as relay:
+            sync_relay.create_workspace_vault(DID, self.workspace)
+        self.assertEqual(
+            relay.made("POST")[0][2]["json"],
+            {"did": DID, "name": "x" * 100, "workspace": str(self.workspace.pk)},
+        )
+
+    def test_a_workspace_that_has_its_vault_is_its_own_error(self):
+        taken = answer(409, {"error": "workspace_has_vault"})
+        with Relay(create_answer=taken):
+            with self.assertRaises(sync_relay.WorkspaceHasVault):
+                sync_relay.create_workspace_vault(DID, self.workspace)
+
+    def test_renaming_patches_the_workspace_id_and_its_name(self):
+        with Relay() as relay:
+            sync_relay.rename_workspace_vault(self.workspace)
+        method, url, kwargs = relay.calls[0]
+        self.assertEqual((method, url), ("PATCH", f"{RELAY}/internal/vaults"))
+        self.assertEqual(
+            kwargs["json"],
+            {"workspace": str(self.workspace.pk), "name": "Garden Club"},
+        )
+
+    def test_renaming_a_workspace_with_no_vault_is_not_an_error(self):
+        with Relay(rename_answer=answer(404, {"error": "no_vault"})):
+            sync_relay.rename_workspace_vault(self.workspace)
+
+    def test_any_other_rename_answer_is_an_error(self):
+        for failure in [answer(404, {}), answer(500), answer(405, text="")]:
+            with Relay(rename_answer=failure), patch.object(sync_relay.log, "warning"):
+                with self.assertRaises(sync_relay.SyncRelayError):
+                    sync_relay.rename_workspace_vault(self.workspace)
+
+
 class WhoseVaultsTests(VaultsCase):
     def test_the_list_is_asked_for_the_signed_in_member(self):
+        with Relay() as relay:
+            self.get()
+        self.assertEqual(relay.calls[0][2]["params"], {"did": DID})
+
+    def test_the_notes_page_names_none_of_the_members_workspaces(self):
+        """Workspace vaults are on the workspace's page, never here."""
+        Workspace.objects.create(name="Garden Club").members.add(self.user)
         with Relay() as relay:
             self.get()
         self.assertEqual(relay.calls[0][2]["params"], {"did": DID})

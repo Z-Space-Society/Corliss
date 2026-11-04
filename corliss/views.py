@@ -998,8 +998,8 @@ def workspace_edit(request, pk):
     script the way `/manage/`'s member panels are. A form is what you get when
     you ask to change something, not the default way to look at it.
 
-    Post/Redirect/Get for all three actions: they are writes, and a refresh that
-    re-posted would re-run one. Member changes leave a message that rides one hop
+    Post/Redirect/Get for every action, the notes vault's included: they are
+    writes, and a refresh that re-posted would re-run one. Member changes leave a message that rides one hop
     in the session, the way `/manage/` and `/account/` carry theirs; a successful
     save leaves none, because the text it changed is the page you land on.
 
@@ -1016,10 +1016,17 @@ def workspace_edit(request, pk):
             return _add_workspace_member(request, workspace)
         if action == "remove_member":
             return _remove_workspace_member(request, workspace)
+        if action == "create_vault":
+            return _create_workspace_vault(request, workspace)
 
+        # Read before the form is bound: validating a ModelForm writes the
+        # posted values onto its instance.
+        old_name = workspace.name
         form = WorkspaceForm(request.POST, instance=workspace)
         if form.is_valid():
             form.save()
+            if workspace.name != old_name:
+                _rename_workspace_vault(request, workspace)
             return redirect("workspace_edit", pk=workspace.pk)
     else:
         form = WorkspaceForm(instance=workspace)
@@ -1038,6 +1045,20 @@ def workspace_edit(request, pk):
         .order_by("username")
     )
 
+    # The workspace's vault, asked of the relay as the signed-in member, whom
+    # `_workspace_for_member` has already found in it. None when the relay did
+    # not answer, which the page says rather than hiding the section.
+    configured = sync_relay.is_configured()
+    vault = None
+    vault_reachable = False
+    if configured:
+        try:
+            vault = sync_relay.workspace_vault(request.user.did, workspace)
+            vault_reachable = True
+        except sync_relay.SyncRelayError:
+            pass
+    by_kind = {resource.kind: resource.url for resource in oidc.resources()}
+
     return render(
         request,
         "workspace_edit.html",
@@ -1046,6 +1067,10 @@ def workspace_edit(request, pk):
             "form": form,
             "members": members,
             "candidates": candidates,
+            "notes_configured": configured,
+            "vault": vault,
+            "vault_reachable": vault_reachable,
+            "sync_url": by_kind.get("sync", ""),
             "notice": request.session.pop(WORKSPACE_NOTICE_SESSION_KEY, None),
             "error": request.session.pop(WORKSPACE_ERROR_SESSION_KEY, None),
         },
@@ -1092,6 +1117,49 @@ def _add_workspace_member(request, workspace):
         workspace.members.add(user)
         request.session[WORKSPACE_NOTICE_SESSION_KEY] = f"Added {handle}."
     return redirect("workspace_edit", pk=workspace.pk)
+
+
+def _create_workspace_vault(request, workspace):
+    """Make the workspace's vault on the relay. Redirects back.
+
+    Anyone in the workspace may, the same flat rule as everything else here.
+    The vault takes the workspace's name, and follows it when the workspace is
+    renamed, so there is nothing to type.
+
+    A second press, or two members pressing at once, finds the relay already
+    holding one, and that is the outcome they wanted: it is not reported as a
+    failure.
+    """
+    if not sync_relay.is_configured():
+        request.session[WORKSPACE_ERROR_SESSION_KEY] = "Notes are not set up here."
+        return redirect("workspace_edit", pk=workspace.pk)
+    try:
+        sync_relay.create_workspace_vault(request.user.did, workspace)
+    except sync_relay.WorkspaceHasVault:
+        pass
+    except sync_relay.SyncRelayError:
+        request.session[WORKSPACE_ERROR_SESSION_KEY] = (
+            "The notes vault could not be created right now. Try again shortly."
+        )
+    return redirect("workspace_edit", pk=workspace.pk)
+
+
+def _rename_workspace_vault(request, workspace):
+    """Carry a new workspace name to its vault, if it has one.
+
+    The rename has already been saved here, so a relay that does not answer
+    leaves the two names apart. That is said on the page, and saving the name
+    again is the retry: nothing is queued to try later.
+    """
+    if not sync_relay.is_configured():
+        return
+    try:
+        sync_relay.rename_workspace_vault(workspace)
+    except sync_relay.SyncRelayError:
+        request.session[WORKSPACE_ERROR_SESSION_KEY] = (
+            "The workspace was renamed, but its notes vault kept the old name. "
+            "Save the name again shortly to rename it."
+        )
 
 
 def _remove_workspace_member(request, workspace):

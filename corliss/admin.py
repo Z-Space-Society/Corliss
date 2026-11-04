@@ -290,11 +290,8 @@ class WorkspaceAdmin(admin.ModelAdmin):
     # `search_fields` this needs.
     autocomplete_fields = ("created_by",)
 
-    # `created_at` is `auto_now_add`. `automerge_root` is reserved for the notes
-    # editor and is written by nothing yet: an editable box invites filling it
-    # in with a value no code reads, so it is shown (blank is the honest state)
-    # and not offered.
-    readonly_fields = ("automerge_root", "created_at")
+    # `created_at` is `auto_now_add`.
+    readonly_fields = ("created_at",)
 
     def get_queryset(self, request):
         """Count the roster for the list column.

@@ -885,8 +885,17 @@ def mint_access_token(user, *, client_id, resource, scope="") -> str:
       a list, and refuses a URL that differs by a trailing slash.
     - No handle, name or email. The plugin sends this token in a websocket
       URL, so it carries nothing about the person beyond the DID.
+    - `workspaces` is the IDs of the member's workspaces, as strings, and
+      never their names, for the reason above. The relay opens a workspace's
+      vault to whoever's token lists it and keeps no roster of its own, so
+      this claim *is* workspace access to notes. It is read at issue, which
+      is what bounds a removal to one token lifetime. Always present, empty
+      for a member in none.
     """
     now = int(time.time())
+    workspaces = [
+        str(pk) for pk in user.workspaces.order_by("pk").values_list("pk", flat=True)
+    ]
     payload = {
         "iss": base_url(),
         "sub": user.did,
@@ -896,6 +905,7 @@ def mint_access_token(user, *, client_id, resource, scope="") -> str:
         "jti": secrets.token_urlsafe(16),
         "scope": scope,
         "client_id": client_id,
+        "workspaces": workspaces,
     }
     return signing.sign_rs256(payload, headers={"typ": "at+jwt"})
 

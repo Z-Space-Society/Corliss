@@ -1,9 +1,14 @@
-"""A member's vaults, which live on scn-sync-relay.
+"""Members' and workspaces' vaults, which live on scn-sync-relay.
 
-The relay holds members' notes and the record of who owns which vault. Corliss
-holds none of it. This module asks the relay two things on a member's behalf,
-what vaults they have and to make them a new one, and is the only place the
+The relay holds members' notes and the record of who holds which vault: a
+member, for a private vault, or a workspace. Corliss holds none of it. This
+module asks the relay what vaults a member or a workspace has, to make one, and
+to rename a workspace's when the workspace is renamed. It is the only place the
 relay's service token is used.
+
+Which workspaces a member is in reaches the relay another way: as the
+`workspaces` claim of the tokens `oidc.mint_access_token` issues. The relay
+keeps no roster, so nothing here tells it about a member joining or leaving.
 
 `corliss.health` also talks to the relay, to ask whether it is up. That is a
 different relationship and stays there: a liveness probe carries no credential
@@ -18,6 +23,9 @@ Three properties hold here, each with a plausible wrong answer:
 - **The caller says whose vaults, and it is always the signed-in member.**
   The service token can list and create for any DID, so nothing in a request
   may choose one. `views.notes` passes `request.user.did` and nothing else.
+  A workspace's vault is asked about only after `views._workspace_for_member`
+  has found the signed-in member in that workspace, so the workspace ID in a
+  URL chooses nothing either.
 - **Nothing is retried and nothing is stored.** A failure is shown to the
   member, who can press the button again. A vault exists when the relay says
   so and in no table of ours.
@@ -45,6 +53,20 @@ class SyncRelayError(Exception):
 
 class NameTaken(SyncRelayError):
     """The member already has a vault with that name, whatever its case."""
+
+
+class WorkspaceHasVault(SyncRelayError):
+    """The workspace already has its vault. A workspace has one."""
+
+
+def vault_name_for(workspace):
+    """The name a workspace's vault carries: the workspace's, cut to fit.
+
+    A workspace's name may be longer than the relay allows a vault's, and
+    refusing to make the vault over that would be a strange thing to tell
+    somebody. Cut the same way at create and at rename, so the two agree.
+    """
+    return workspace.name.strip()[:VAULT_NAME_MAX]
 
 
 def is_configured() -> bool:
@@ -82,9 +104,12 @@ def _vault(raw):
         value = raw.get(key)
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
+    workspace = raw.get("workspace")
     return {
         "name": raw["name"],
         "url": raw.get("url", ""),
+        # The workspace's ID as a string, or None for a member's private vault.
+        "workspace": workspace if isinstance(workspace, str) else None,
         "created_at": when("created_at"),
         # Null from the relay until something has been written to the vault.
         "last_change_at": when("last_change_at"),
@@ -103,9 +128,16 @@ def _json(response):
         raise SyncRelayError("the answer was not JSON") from exc
 
 
-def list_vaults(did):
-    """The vaults `did` owns, oldest first. Raises `SyncRelayError`."""
-    response = _call("GET", params={"did": did})
+def list_vaults(did, workspaces=()):
+    """The private vaults `did` holds, oldest first, plus the vaults of the
+    `workspaces` IDs named. Raises `SyncRelayError`.
+
+    The Notes page names no workspaces: it is about private vaults only.
+    """
+    params = {"did": did}
+    if workspaces:
+        params["workspaces"] = ",".join(str(w) for w in workspaces)
+    response = _call("GET", params=params)
     if response.status_code != 200:
         log.warning("sync relay: listing vaults answered %s", response.status_code)
         raise SyncRelayError(f"HTTP {response.status_code}")
@@ -124,3 +156,63 @@ def create_vault(did, name):
         log.warning("sync relay: creating a vault answered %s", response.status_code)
         raise SyncRelayError(f"HTTP {response.status_code}")
     return _vault(_json(response))
+
+
+def workspace_vault(did, workspace):
+    """The workspace's vault, or None if it has none yet. Raises
+    `SyncRelayError`.
+
+    `did` is the signed-in member, who the caller has already found in the
+    workspace. The relay's listing needs a DID, and gives back their private
+    vaults too, which are dropped here.
+    """
+    wanted = str(workspace.pk)
+    for found in list_vaults(did, workspaces=[wanted]):
+        if found["workspace"] == wanted:
+            return found
+    return None
+
+
+def create_workspace_vault(did, workspace):
+    """Make the workspace's vault, named after it. `did` is the member making
+    it. Raises `WorkspaceHasVault` or `SyncRelayError`."""
+    response = _call(
+        "POST",
+        json={
+            "did": did,
+            "name": vault_name_for(workspace),
+            "workspace": str(workspace.pk),
+        },
+    )
+    if response.status_code == 409:
+        raise WorkspaceHasVault(workspace.pk)
+    if response.status_code != 201:
+        log.warning(
+            "sync relay: creating a workspace vault answered %s", response.status_code
+        )
+        raise SyncRelayError(f"HTTP {response.status_code}")
+    return _vault(_json(response))
+
+
+def rename_workspace_vault(workspace):
+    """Give the workspace's vault the workspace's current name. Raises
+    `SyncRelayError`.
+
+    A workspace with no vault is not an error: there is nothing to rename. That
+    is a `404` saying `no_vault`, and only that: any other 404 is a relay that
+    is not the one we think, and is reported.
+    """
+    response = _call(
+        "PATCH",
+        json={"workspace": str(workspace.pk), "name": vault_name_for(workspace)},
+    )
+    if response.status_code == 204:
+        return
+    if response.status_code == 404:
+        body = _json(response)
+        if isinstance(body, dict) and body.get("error") == "no_vault":
+            return
+    log.warning(
+        "sync relay: renaming a workspace vault answered %s", response.status_code
+    )
+    raise SyncRelayError(f"HTTP {response.status_code}")
