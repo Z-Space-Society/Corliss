@@ -23,7 +23,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from corliss.models import MembershipCache, Workspace
-from corliss.tests.test_notes import RELAY, RESOURCES, SYNC, TOKEN, Relay, answer, vault
+from corliss.tests.test_notes import RELAY, RESOURCES, TOKEN, Relay, answer, vault
 
 User = get_user_model()
 
@@ -397,7 +397,25 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
         self.client.force_login(self.alice)
 
     def shared(self, name="Garden Club", **extra):
-        return vault(name, **extra) | {"workspace": str(self.workspace.pk)}
+        return vault(name, **extra) | {
+            "workspace": str(self.workspace.pk),
+            "path": f"Workspaces/{name}",
+        }
+
+    def test_the_vault_is_named_by_the_relays_path(self):
+        """The page shows what the relay sends, so a path that is not simply
+        the group and the name proves nothing here builds it."""
+        with Relay(listing=[self.shared() | {"path": "Shared/Garden Club"}]):
+            resp = self.client.get(self.url)
+        self.assertContains(resp, "Shared/Garden Club")
+        self.assertNotContains(resp, "Workspaces/Garden Club")
+
+    def test_a_relay_that_sends_no_path_gets_no_path_line(self):
+        older = vault("Garden Club") | {"workspace": str(self.workspace.pk)}
+        with Relay(listing=[older]):
+            resp = self.client.get(self.url)
+        self.assertContains(resp, "Garden Club")
+        self.assertNotContains(resp, "Workspaces/")
 
     def test_with_no_vault_the_page_offers_to_make_one(self):
         with Relay(listing=[vault("Private")]) as relay:
@@ -414,7 +432,7 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
             resp = self.client.get(self.url)
         self.assertNotContains(resp, "Create notes vault")
         self.assertContains(resp, "Workspaces/Garden Club")
-        self.assertContains(resp, SYNC)
+        self.assertContains(resp, reverse("notes"))
 
     def test_creating_asks_the_relay_as_the_member_and_comes_back(self):
         with Relay() as relay:

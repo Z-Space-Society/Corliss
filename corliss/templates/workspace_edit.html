@@ -192,11 +192,14 @@ page, and this one is the page itself, so closing does not scroll anywhere.
             <dd>{{ vault.last_change_at|date:"Y-m-d H:i"|default:"—" }}</dd>
           </div>
         </dl>
+        {% comment %}
+        `vault.path` is the relay's, the one place "Workspaces" is spelled.
+        Blank from a relay older than v0.4.2, and then the line is left out
+        rather than built here.
+        {% endcomment %}
         <p class="page-text">Everyone in this workspace can read and change
-        these notes. In Obsidian, connect SCN Sync to
-        {% if sync_url %}<code>{{ sync_url }}</code>{% else %}your sync URL{% endif %}
-        and choose <strong>{{ vault.name }}</strong>. Over MCP it is
-        <code>Workspaces/{{ vault.name }}</code>. The
+        these notes.{% if vault.path %} SCN Sync in Obsidian and MCP clients
+        both show it as <code>{{ vault.path }}</code>.{% endif %} The
         <a href="{% url 'notes' %}">Notes page</a> has the setup.</p>
         <p class="hint-text">Someone removed from the workspace loses the
         vault within fifteen minutes, and keeps whatever their devices
