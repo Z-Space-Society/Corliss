@@ -17,14 +17,14 @@ requires-python = ">=3.14"
 # version bump is a reviewable one-line diff rather than a move inside the lock.
 # See the README's "Checking for updates" for the upgrade procedure.
 dependencies = [
-    "django==6.1.2",           # current stable; 6.2 LTS lands Dec 2026
-    "psycopg[binary]==3.3.6",  # Postgres driver (psycopg 3)
+    "django==6.1.3",           # current stable; 6.2 LTS lands Dec 2026
+    "psycopg[binary]==3.3.8",  # Postgres driver (psycopg 3)
     "django-environ==0.14.0",  # 12-factor env-driven settings
     "pyjwt==2.15.1",           # JWT sign/verify for DPoP, client assertion, id_token
     "cryptography==50.0.2",    # EC (P-256) + RSA key handling, backs PyJWT
     "requests==2.34.2",        # HTTP to the PDS / DID resolution
-    "boto3==1.43.119",          # reads zai-ops' service manifests from Garage for /systems/
-    "dnspython==2.9.0",        # DNS TXT handle resolution (_atproto.<handle>) for make_admin
+    "boto3==1.43.124",         # reads zai-ops' service manifests from Garage for /systems/
+    "dnspython==2.9.2",       # DNS TXT handle resolution (_atproto.<handle>) for make_admin
     "gunicorn==26.2.0",        # production WSGI server (deployment; not used by runserver)
     "whitenoise==6.12.0",      # serves collected static straight from gunicorn
 ]
