@@ -35,72 +35,42 @@ screen. Disconnect is a one-button form per row.
     <a target="_blank" href="https://community.obsidian.md/plugins/scn-sync">SCN Sync plugin</a>.
   </p>
 
-  <!-- <p class="page-text page-text--note">Notes are not end-to-end encrypted.</p> -->
-
-  <h2 class="section-title">Your Private Vault</h2>
-  <div class="card">
-    {% if not configured %}
-      <p class="alert alert--notice" role="status">
-        <strong>Not set up.</strong> This deployment has no notes service
-        connected, so there are no vaults here yet.
-      </p>
-    {% elif not reachable %}
-      <p class="alert" role="alert">
-        <strong>Not reachable.</strong> The notes service did not answer just
-        now. Your notes are unaffected. Try again in a moment.
-      </p>
-    {% else %}
-      <dl class="modal__facts">
-        <div class="modal__fact">
-          <dt>Notes</dt>
-          <dd>{{ vault.note_count|default_if_none:"—" }}</dd>
-        </div>
-        <div class="modal__fact">
-          <dt>Size</dt>
-          <dd>{% if vault.bytes is None %}—{% else %}{{ vault.bytes|filesizeformat }}{% endif %}</dd>
-        </div>
-        <div class="modal__fact">
-          <dt>Last change</dt>
-          <dd>{{ vault.last_change_at|date:"Y-m-d H:i"|default:"—" }}</dd>
-        </div>
-      </dl>
-      <p class="page-text">Only you can read these notes.{% if vault.path %}
-      SCN Sync in Obsidian and MCP clients both show them as
-      <code>{{ vault.path }}</code>.{% endif %} A workspace's notes are on
-      its own page.</p>
-    {% endif %}
-  </div>
 
   <h2 class="section-title">Connect Obsidian</h2>
   <div class="card">
     {% if sync_url %}
-      <div class="endpoint">{{ sync_url }}</div>
       <ol class="page-text">
-        <li>In Obsidian, create a new, empty vault. On iPhone, leave
-        <strong>Store in iCloud</strong> off.</li>
+        <li>In Obsidian, create a new, vault.</li>
         <li>In <strong>Settings → Community plugins</strong>, turn on
-        community plugins, then <strong>Browse</strong>, search for
-        <strong>SCN Sync</strong>, and <strong>Install</strong> and
-        <strong>Enable</strong> it.</li>
-        <li>Paste the address above when it asks for the sync address.</li>
-        <li>Sign in with your handle.</li>
+        community plugins</li>
+        <li><strong>Browse</strong> and search for <strong>SCN Sync</strong>. Install and Enable the plugin.</li>
+        <li>Paste the sync address below when the plugin asks for it.</li>
+        <li>Sign in to SCN with your handle and authorize the plugin.</li>
       </ol>
-      <p class="hint-text">Do the same on each device. Notes sync as you add
-      them.</p>
+      <p class="step-label">Sync address</p>
+      <div class="endpoint-copy">
+        <button type="button" class="copy-btn" data-copy="sync-url" hidden>Copy</button>
+        <div class="endpoint" id="sync-url">{{ sync_url }}</div>
+      </div>
     {% else %}
       <p class="hint-text">No sync address is configured on this deployment
       yet.</p>
     {% endif %}
   </div>
 
+
   <h2 class="section-title">MCP service</h2>
   <div class="card">
     {% if mcp_url %}
-      <div class="endpoint">{{ mcp_url }}</div>
-      <p class="hint-text">Your notes are also served over MCP. Add this
-      address to any assistant or tool that supports MCP servers, then sign in
-      with your handle when it asks. It can read and edit the notes in your
-      vaults, with or without Obsidian.</p>
+      <p class="hint-text">Your notes are also served over MCP. Add the
+      address below to any assistant or tool that supports MCP servers, then
+      sign in with your handle when it asks. It can read and edit the notes in
+      your vaults, with or without Obsidian.</p>
+      <p class="step-label">MCP address</p>
+      <div class="endpoint-copy">
+        <button type="button" class="copy-btn" data-copy="mcp-url" hidden>Copy</button>
+        <div class="endpoint" id="mcp-url">{{ mcp_url }}</div>
+      </div>
       <p class="hint-text">To connect an OpenCode harness running in a
       terminal, use this script:
       <a href="{% get_static_prefix %}help/scripts/connect-opencode.sh">connect-opencode.sh</a>.</p>
@@ -148,5 +118,46 @@ screen. Disconnect is a one-button form per row.
       <p class="hint-text">No apps are connected.</p>
     {% endif %}
   </div>
+
+  <h2 class="section-title">Your Private Vault</h2>
+  <div class="card">
+    {% if not configured %}
+      <p class="alert alert--notice" role="status">
+        <strong>Not set up.</strong> This deployment has no notes service
+        connected, so there are no vaults here yet.
+      </p>
+    {% elif not reachable %}
+      <p class="alert" role="alert">
+        <strong>Not reachable.</strong> The notes service did not answer just
+        now. Your notes are unaffected. Try again in a moment.
+      </p>
+    {% else %}
+      <dl class="modal__facts">
+        <div class="modal__fact">
+          <dt>Notes</dt>
+          <dd>{{ vault.note_count|default_if_none:"—" }}</dd>
+        </div>
+        <div class="modal__fact">
+          <dt>Size</dt>
+          <dd>{% if vault.bytes is None %}—{% else %}{{ vault.bytes|filesizeformat }}{% endif %}</dd>
+        </div>
+        <div class="modal__fact">
+          <dt>Last change</dt>
+          <dd>{{ vault.last_change_at|date:"Y-m-d H:i"|default:"—" }}</dd>
+        </div>
+      </dl>
+      <p class="page-text">Only you can read these notes.{% if vault.path %}
+      SCN Sync in Obsidian and MCP clients both show them as
+      <code>{{ vault.path }}</code>.{% endif %} A workspace's notes are on
+      its own page.</p>
+    {% endif %}
+  </div>
+
+
+
 </div>
+{% endblock %}
+
+{% block scripts %}
+  <script src="{% static 'js/api.js' %}" defer></script>
 {% endblock %}

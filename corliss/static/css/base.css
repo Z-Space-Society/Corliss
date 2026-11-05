@@ -907,6 +907,17 @@ a.btn-primary {
   white-space: nowrap;
 }
 
+/* An .endpoint with a .copy-btn over its right end, as .code-block does for a
+   program. The padding keeps the end of a long URL clear of the button once it
+   is scrolled to. */
+.endpoint-copy {
+  position: relative;
+}
+
+.endpoint-copy .endpoint {
+  padding-right: 76px;
+}
+
 /* Sits over a card the way "Account" sits over the account card — same weight
    and size, with the leading space a second section needs. */
 .section-title {
