@@ -1011,6 +1011,41 @@ a.btn-primary {
   margin: 0 0 4px;
 }
 
+/* A sponsor's mark where a person's face would be. The artwork is dark, drawn
+   for a light page, so it sits on a white plate inside the dark card rather
+   than being recoloured: a brand mark is theirs, not ours to edit. Fixed size,
+   like the avatars, so a late-arriving image cannot move the paragraph under
+   it. */
+.about-person__logo {
+  width: 200px;
+  height: 69px;
+  padding: 14px 16px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+
+/* A short list inside an about card: funding members, donations. Same measure
+   and rhythm as .page-text, with bullets and a heavier lead-in. */
+.about-list {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+.about-list li + li {
+  margin-top: 8px;
+}
+
+.about-list strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* The people are cards in a row with no section title between them, so the
    first one needs the gap the title used to provide. */
 .about-lead + .card {

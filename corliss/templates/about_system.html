@@ -22,32 +22,25 @@ worth wiring up for.
 <div class="account-view about-view">
   <h1>The System</h1>
 
-  <p class="page-text about-lead">One Proxmox host, a handful of inference
-  machines, and four repositories that build and run the whole thing. All of it
-  is living at Z-Space.</p>
+  <p class="page-text about-lead">We're building Community Scale AI at Z-Space. What started as pooled funds to buy motherboards, RAM, and GPUs is now a cluser of machines with connected software supporting local knowledge sharing.</p>
 
-  <h2 class="section-title">Two layers</h2>
+  <h2 class="section-title">Hardware, Apps, and People</h2>
   <div class="card">
     <p class="page-text">The <strong>infrastructure layer</strong> is the AI
-    service itself: a gateway sitting in front of the inference machines. Never
-    a single-user setup and never a direct line to a model. Everything goes
-    through the gateway, which is what makes accounts, keys and quotas mean
-    anything.</p>
+    hardware itself: a gateway sitting in front of the inference machine cluster. This isn't one person tinkering with a expensive machine on their desk just for them, and it's not a corporate engineering department choosing vendors for a whole company. What does it mean to share compute power?</p>
 
     <p class="page-text">The <strong>application layer</strong> is what gets
-    built on top. Chat, and eventually the shared knowledge base and the
-    note-taking tools, are ordinary clients of the gateway: they get no special
-    access and they never go around it. Keeping the two apart is what lets
-    either one be replaced without touching the other.</p>
+    built on top. We deploy a number of apps over time, connected by atproto and/or OIDC single sign on. They connect into the model router to access the AI compute. Everything is run locally as a small mini-cloud that is on premise.</p>
+
+    <p class="page-text">The next two primitives are users and groups. Every user account is an atproto account with permissioned data support, connected by groups. You can bring your own atmosphere account, or be provisioned a local hosted one. We've implemented the emerging private data spec. Since people work across many different concepts, we have the concept of Workspaces: shared groups across members where you can pool and share data with other members and with agents. With local agents and AI compute, all your data stays local to you. With atproto's account data ownership model, you move across apps and groups and take your data with you.</p>
   </div>
 
-  <h2 class="section-title">The host</h2>
+  <h2 class="section-title">Proxmox</h2>
   <div class="card">
-    <p class="page-text">One machine, <strong>Heron</strong>, runs
+    <p class="page-text">We use
     <a href="https://www.proxmox.com/" target="_blank" rel="noopener">Proxmox</a>
-    and holds every service except inference. Each service is its own LXC
-    container running natively under systemd, with no Docker anywhere in the
-    stack. They talk to each other over an internal bridge that has no route in
+    as the basis for our system, infrastructure, and app hosting. Each service is its own LXC
+    container. Services talk to each other over an internal bridge that has no route in
     from the world.</p>
 
     <div class="table-scroll">
@@ -65,23 +58,23 @@ worth wiring up for.
           </tr>
           <tr>
             <td>Session broker</td>
-            <td class="data-table__muted">Corliss, this app. Sign-in, keys, the console.</td>
+            <td class="data-table__muted">Corliss, this app. Sign-in, keys, the console. OIDC gateway.</td>
           </tr>
           <tr>
             <td>Registry</td>
             <td class="data-table__muted">HappyView, serving the membership lexicons</td>
           </tr>
           <tr>
-            <td>Gateway</td>
+            <td>Gateway AI Router</td>
             <td class="data-table__muted">LiteLLM. Every inference request goes through it.</td>
           </tr>
           <tr>
             <td>Chat</td>
-            <td class="data-table__muted">Open WebUI</td>
+            <td class="data-table__muted">Gel.Chat. We built our own atproto-native agentic chat.</td>
           </tr>
           <tr>
             <td>Sync relay</td>
-            <td class="data-table__muted">scn-sync-relay, the automerge server behind shared notes</td>
+            <td class="data-table__muted">scn-sync-relay, the automerge server behind local first shared notes</td>
           </tr>
           <tr>
             <td>Database</td>
@@ -100,13 +93,11 @@ worth wiring up for.
     </div>
   </div>
 
-  <h2 class="section-title">The machines that think</h2>
+  <h2 class="section-title">AI Inference</h2>
   <div class="card">
     <p class="page-text">Inference runs on separate hardware: a heterogeneous
-    set of new, used and donated parts, some of it on loan from members. None of
-    these machines is publicly exposed, and none runs anything but
-    <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener">llama.cpp</a>'s
-    server. The gateway is the only thing that talks to them.</p>
+    set of new, used and donated parts.. None of
+    these machines is publicly exposed, the LiteLLM gateway router is the only thing that talks to them.</p>
 
     <div class="table-scroll">
       <table class="data-table">
@@ -118,23 +109,23 @@ worth wiring up for.
         </thead>
         <tbody>
           <tr>
-            <td>gx10</td>
-            <td class="data-table__muted">ASUS Ascent GX10 (NVIDIA GB10), 128&nbsp;GB unified memory. On loan, and currently the primary node.</td>
-          </tr>
-          <tr>
             <td>orca</td>
             <td class="data-table__muted">2&times; RTX 3090, 48&nbsp;GB VRAM, with one model pinned across both cards</td>
           </tr>
           <tr>
             <td>salmon</td>
-            <td class="data-table__muted">2&times; GTX 1080 Ti, 22&nbsp;GB VRAM</td>
+            <td class="data-table__muted">Intel 1100 MAX, 48&nbsp;GB VRAM. Researching the performance and drivers for the 1100 MAX series, in single card mode.</td>
+          </tr>
+          <tr>
+            <td>owl</td>
+            <td class="data-table__muted">1080i, 11&nbsp;GB VRAM. Dedicated audio transcription models.</td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <p class="hint-text">The fleet changes. Which models are actually being
-    served, and by which node, is answered live on the API page.</p>
+    <p class="hint-text">Which models are actually being
+    served, and by which node, is answered live on the API page, accessible to members only.</p>
   </div>
 
   <h2 class="section-title">Which models</h2>
@@ -147,9 +138,9 @@ worth wiring up for.
 
   <h2 class="section-title">The code</h2>
   <div class="card">
-    <p class="page-text">Four repositories, all public. One of the project's
+    <p class="page-text">One of the project's
     aims is that another community could stand up a cluster like this one, and
-    that is not possible if the recipe is private.</p>
+    that is not possible if the recipe is private. We use ansible for orchestration across Proxmox.</p>
 
     <div class="table-scroll">
       <table class="data-table">
@@ -183,6 +174,18 @@ worth wiring up for.
                    href="https://github.com/Z-Space-Society/scn-sync-relay"
                    target="_blank" rel="noopener">scn-sync-relay</a></td>
             <td class="data-table__muted">Rust. The sync server behind shared notes.</td>
+          </tr>
+          <tr>
+            <td><a class="handle-link handle-link--out"
+                   href="https://github.com/Z-Space-Society/scn-obsidian"
+                   target="_blank" rel="noopener">scn-obsidian</a></td>
+            <td class="data-table__muted">TypeScript. The Obsidian plugin that keeps a vault's notes in step with the relay.</td>
+          </tr>
+          <tr>
+            <td><a class="handle-link handle-link--out"
+                   href="https://tangled.org/scnorg.tngl.sh/gel.chat"
+                   target="_blank" rel="noopener">gel.chat</a></td>
+            <td class="data-table__muted">Agentic chat over ATProto permissioned data. Hosted on Tangled.</td>
           </tr>
         </tbody>
       </table>
