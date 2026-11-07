@@ -1056,6 +1056,26 @@ a.btn-primary {
   font-weight: 600;
 }
 
+/* Phones. The 80% measure above is for tables and other wide matter on a
+   desktop, and the sponsor's mark is a fixed 200px plate: beside a name in a
+   card's remaining width the pair runs off the right edge. Use the full width
+   here, drop the name under the mark when the row cannot hold both, and let
+   the plate shrink on the narrowest screens. */
+@media (max-width: 720px) {
+  .about-view {
+    max-width: 100%;
+  }
+
+  .about-person {
+    flex-wrap: wrap;
+  }
+
+  .about-person__logo {
+    max-width: 100%;
+    height: auto;
+  }
+}
+
 /* The people are cards in a row with no section title between them, so the
    first one needs the gap the title used to provide. */
 .about-lead + .card {
