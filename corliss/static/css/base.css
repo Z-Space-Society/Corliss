@@ -870,6 +870,16 @@ a.btn-primary {
   margin: 0 0 14px;
 }
 
+/* The blog's subscribe widget. Centred in the column rather than hung off its
+   left edge, without the browser's default inset border, and allowed to narrow
+   on a phone instead of pushing the page sideways. */
+.intro__subscribe {
+  display: block;
+  max-width: 100%;
+  margin: 24px auto 0;
+  border: 0;
+}
+
 /* --- Account view -------------------------------------------------------- */
 
 .account-view {
