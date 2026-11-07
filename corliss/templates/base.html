@@ -46,7 +46,7 @@
         <div class="nav__divider"></div>
 
         {% comment %}
-        `about_page` is set by the three about views and by nothing else, so it
+        `about_page` is set by the about views and by nothing else, so it
         is both "is the reader in this section" for the trigger and "which page"
         for the items. A menu that opens on hover gives no other clue about
         where the reader already is.
@@ -57,10 +57,12 @@
           <div class="nav__dropdown nav__dropdown--left">
             <a class="nav__dropdown-item{% if about_page == 'about' %} is-active{% endif %}"
                href="{% url 'about' %}">About</a>
-            <a class="nav__dropdown-item{% if about_page == 'system' %} is-active{% endif %}"
-               href="{% url 'about_system' %}">The System</a>
             <a class="nav__dropdown-item{% if about_page == 'team' %} is-active{% endif %}"
                href="{% url 'about_team' %}">The Team</a>
+            <a class="nav__dropdown-item{% if about_page == 'supporters' %} is-active{% endif %}"
+               href="{% url 'about_supporters' %}">Supporters</a>
+            <a class="nav__dropdown-item{% if about_page == 'system' %} is-active{% endif %}"
+               href="{% url 'about_system' %}">The System</a>
           </div>
         </div>
       </div>

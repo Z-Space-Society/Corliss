@@ -1,17 +1,5 @@
 {% extends "base.html" %}
 
-{% comment %}
-Who builds and runs the cluster.
-
-Each person is named by their handle, linked to their Atmosphere profile, and
-that is deliberate rather than decorative: the handle is the same string they
-sign in here with, so the page names people the way the system does. No email
-addresses and no potted biographies. What is here is each person's relationship
-to this project, which is the only thing a reader of this page is asking.
-
-Three sections and not the whole working group, which is larger and changes.
-{% endcomment %}
-
 {% block title %}The Team{% endblock %}
 
 {% block content %}
@@ -94,7 +82,7 @@ Three sections and not the whole working group, which is larger and changes.
       </div>
     </div>
 
-    <p class="page-text">A driving force in the Atmosphere community, 
+    <p class="page-text">A driving force in the Atmosphere community,
     <a href="https://dwebyvr.org/" target="_blank" rel="noopener">DWeb YVR</a>
     and <a href="https://z-space.ca" target="_blank" rel="noopener">Z-Space</a>, the coworking space this cluster physically lives in.</p>
 
@@ -103,12 +91,27 @@ Three sections and not the whole working group, which is larger and changes.
     than one more chat window.</p>
   </div>
 
-  <h2 class="section-title">And everyone else</h2>
+  <h2 class="section-title">Special projects</h2>
+
   <div class="card">
-    <p class="page-text">The working group is wider than three people, and the
-    hardware is wider still. Some of the machines serving models are on loan
-    from members who own them. The point of the collective is that it is not a
-    service somebody else runs for you.</p>
+    <div class="about-person">
+      {% if avatars.pouria %}
+        <img class="about-person__avatar" src="{{ avatars.pouria }}" alt=""
+             width="64" height="64" loading="lazy" referrerpolicy="no-referrer">
+      {% endif %}
+      <div>
+        <h2 class="about-person__name">Pouria Delfan</h2>
+        <p class="about-handle">
+          <a class="handle-link handle-link--out"
+             href="https://bsky.app/profile/pouriade.com"
+             target="_blank" rel="noopener">pouriade.com</a>
+        </p>
+      </div>
+    </div>
+
+    <p class="page-text">Pouria is a designer and software engineer. He is the
+    lead on <a href="https://gel.chat">Gel.Chat</a> an agentic user chat integrated with atproto
+    permissioned data. Gel is the default agentic interface for SCN, as well as being adopted by the atproto community.</p>
   </div>
 
   <p class="about-more">Read on: <a href="{% url 'about' %}">what this is</a>,

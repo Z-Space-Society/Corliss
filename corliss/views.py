@@ -1140,9 +1140,9 @@ def _remove_workspace_member(request, workspace):
     return redirect("workspace_edit", pk=workspace.pk)
 
 
-# --- About: what this is, what it runs on, who runs it ----------------------
+# --- About: what this is, what it runs on, who runs it, who backs it --------
 #
-# Three prose pages, public on purpose. They are the only surface here that
+# Four prose pages, public on purpose. They are the only surface here that
 # explains the cluster to somebody who is not in it yet. The signed-out home
 # page says what membership *is*, and everything past GATE assumes the reader
 # already knows; gating these would leave that explanation nowhere.
@@ -1150,7 +1150,7 @@ def _remove_workspace_member(request, workspace):
 # Each is `render` and nothing else: the content lives in the template, so
 # there is no context for a page of prose to disagree with. `about_page` is the
 # one exception, and it is chrome rather than content. base.html marks the
-# open menu with it, so the reader can see which of the three they are on.
+# open menu with it, so the reader can see which page they are on.
 # Passed by name rather than derived from `request.resolver_match` so the value
 # is visible where the page is chosen.
 
@@ -1173,7 +1173,7 @@ def about_system(request):
     return render(request, "about_system.html", {"about_page": "system"})
 
 
-# The three people the team page introduces, as slug -> handle. Here and not in
+# The people the team page introduces, as slug -> handle. Here and not in
 # the template only because the avatars have to be looked up by handle before
 # the page renders; the names and the prose stay in about_team.html, which is
 # the one place a person is actually described. The slug is what the template
@@ -1183,12 +1183,12 @@ TEAM_HANDLES = {
     "boris": "bmann.ca",
     "jacob": "jacob.cascadia.social",
     "scott": "hadsie.com",
+    "pouria": "pouriade.com",
 }
 
 
-@require_http_methods(["GET"])
-def about_team(request):
-    """Who builds and runs it, with their current Bluesky pictures.
+def _team_avatars():
+    """Current Bluesky avatars for the team, as slug -> URL, blank when unread.
 
     The pictures are live rather than checked in: an avatar's URL carries the
     blob's CID, so it changes whenever somebody swaps their photo and a
@@ -1197,15 +1197,31 @@ def about_team(request):
     read is absent, and the template falls back to the name alone.
     """
     avatars = atproto.avatar_urls(TEAM_HANDLES.values())
+    return {slug: avatars.get(handle, "") for slug, handle in TEAM_HANDLES.items()}
+
+
+@require_http_methods(["GET"])
+def about_team(request):
+    """Who builds and runs it, with their current Bluesky pictures."""
     return render(
         request,
         "about_team.html",
-        {
-            "about_page": "team",
-            "avatars": {
-                slug: avatars.get(handle, "") for slug, handle in TEAM_HANDLES.items()
-            },
-        },
+        {"about_page": "team", "avatars": _team_avatars()},
+    )
+
+
+@require_http_methods(["GET"])
+def about_supporters(request):
+    """Who backs the network, and what that backing looks like.
+
+    New, and still being written from the team page's markup, so it borrows the
+    same avatar context. Drop `avatars` here once supporters turn out to have
+    organisations rather than faces.
+    """
+    return render(
+        request,
+        "about_supporters.html",
+        {"about_page": "supporters", "avatars": _team_avatars()},
     )
 
 

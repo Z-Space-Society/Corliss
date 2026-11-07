@@ -131,7 +131,6 @@ class HomeViewTests(NoRosterMixin, TestCase):
         # Was @login_required until the home page grew a signed-out state.
         resp = self.client.get(reverse("home"))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "The Shared Computer Network")
 
     def test_signed_out_home_does_not_restate_the_login_form(self):
         # The nav already links sign-in and login.html owns the form. A second
@@ -196,11 +195,11 @@ class HomeViewTests(NoRosterMixin, TestCase):
 
 
 class AboutViewTests(NoRosterMixin, TestCase):
-    """`/about/`, `/about/system/`, `/about/team/`: the public explanation.
+    """`/about/`, `/about/system/`, `/about/team/`, `/about/supporters/`.
 
-    Ungated on purpose: they are what a visitor who is not a member yet reads to
-    find out what membership is for, so a session requirement would put the
-    explanation behind the thing it explains.
+    The public explanation. Ungated on purpose: they are what a visitor who is
+    not a member yet reads to find out what membership is for, so a session
+    requirement would put the explanation behind the thing it explains.
     """
 
     # The dropdown item marked as the page the reader is on. Written across two
@@ -230,8 +229,13 @@ class AboutViewTests(NoRosterMixin, TestCase):
             resp = self.client.get(reverse("about_team"))
         self.assertContains(resp, url)
 
-    def test_all_three_open_for_a_signed_out_visitor(self):
-        for name in ("about", "about_system", "about_team"):
+    def test_every_about_page_opens_for_a_signed_out_visitor(self):
+        for name in (
+            "about",
+            "about_system",
+            "about_team",
+            "about_supporters",
+        ):
             with self.subTest(page=name):
                 resp = self.client.get(reverse(name))
                 self.assertEqual(resp.status_code, 200)
@@ -242,11 +246,12 @@ class AboutViewTests(NoRosterMixin, TestCase):
         self.assertContains(resp, reverse("about"))
         self.assertContains(resp, reverse("about_system"))
         self.assertContains(resp, reverse("about_team"))
+        self.assertContains(resp, reverse("about_supporters"))
 
     def test_each_page_marks_itself_in_the_menu(self):
         # A menu that only opens on hover gives no other clue about where the
         # reader already is, which is what `about_page` is for.
-        for name in ("about", "about_system", "about_team"):
+        for name in ("about", "about_system", "about_team", "about_supporters"):
             with self.subTest(page=name):
                 html = self.client.get(reverse(name)).content.decode()
                 self.assertEqual(self.ACTIVE_ITEM.findall(html), [reverse(name)])

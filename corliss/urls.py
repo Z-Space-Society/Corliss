@@ -70,10 +70,11 @@ urlpatterns = [
     # The member's own end of the same subject: asking to join. Writes to the
     # applicant's PDS, never to the registry.
     path("membership/apply", views.apply, name="apply"),
-    # The public explanation, in three pages. Ungated; see `views.about`.
+    # The public explanation, in four pages. Ungated; see `views.about`.
     path("about/", views.about, name="about"),
     path("about/system/", views.about_system, name="about_system"),
     path("about/team/", views.about_team, name="about_team"),
+    path("about/supporters/", views.about_supporters, name="about_supporters"),
     # The member's own name and email. Signed-in rather than member-gated —
     # see `views.account`.
     path("account/", views.account, name="account"),

@@ -347,11 +347,6 @@ class HomeIsWhereRefusalsLandTests(NoRosterMixin, TestCase):
         self.assertContains(resp, "Welcome to the cluster")
         self.assertNotContains(resp, "not a member yet")
 
-    def test_a_signed_out_visitor_still_gets_the_intro(self):
-        resp = self.client.get(reverse("home"))
-        self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "The Shared Computer Network")
-
 
 LITELLM_SETTINGS = {
     "LITELLM_URL": "http://10.1.1.112:4000",

@@ -21,9 +21,9 @@ nav's benefit. See base.html.
 <div class="account-view about-view">
   <h1>About</h1>
 
-  <p class="page-text about-lead">The Shared Computer Network is a collective
-  that pools member resources to fund, build and operate high-performance AI
-  models, hosted locally at Z-Space in Vancouver.</p>
+  <p class="page-text about-lead">Shared Computer Network is a collective
+  that pools member resources to fund, build and operate locally-run AI
+  models, hosted on hardware installed next to the communities using it.</p>
 
   <p class="page-text">It is as much a shared learning environment as it is a
   service. Members contribute to a common infrastructure and, in return, get
@@ -43,9 +43,8 @@ nav's benefit. See base.html.
     everything else.</p>
 
     <p class="page-text">The API is the same one commercial providers speak, so
-    most tools need only a base URL and a key pointed somewhere new: a chat app
-    on your phone, a coding assistant, an agent you are building. Nothing here
-    bills you, and there is nothing to run up.</p>
+    most tools need only a base URL and a key pointed somewhere new. This is called the "Bring Your Own Key" (BYOK) model that can plug community scale AI models into any application: a chat app
+    on your phone, a coding assistant, an agent you are building.</p>
   </div>
 
   <h2 class="section-title">Where your data goes</h2>
@@ -65,28 +64,17 @@ nav's benefit. See base.html.
     advance every member's technical understanding of local AI infrastructure
     faster than any of them could alone. The code is public for the same reason:
     the whole stack is on
-    <a href="https://github.com/Z-Space-Society" target="_blank" rel="noopener">GitHub</a>.</p>
+    <a href="https://github.com/Z-Space-Society">GitHub</a> and/or <a href="https://tangled.org/scnorg.tngl.sh">Tangled</a>.</p>
   </div>
 
   <h2 class="section-title">Getting involved</h2>
   <div class="card">
     <p class="page-text">We are in an early prototype phase with a select group
-    of early access. If you are an individual or an aligned organisation in
-    Vancouver, get in touch at
-    <a href="mailto:zai@z-space.ca">zai@z-space.ca</a>.</p>
+    of early access contributors. If you are an individual or an aligned organisation, get in touch at
+    <a href="mailto:hello@sharedcomputer.network">hello@sharedcomputer.network</a>.</p>
 
-    <p class="page-text">If you run a coworking or similar community space
-    anywhere in Canada and want a setup like this one, we would like to hear
+    <p class="page-text">If you run a coworking space, an educational institution, or similar community space, especially in Canada, and want a setup like this one, we would like to hear
     from you. Working out how to make it repeatable is part of the project.</p>
-
-    {% comment %}
-    The rename is worth a line rather than a redirect: everything written about
-    this project before mid-2026 says ZAI, including the write-up this page is
-    adapted from and the repository that builds the cluster.
-    {% endcomment %}
-    <p class="page-text">Older writing about the project calls it
-    <strong>ZAI</strong> or <strong>Z-Space AI</strong>. Same project, earlier
-    name.</p>
   </div>
 
   <p class="about-more">Read on: <a href="{% url 'about_system' %}">the

@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Supporters{% endblock %}
+
+{% block content %}
+<div class="account-view about-view">
+  <h1>Supporters</h1>
+
+  <p class="page-text about-lead">This project is run with the support of
+  <a href="https://z-space.ca">Z-Space Arts &amp; Technology Society</a>, a
+  non-profit society in British Columbia. Z-Space operates a multi-disciplinary
+  studio space in downtown Vancouver. Members pay for coworking space and
+  collaborate on events and projects together. The origin of SCN was pooled
+  funding for shared hardware purchases running at Z-Space, which has grown to
+  be a principled approach to community scale AI.</p>
+
+  <h2 class="section-title">Sponsor</h2>
+
+  <div class="card">
+    <div class="about-person">
+      <img class="about-person__logo"
+           src="{% static 'img/greyhaven-logo.svg' %}" alt=""
+           width="200" height="69" loading="lazy">
+      <div>
+        <h3 class="about-person__name">Greyhaven</h3>
+        <p class="about-handle">
+          <a class="handle-link handle-link--out" href="https://greyhaven.co"
+             target="_blank" rel="noopener">greyhaven.co</a>
+        </p>
+      </div>
+    </div>
+
+    <p class="page-text">Greyhaven deploys sovereign AI to businesses. They are
+    our preferred business implementation partner for commercial deployments.
+    We collaborate and advise on open source implementations, including the
+    <a href="https://greywall.io/">Greywall Sandbox</a> product that secures,
+    observes, and tracks agent connections for your organization.</p>
+  </div>
+
+  <h2 class="section-title">Funding members</h2>
+
+  <div class="card">
+    <p class="page-text">The original funding members who pooled funds to get
+    things started.</p>
+
+    <ul class="about-list">
+      <li>Jacob Ervin, Priority Member</li>
+      <li>Mack Hardy, Affinity Bridge</li>
+      <li>Manuel Pina</li>
+      <li>Danny Matthews, Taddy</li>
+      <li>Scott Hadfield</li>
+      <li>Jacob Sayles</li>
+      <li>Boris Mann</li>
+    </ul>
+  </div>
+
+  <h2 class="section-title">Special thanks</h2>
+
+  <div class="card">
+    <p class="page-text">We appreciate the consultation and advice from the
+    <a href="https://arc.ubc.ca/">UBC Advanced Research Computing (ARC)</a>
+    team. The ARC team have been very supportive with their time and
+    information.</p>
+  </div>
+
+  <h2 class="section-title">Donations</h2>
+
+  <div class="card">
+    <ul class="about-list">
+      <li><strong>3090 GPU:</strong> thank you to Syntacrobat
+      @syntacrobat.xyz for donating and shipping this graphic card from NYC.
+      It's the workhorse running the main Qwen model that we run.</li>
+      <li><strong>64GB DDR5 RAM:</strong> a donor who wishes to remain
+      anonymous had some leftover RAM that is extremely useful in these
+      times!</li>
+    </ul>
+  </div>
+
+  <p class="about-more">We are happy to discuss other donations or
+  sponsorships. Get in touch
+  <a href="mailto:hello@sharedcomputer.network">hello@sharedcomputer.network</a>.</p>
+</div>
+{% endblock %}
