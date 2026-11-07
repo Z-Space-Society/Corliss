@@ -326,7 +326,7 @@ makes it sound otherwise.
       {% csrf_token %}
       <input type="hidden" name="action" value="approve">
       <input type="text" name="handle" class="text-input"
-             placeholder="handle to invite" aria-label="Handle to invite" required>
+             placeholder="handle or DID to invite" aria-label="Handle or DID to invite" required>
       {% include "_tier_select.html" with selected=default_tier %}
       <button type="submit" class="btn-row">Invite</button>
     </form>
