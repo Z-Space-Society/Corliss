@@ -396,7 +396,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | opencode connect script for a machine with no browser (public, a static file) | `/static/help/scripts/connect-opencode.sh` |
 | Membership push (from the registry) | `/membership/events` |
 | Apply for membership (signed-in non-members) | `/membership/apply` |
-| About — what this is, the system, the team (public) | `/about/`, `/about/system/`, `/about/team/` |
+| About — what this is, the system, the team, supporters (public) | `/about/`, `/about/system/`, `/about/team/`, `/about/supporters/` |
 | Console — applications, members, admins, invite, reconcile (cluster admins) | `/manage/` |
 | Authenticate the service account so roster edits can be made (POST, cluster admins; returns through `/auth/callback`) | `/manage/unlock` |
 | Lock: discard the stored service session so it can be authenticated again, e.g. after the account moved PDS (POST, cluster admins) | `/manage/lock` |

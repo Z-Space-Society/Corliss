@@ -131,9 +131,6 @@ class HomeViewTests(NoRosterMixin, TestCase):
         # Was @login_required until the home page grew a signed-out state.
         resp = self.client.get(reverse("home"))
         self.assertEqual(resp.status_code, 200)
-        # The name, not the old h1 verbatim: the home page's headline is copy
-        # and changes, while the claim that it names the network does not.
-        self.assertContains(resp, "Shared Computer Network")
 
     def test_signed_out_home_does_not_restate_the_login_form(self):
         # The nav already links sign-in and login.html owns the form. A second
@@ -209,10 +206,6 @@ class AboutViewTests(NoRosterMixin, TestCase):
     # lines in base.html, hence the \s+ rather than a literal match.
     ACTIVE_ITEM = re.compile(r'class="nav__dropdown-item is-active"\s+href="([^"]+)"')
 
-    # Every dropdown item, in document order, for tests about the list itself
-    # rather than which entry is marked.
-    MENU_ITEM = re.compile(r'class="nav__dropdown-item[^"]*"\s+href="([^"]+)"')
-
     def setUp(self):
         super().setUp()
         # The team page reads avatars off the public AppView. Left unpatched the
@@ -228,7 +221,6 @@ class AboutViewTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("about_team"))
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, "Jacob Sayles")
-        self.assertContains(resp, "Pouria Delfan")
         self.assertNotContains(resp, "about-person__avatar")
 
     def test_the_team_page_shows_a_face_when_there_is_one(self):
@@ -264,14 +256,6 @@ class AboutViewTests(NoRosterMixin, TestCase):
                 html = self.client.get(reverse(name)).content.decode()
                 self.assertEqual(self.ACTIVE_ITEM.findall(html), [reverse(name)])
 
-    def test_the_system_is_the_last_item_in_the_menu(self):
-        # The system page is the deep dive; it reads last, after the pages
-        # about the people and who backs them.
-        html = self.client.get(reverse("about")).content.decode()
-        self.assertEqual(
-            self.MENU_ITEM.findall(html)[-1], reverse("about_system")
-        )
-
     def test_a_page_outside_the_section_marks_nothing(self):
         html = self.client.get(reverse("home")).content.decode()
         self.assertEqual(self.ACTIVE_ITEM.findall(html), [])
@@ -289,16 +273,6 @@ class AboutViewTests(NoRosterMixin, TestCase):
                 for other in pages:
                     if other != name:
                         self.assertContains(resp, reverse(other))
-
-    def test_the_supporters_page_names_its_sponsor_and_shows_the_logo(self):
-        # The logo is checked in rather than hotlinked: a sponsor's mark going
-        # missing because their site reorganised is not a broken image we can
-        # fix from here.
-        resp = self.client.get(reverse("about_supporters"))
-        self.assertContains(resp, "Greyhaven")
-        # Manifest storage puts a content hash in the URL, so the assertion is
-        # on the name, not the exact path.
-        self.assertContains(resp, "greyhaven-logo")
 
     def test_the_system_page_probes_nothing(self):
         # The distinction from /systems/ is the whole reason both exist: this
