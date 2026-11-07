@@ -247,6 +247,35 @@ class WriteRecordTests(TestCase):
         self.assertIsNotNone(self.token.expires_at)
         self.assertGreater(self.token.expires_at, timezone.now())
 
+    def test_an_authentication_required_401_is_refreshed_too(self):
+        # Our PDS's answer to an expired token. Keyed on `invalid_token` alone,
+        # the roster write failed in production instead of refreshing.
+        posts = [
+            FakeResp(
+                status=401,
+                json_data={
+                    "error": "AuthenticationRequired",
+                    "message": "bearer token rejected: token expired",
+                },
+            ),
+            FakeResp(
+                json_data={
+                    "access_token": "access-2",
+                    "refresh_token": "refresh-2",
+                    "expires_in": 3600,
+                }
+            ),
+            FakeResp(json_data={"uri": "at://x"}),
+        ]
+        with patch.object(atproto, "build_client_assertion", return_value="assn"):
+            with patch.object(requests, "post", side_effect=posts) as post:
+                atproto.write_record(self.user, COLLECTION, "self", {})
+
+        self.assertEqual(post.call_count, 3)
+        self.assertTrue(post.call_args_list[1][0][0].endswith("/token"))
+        self.token.refresh_from_db()
+        self.assertEqual(self.token.access_token, "access-2")
+
     def test_it_retries_exactly_once(self):
         posts = [
             FakeResp(status=401, json_data={"error": "invalid_token"}),
