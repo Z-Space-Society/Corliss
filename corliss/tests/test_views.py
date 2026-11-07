@@ -2225,6 +2225,24 @@ class InviteAndCascadeTests(NoRosterMixin, TestCase):
         # Named, not numbered, from the moment they are admitted.
         self.assertEqual(User.objects.get(did=STRANGER).username, "bmann.ca")
 
+    def test_inviting_a_did_skips_resolution_and_names_the_row(self):
+        with patch.object(atproto, "resolve_handle_for_admin") as resolve:
+            with patch.object(
+                views.membership, "handles_for", return_value={STRANGER: "bmann.ca"}
+            ):
+                with patch.object(
+                    views.membership.MembershipRegistry, "approve"
+                ) as approve:
+                    self.client.post(
+                        reverse("manage"),
+                        {"action": "approve", "handle": STRANGER, "tier": "level-2"},
+                    )
+
+        resolve.assert_not_called()
+        self.assertIn(STRANGER, approve.call_args.args)
+        # The DID is the key, never the name.
+        self.assertEqual(User.objects.get(did=STRANGER).username, "bmann.ca")
+
     def test_an_unresolvable_handle_grants_nothing(self):
         with patch.object(
             atproto,

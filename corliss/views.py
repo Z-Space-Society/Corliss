@@ -1894,12 +1894,17 @@ def _decide_membership(request, registry, action):
     did = request.POST.get("did", "").strip()
     handle_hint = request.POST.get("handle", "").strip().lstrip("@")
 
-    # Inviting: the console names someone by handle who has never applied, so
-    # there is no DID on the page to post back. Resolved with the strict
+    # Inviting: the console names someone who has never applied, so there is
+    # no DID on the page to post back. The admin types a handle or a DID, the
+    # same as when adding an admin. A handle is resolved with the strict
     # two-method form — admitting someone should not trust the third-party
-    # resolver — and the row is created here so the member has a readable name
-    # from the moment they are granted rather than from their first sign-in.
-    if not did and handle_hint:
+    # resolver. A DID is taken as given, and the hint is cleared so the name
+    # below comes from `handles_for` rather than the DID being stored as one.
+    # The row is created here so the member has a readable name from the
+    # moment they are granted rather than from their first sign-in.
+    if not did and handle_hint.startswith("did:"):
+        did, handle_hint = handle_hint, ""
+    elif not did and handle_hint:
         try:
             did = atproto.resolve_handle_for_admin(handle_hint)
         except atproto.OAuthError as exc:
