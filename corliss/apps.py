@@ -139,6 +139,9 @@ class CorlissConfig(AppConfig):
     name = "corliss"
 
     def ready(self):
+        # Connects the receivers that push rosters and names to the sync relay.
+        from corliss import signals  # noqa: F401
+
         register(check_dev_login_requires_debug)
         register(check_dev_admins_require_debug)
         register(check_explicit_theme_exists)

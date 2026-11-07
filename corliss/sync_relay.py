@@ -8,9 +8,13 @@ name, which the relay makes the first time Corliss asks and renames whenever
 the name it is sent differs. It is the only place the relay's service token is
 used.
 
-Which workspaces a member is in reaches the relay another way: as the
-`workspaces` claim of the tokens `oidc.mint_access_token` issues. The relay
-keeps no roster, so nothing here tells it about a member joining or leaving.
+Which workspaces a member is in reaches the relay two ways. The `workspaces`
+claim of the tokens `oidc.mint_access_token` issues is the first, and the one
+access rests on. The second is each workspace's roster, pushed here by the
+receivers in `corliss.signals` whenever it changes, with every member's handle
+and name. The relay keeps the roster as a second check that must agree with
+the token, so a removal takes effect at once rather than when the member's
+token expires, and the names are what it shows beside notes and edits.
 
 `corliss.health` also talks to the relay, to ask whether it is up. That is a
 different relationship and stays there: a liveness probe carries no credential
@@ -32,7 +36,11 @@ Three properties hold here, each with a plausible wrong answer:
   calls it.
 - **Nothing is retried and nothing is stored.** A failure is shown to the
   member, and the next page load asks again. A vault exists when the relay
-  says so and in no table of ours.
+  says so and in no table of ours. A push that fails is logged and repaired
+  by `manage.py sync_relay_rosters`, which sends everything again.
+- **A roster push is the whole roster, read after the change commits.** Never
+  a delta: two pushes that land out of order, or one that is lost, leave the
+  relay with an answer the next push replaces outright.
 """
 
 import logging
@@ -40,6 +48,8 @@ import logging
 import requests
 from django.conf import settings
 from django.utils.dateparse import parse_datetime
+
+from corliss.models import User
 
 log = logging.getLogger(__name__)
 
@@ -235,3 +245,44 @@ def all_vaults():
             }
         )
     return vaults, unfiled
+
+
+def _pushed(response, what):
+    if response.status_code not in (200, 204):
+        log.warning("sync relay: pushing %s answered %s", what, response.status_code)
+        raise SyncRelayError(f"HTTP {response.status_code}")
+
+
+def push_workspace_members(workspace_pk):
+    """Send the relay the workspace's whole roster, as DIDs, read now. A
+    workspace that no longer exists, or has nobody in it, sends an empty list,
+    which closes its vault to everyone. Raises `SyncRelayError`.
+    """
+    dids = list(
+        User.objects.filter(workspaces__pk=workspace_pk)
+        .order_by("did")
+        .values_list("did", flat=True)
+    )
+    _pushed(
+        _call(
+            "PUT",
+            path=f"/internal/workspaces/{workspace_pk}/members",
+            json={"members": dids},
+        ),
+        f"workspace {workspace_pk}'s roster",
+    )
+
+
+def push_member(did, handle, name):
+    """Send the relay a member's handle and name, for showing beside their
+    notes and edits. `name` is blank when they have none. Raises
+    `SyncRelayError`.
+    """
+    _pushed(
+        _call(
+            "PUT",
+            path=f"/internal/members/{did}",
+            json={"handle": handle, "name": name},
+        ),
+        "a member's name",
+    )
