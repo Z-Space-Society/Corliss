@@ -15,6 +15,6 @@ from django.urls import path
 from corliss import views
 from corliss.urls import urlpatterns as _base
 
-urlpatterns = [
-    p for p in _base if getattr(p, "name", None) != "dev_login"
-] + [path("auth/dev-login", views.dev_login, name="dev_login")]
+urlpatterns = [p for p in _base if getattr(p, "name", None) != "dev_login"] + [
+    path("auth/dev-login", views.dev_login, name="dev_login")
+]

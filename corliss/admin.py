@@ -120,9 +120,13 @@ class MembershipCacheAdmin(admin.ModelAdmin):
         `select_related` to reach for. Local only — no DID-document read, since
         an admin list must not depend on the network to render.
         """
-        return super().get_queryset(request).annotate(
-            handle=Subquery(
-                User.objects.filter(did=OuterRef("did")).values("username")[:1]
+        return (
+            super()
+            .get_queryset(request)
+            .annotate(
+                handle=Subquery(
+                    User.objects.filter(did=OuterRef("did")).values("username")[:1]
+                )
             )
         )
 
@@ -188,7 +192,14 @@ class OidcRefreshTokenAdmin(admin.ModelAdmin):
     Only the token's hash is stored, so nothing on this page is a credential.
     """
 
-    list_display = ("user", "client_id", "resource", "created_at", "expires_at", "used_at")
+    list_display = (
+        "user",
+        "client_id",
+        "resource",
+        "created_at",
+        "expires_at",
+        "used_at",
+    )
     list_filter = ("resource",)
     search_fields = ("user__did", "user__username", "client_id")
     ordering = ("-created_at",)
@@ -247,7 +258,13 @@ class OidcClientDocumentAdmin(admin.ModelAdmin):
     list_display = ("client_id", "fetched_at", "expires_at", "last_error")
     search_fields = ("client_id",)
     ordering = ("client_id",)
-    readonly_fields = ("client_id", "document", "fetched_at", "expires_at", "last_error")
+    readonly_fields = (
+        "client_id",
+        "document",
+        "fetched_at",
+        "expires_at",
+        "last_error",
+    )
 
     def has_add_permission(self, request):
         return False

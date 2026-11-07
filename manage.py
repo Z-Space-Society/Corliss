@@ -6,6 +6,7 @@ The `uv run` shebang syncs the environment from uv.lock before executing, so
 venv to activate first. Deployment is unaffected: the zai-ops role invokes
 `<venv>/bin/python manage.py ...`, which never consults this line.
 """
+
 import os
 import sys
 

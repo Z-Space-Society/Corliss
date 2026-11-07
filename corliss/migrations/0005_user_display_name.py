@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('corliss', '0004_registry_session'),
+        ("corliss", "0004_registry_session"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='user',
-            name='display_name',
+            model_name="user",
+            name="display_name",
             field=models.CharField(blank=True, max_length=255),
         ),
     ]

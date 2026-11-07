@@ -10,9 +10,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
-from corliss import membership
-from corliss import signing
-from corliss import oidc
+from corliss import membership, oidc, signing
 from corliss.models import MembershipCache, OidcAuthCode
 
 User = get_user_model()
@@ -99,9 +97,7 @@ class OidcProviderTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         doc = resp.json()
         self.assertEqual(doc["issuer"], "https://auth.zai.test")
-        self.assertEqual(
-            doc["jwks_uri"], "https://auth.zai.test/.well-known/jwks.json"
-        )
+        self.assertEqual(doc["jwks_uri"], "https://auth.zai.test/.well-known/jwks.json")
         self.assertEqual(doc["id_token_signing_alg_values_supported"], ["RS256"])
         self.assertIn("sub", doc["claims_supported"])
         self.assertIn("handle", doc["claims_supported"])
@@ -118,7 +114,10 @@ class OidcProviderTests(TestCase):
         rsa_jwk = next(k for k in jwks["keys"] if k["kty"] == "RSA")
         key = jwt.PyJWK.from_dict(rsa_jwk).key
         claims = jwt.decode(
-            token, key=key, algorithms=["RS256"], audience=CLIENT_ID,
+            token,
+            key=key,
+            algorithms=["RS256"],
+            audience=CLIENT_ID,
             issuer="https://auth.zai.test",
         )
         self.assertEqual(claims["sub"], DID)
@@ -204,12 +203,8 @@ class OidcProviderTests(TestCase):
         shortcut when it lands — reuse the answer GATE already computed — is
         exactly this bug.
         """
-        admin = User.objects.create_user(
-            username="admin.bsky.social", did=ADMIN_DID
-        )
-        with patch(
-            "corliss.membership.is_cluster_admin", return_value=True
-        ):
+        admin = User.objects.create_user(username="admin.bsky.social", did=ADMIN_DID)
+        with patch("corliss.membership.is_cluster_admin", return_value=True):
             self.assertTrue(membership.may_enter(ADMIN_DID))
             self.assertIsNone(membership.membership_for(admin))
 
@@ -330,16 +325,19 @@ class OidcProviderTests(TestCase):
 
     def test_token_code_is_single_use(self):
         code = self._get_code()
-        post = lambda: self.client.post(
-            reverse("token"),
-            {
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": REDIRECT_URI,
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET,
-            },
-        )
+
+        def post():
+            return self.client.post(
+                reverse("token"),
+                {
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": REDIRECT_URI,
+                    "client_id": CLIENT_ID,
+                    "client_secret": CLIENT_SECRET,
+                },
+            )
+
         self.assertEqual(post().status_code, 200)
         # Second redemption of the same code is rejected.
         self.assertEqual(post().status_code, 400)

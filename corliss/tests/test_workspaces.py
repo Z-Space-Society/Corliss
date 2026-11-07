@@ -169,7 +169,9 @@ class WorkspaceVisibilityTests(NoRelayMixin, NoRosterMixin, TestCase):
         self.alice = _member("alice.test", ALICE)
         self.bob = _member("bob.test", BOB)
 
-        self.hers = Workspace.objects.create(name="Alice's place", created_by=self.alice)
+        self.hers = Workspace.objects.create(
+            name="Alice's place", created_by=self.alice
+        )
         self.hers.members.add(self.alice)
         self.his = Workspace.objects.create(name="Bob's place", created_by=self.bob)
         self.his.members.add(self.bob)
@@ -206,9 +208,7 @@ class WorkspaceEditTests(NoRelayMixin, NoRosterMixin, TestCase):
         super().setUp()
         self.alice = _member("alice.test", ALICE, display_name="Alice Example")
         self.bob = _member("bob.test", BOB)
-        self.workspace = Workspace.objects.create(
-            name="Notes", created_by=self.alice
-        )
+        self.workspace = Workspace.objects.create(name="Notes", created_by=self.alice)
         self.workspace.members.add(self.alice)
         self.url = reverse("workspace_edit", kwargs={"pk": self.workspace.pk})
         self.client.force_login(self.alice)
@@ -294,16 +294,12 @@ class WorkspaceEditTests(NoRelayMixin, NoRosterMixin, TestCase):
 
     def test_removing_a_member(self):
         self.workspace.members.add(self.bob)
-        resp = self.client.post(
-            self.url, {"action": "remove_member", "did": BOB}
-        )
+        resp = self.client.post(self.url, {"action": "remove_member", "did": BOB})
         self.assertRedirects(resp, self.url)
         self.assertEqual(list(self.workspace.members.all()), [self.alice])
 
     def test_removing_someone_who_is_not_here_changes_nothing(self):
-        resp = self.client.post(
-            self.url, {"action": "remove_member", "did": BOB}
-        )
+        resp = self.client.post(self.url, {"action": "remove_member", "did": BOB})
         self.assertRedirects(resp, self.url)
         self.assertEqual(self.workspace.members.count(), 1)
 
@@ -353,9 +349,7 @@ class WorkspaceEditTests(NoRelayMixin, NoRosterMixin, TestCase):
 
     def test_leaving_lands_on_the_list_not_the_page_you_just_left(self):
         self.workspace.members.add(self.bob)
-        resp = self.client.post(
-            self.url, {"action": "remove_member", "did": ALICE}
-        )
+        resp = self.client.post(self.url, {"action": "remove_member", "did": ALICE})
         self.assertRedirects(resp, reverse("workspaces"))
         self.assertEqual(list(self.workspace.members.all()), [self.bob])
         # And it really is gone: the page she just left is now a 404.
@@ -366,9 +360,7 @@ class WorkspaceEditTests(NoRelayMixin, NoRosterMixin, TestCase):
         what the person who added them holds."""
         self.workspace.members.add(self.bob)
         self.client.force_login(self.bob)
-        resp = self.client.post(
-            self.url, {"action": "save", "name": "Bob renamed it"}
-        )
+        resp = self.client.post(self.url, {"action": "save", "name": "Bob renamed it"})
         self.assertRedirects(resp, self.url)
         self.workspace.refresh_from_db()
         self.assertEqual(self.workspace.name, "Bob renamed it")
@@ -401,7 +393,16 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
             resp = self.client.get(self.url)
         self.assertEqual(
             [(c[0], c[2]["json"]) for c in relay.calls],
-            [("PUT", {"did": ALICE, "workspace": str(self.workspace.pk), "name": "Garden Club"})],
+            [
+                (
+                    "PUT",
+                    {
+                        "did": ALICE,
+                        "workspace": str(self.workspace.pk),
+                        "name": "Garden Club",
+                    },
+                )
+            ],
         )
         self.assertTrue(resp.context["vault_reachable"])
         self.assertEqual(resp.context["vault"]["workspace"], str(self.workspace.pk))
@@ -418,16 +419,24 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
 
     def test_a_new_workspace_lands_on_a_page_that_makes_its_vault(self):
         with Relay() as relay:
-            resp = self.client.post(reverse("workspace_new"), {"name": "Seed Library"}, follow=True)
+            resp = self.client.post(
+                reverse("workspace_new"), {"name": "Seed Library"}, follow=True
+            )
         self.assertEqual(resp.status_code, 200)
-        self.assertEqual([c[2]["json"]["name"] for c in relay.made("PUT")], ["Seed Library"])
+        self.assertEqual(
+            [c[2]["json"]["name"] for c in relay.made("PUT")], ["Seed Library"]
+        )
 
     def test_a_rename_reaches_the_vault_on_the_page_it_lands_on(self):
         with Relay() as relay:
-            self.client.post(self.url, {"action": "save", "name": "Seed Library"}, follow=True)
+            self.client.post(
+                self.url, {"action": "save", "name": "Seed Library"}, follow=True
+            )
         self.workspace.refresh_from_db()
         self.assertEqual(self.workspace.name, "Seed Library")
-        self.assertEqual([c[2]["json"]["name"] for c in relay.made("PUT")], ["Seed Library"])
+        self.assertEqual(
+            [c[2]["json"]["name"] for c in relay.made("PUT")], ["Seed Library"]
+        )
 
     def test_a_non_member_of_the_workspace_never_reaches_the_relay(self):
         self.client.force_login(self.bob)
@@ -437,8 +446,9 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
         self.assertEqual(relay.calls, [])
 
     def test_an_unreachable_relay_still_renders_the_page(self):
-        with Relay(workspace_answer=requests.ConnectionError()), patch(
-            "corliss.sync_relay.log"
+        with (
+            Relay(workspace_answer=requests.ConnectionError()),
+            patch("corliss.sync_relay.log"),
         ):
             resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)

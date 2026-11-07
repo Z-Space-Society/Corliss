@@ -20,26 +20,20 @@ User = get_user_model()
 DEV_URLS = "corliss.tests.urls_dev_login"
 
 # Both guards on: the only configuration in which the bypass may work.
-ENABLED = override_settings(
-    ROOT_URLCONF=DEV_URLS, DEBUG=True, DEV_LOGIN_ENABLED=True
-)
+ENABLED = override_settings(ROOT_URLCONF=DEV_URLS, DEBUG=True, DEV_LOGIN_ENABLED=True)
 
 
 @ENABLED
 class DevLoginTests(TestCase):
     def test_post_creates_member_and_starts_session(self):
-        resp = self.client.post(
-            reverse("dev_login"), {"handle": "alice.bsky.social"}
-        )
+        resp = self.client.post(reverse("dev_login"), {"handle": "alice.bsky.social"})
         self.assertRedirects(resp, reverse("home"))
 
         user = User.objects.get(did="did:dev:alice.bsky.social")
         self.assertEqual(user.username, "alice.bsky.social")
         self.assertFalse(user.email_confirmed)
         self.assertIsNotNone(user.last_seen)
-        self.assertEqual(
-            int(self.client.session["_auth_user_id"]), user.pk
-        )
+        self.assertEqual(int(self.client.session["_auth_user_id"]), user.pk)
 
     def test_did_is_a_non_registered_method_so_it_cannot_collide(self):
         """Fake members must never occupy a real atproto DID."""
@@ -51,9 +45,7 @@ class DevLoginTests(TestCase):
 
     def test_repeat_login_reuses_the_same_member(self):
         for _ in range(2):
-            self.client.post(
-                reverse("dev_login"), {"handle": "alice.bsky.social"}
-            )
+            self.client.post(reverse("dev_login"), {"handle": "alice.bsky.social"})
         self.assertEqual(
             User.objects.filter(did="did:dev:alice.bsky.social").count(), 1
         )
@@ -66,9 +58,7 @@ class DevLoginTests(TestCase):
 
     def test_leading_at_is_stripped(self):
         self.client.post(reverse("dev_login"), {"handle": "@alice.bsky.social"})
-        self.assertTrue(
-            User.objects.filter(did="did:dev:alice.bsky.social").exists()
-        )
+        self.assertTrue(User.objects.filter(did="did:dev:alice.bsky.social").exists())
 
     def test_handle_case_folds_to_one_member(self):
         """Handles are case-insensitive; the DIDs derived from them are not.
@@ -79,9 +69,7 @@ class DevLoginTests(TestCase):
         for handle in ("Alice.BSky.Social", "alice.bsky.social"):
             self.client.post(reverse("dev_login"), {"handle": handle})
         self.assertEqual(User.objects.count(), 1)
-        self.assertTrue(
-            User.objects.filter(did="did:dev:alice.bsky.social").exists()
-        )
+        self.assertTrue(User.objects.filter(did="did:dev:alice.bsky.social").exists())
 
     def test_get_is_rejected(self):
         """POST-only: a bare link must not be able to sign anyone in."""
@@ -102,29 +90,19 @@ class DevLoginTests(TestCase):
     def test_an_ordinary_dev_member_does_not(self):
         """The list is the whole grant — signing in is not."""
         self.client.post(reverse("dev_login"), {"handle": "bob.bsky.social"})
-        self.assertFalse(
-            User.objects.get(did="did:dev:bob.bsky.social").is_superuser
-        )
+        self.assertFalse(User.objects.get(did="did:dev:bob.bsky.social").is_superuser)
 
     def test_dropping_a_did_from_the_list_clears_the_flag(self):
         """Mirrored, not merely set — the way `_heal_staff_flag` mirrors the
         roster — so removing yourself from the list takes effect rather than
         leaving a superuser behind that nothing will ever take back."""
         with override_settings(DEV_ADMIN_DIDS=["did:dev:alice.bsky.social"]):
-            self.client.post(
-                reverse("dev_login"), {"handle": "alice.bsky.social"}
-            )
-        self.assertTrue(
-            User.objects.get(did="did:dev:alice.bsky.social").is_superuser
-        )
+            self.client.post(reverse("dev_login"), {"handle": "alice.bsky.social"})
+        self.assertTrue(User.objects.get(did="did:dev:alice.bsky.social").is_superuser)
 
         with override_settings(DEV_ADMIN_DIDS=[]):
-            self.client.post(
-                reverse("dev_login"), {"handle": "alice.bsky.social"}
-            )
-        self.assertFalse(
-            User.objects.get(did="did:dev:alice.bsky.social").is_superuser
-        )
+            self.client.post(reverse("dev_login"), {"handle": "alice.bsky.social"})
+        self.assertFalse(User.objects.get(did="did:dev:alice.bsky.social").is_superuser)
 
     def test_resumes_a_pending_oidc_authorize(self):
         # The resume is gated on membership exactly as `callback`'s is — one
@@ -142,9 +120,7 @@ class DevLoginTests(TestCase):
         session[POST_LOGIN_REDIRECT] = "/oidc/authorize?client_id=open-webui"
         session.save()
 
-        resp = self.client.post(
-            reverse("dev_login"), {"handle": "alice.bsky.social"}
-        )
+        resp = self.client.post(reverse("dev_login"), {"handle": "alice.bsky.social"})
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(resp["Location"], "/oidc/authorize?client_id=open-webui")
 
@@ -153,9 +129,7 @@ class DevLoginTests(TestCase):
         session[POST_LOGIN_REDIRECT] = "//evil.example/steal"
         session.save()
 
-        resp = self.client.post(
-            reverse("dev_login"), {"handle": "alice.bsky.social"}
-        )
+        resp = self.client.post(reverse("dev_login"), {"handle": "alice.bsky.social"})
         self.assertRedirects(resp, reverse("home"))
 
     def test_login_page_offers_the_dev_form(self):
@@ -166,29 +140,19 @@ class DevLoginTests(TestCase):
 class DevLoginRefusedTests(TestCase):
     """The route exists in this URLconf; the view must still refuse."""
 
-    @override_settings(
-        ROOT_URLCONF=DEV_URLS, DEBUG=True, DEV_LOGIN_ENABLED=False
-    )
+    @override_settings(ROOT_URLCONF=DEV_URLS, DEBUG=True, DEV_LOGIN_ENABLED=False)
     def test_404_when_flag_is_off(self):
-        resp = self.client.post(
-            reverse("dev_login"), {"handle": "alice.bsky.social"}
-        )
+        resp = self.client.post(reverse("dev_login"), {"handle": "alice.bsky.social"})
         self.assertEqual(resp.status_code, 404)
         self.assertFalse(User.objects.exists())
 
-    @override_settings(
-        ROOT_URLCONF=DEV_URLS, DEBUG=False, DEV_LOGIN_ENABLED=True
-    )
+    @override_settings(ROOT_URLCONF=DEV_URLS, DEBUG=False, DEV_LOGIN_ENABLED=True)
     def test_404_when_debug_is_off_even_though_flag_is_on(self):
-        resp = self.client.post(
-            reverse("dev_login"), {"handle": "alice.bsky.social"}
-        )
+        resp = self.client.post(reverse("dev_login"), {"handle": "alice.bsky.social"})
         self.assertEqual(resp.status_code, 404)
         self.assertFalse(User.objects.exists())
 
-    @override_settings(
-        ROOT_URLCONF=DEV_URLS, DEBUG=False, DEV_LOGIN_ENABLED=False
-    )
+    @override_settings(ROOT_URLCONF=DEV_URLS, DEBUG=False, DEV_LOGIN_ENABLED=False)
     def test_login_page_hides_the_dev_form(self):
         resp = self.client.get(reverse("login"))
         self.assertNotContains(resp, "Dev sign-in (no auth)")

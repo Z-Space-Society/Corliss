@@ -33,3 +33,21 @@ dependencies = [
 # so `uv sync` provisions dependencies without trying to build the app itself.
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "ruff==0.17.4",
+]
+
+# Lint and format with `uv run ruff check` and `uv run ruff format`. The rule
+# set is named, not ruff's default, so upgrading ruff never changes what counts
+# as an error without an edit here. E501 is off: the formatter owns line
+# length, and the long lines it leaves are strings and comments.
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]
+

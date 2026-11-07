@@ -71,9 +71,7 @@ class AccountPageTests(NoRosterMixin, TestCase):
             reverse("account"),
             {"display_name": "Alice", "email": "alice@pds.example"},
         )
-        self.assertRedirects(
-            resp, reverse("account"), fetch_redirect_response=False
-        )
+        self.assertRedirects(resp, reverse("account"), fetch_redirect_response=False)
         self.user.refresh_from_db()
         self.assertEqual(self.user.display_name, "Alice")
 

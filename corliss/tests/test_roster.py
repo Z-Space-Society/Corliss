@@ -7,7 +7,7 @@ departed admin ever approved, so the departed-admin and re-added cases are the
 ones worth breaking on.
 """
 
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime
 from unittest.mock import patch
 
 from django.core.cache import cache
@@ -91,8 +91,13 @@ class RosterParsingTests(TestCase):
 
     def test_an_unparseable_removed_at_makes_the_entry_malformed(self):
         roster = membership.Roster.from_record(
-            record({"did": JACOB, "addedAt": "2026-01-01T00:00:00Z",
-                    "removedAt": "sometime last year"})
+            record(
+                {
+                    "did": JACOB,
+                    "addedAt": "2026-01-01T00:00:00Z",
+                    "removedAt": "sometime last year",
+                }
+            )
         )
         self.assertFalse(roster.is_current_admin(JACOB))
         self.assertEqual(roster.malformed, [JACOB])
@@ -114,9 +119,7 @@ class WasAdminAtTests(TestCase):
         )
 
     def test_false_before_they_were_added(self):
-        self.assertFalse(
-            self.roster.was_admin_at(JACOB, at("2025-12-31T23:59:59Z"))
-        )
+        self.assertFalse(self.roster.was_admin_at(JACOB, at("2025-12-31T23:59:59Z")))
 
     def test_true_at_the_moment_they_were_added(self):
         self.assertTrue(self.roster.was_admin_at(JACOB, at("2026-01-01T00:00:00Z")))
@@ -137,9 +140,7 @@ class WasAdminAtTests(TestCase):
         self.assertFalse(self.roster.was_admin_at(SCOTT, at("2026-06-01T00:00:00Z")))
 
     def test_false_for_someone_never_on_the_roster(self):
-        self.assertFalse(
-            self.roster.was_admin_at(OUTSIDER, at("2026-03-01T00:00:00Z"))
-        )
+        self.assertFalse(self.roster.was_admin_at(OUTSIDER, at("2026-03-01T00:00:00Z")))
 
     # A DID can hold more than one term. Asking only the first entry found
     # would answer the wrong term's question.
@@ -215,10 +216,10 @@ class FetchRosterTests(TestCase):
         ):
             with self.assertRaises(membership.RosterError):
                 membership.fetch_roster()
-        with patch.object(
-            atproto, "find_record", return_value=record(entry(JACOB))
-        ):
-            self.assertTrue(membership.fetch_roster(refresh=True).is_current_admin(JACOB))
+        with patch.object(atproto, "find_record", return_value=record(entry(JACOB))):
+            self.assertTrue(
+                membership.fetch_roster(refresh=True).is_current_admin(JACOB)
+            )
         # And the cleared failure means no further network call is needed.
         with patch.object(atproto, "find_record", side_effect=AssertionError):
             self.assertTrue(membership.fetch_roster().is_current_admin(JACOB))
@@ -279,7 +280,8 @@ class GetRecordTests(TestCase):
 
         with patch.object(atproto, "fetch_did_document", return_value=self.DOC):
             with patch.object(
-                atproto.requests, "get",
+                atproto.requests,
+                "get",
                 return_value=FakeResp(json_data={"uri": "at://…", "value": value}),
             ) as get:
                 got = atproto.get_record(
@@ -307,7 +309,8 @@ class GetRecordTests(TestCase):
 
         with patch.object(atproto, "fetch_did_document", return_value=self.DOC):
             with patch.object(
-                atproto.requests, "get",
+                atproto.requests,
+                "get",
                 return_value=FakeResp(json_data={"value": {"admins": []}}),
             ) as get:
                 atproto.get_record(SERVICE_DID, membership.ROSTER_COLLECTION, "self")

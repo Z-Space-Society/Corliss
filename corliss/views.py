@@ -322,9 +322,7 @@ def _resume_after_login(request):
     Only a safe same-site path is honoured, so a poisoned session value cannot
     become an open redirect.
     """
-    next_url = _safe_resume(
-        request, request.session.pop(POST_LOGIN_REDIRECT, None)
-    )
+    next_url = _safe_resume(request, request.session.pop(POST_LOGIN_REDIRECT, None))
     return redirect(next_url) if next_url else redirect("home")
 
 
@@ -409,8 +407,7 @@ def manage_lock(request):
         return redirect("manage")
     membership.lock_service_session()
     request.session[MANAGE_NOTICE_SESSION_KEY] = (
-        "Admin controls are locked. Authenticate the service account to "
-        "unlock them."
+        "Admin controls are locked. Authenticate the service account to unlock them."
     )
     return redirect("manage")
 
@@ -556,9 +553,7 @@ def _dpop_key_for(did):
 
 def callback(request):
     state = request.GET.get("state")
-    pending = (
-        request.session.pop(SESSION_PREFIX + state, None) if state else None
-    )
+    pending = request.session.pop(SESSION_PREFIX + state, None) if state else None
     # Unknown/expired/missing state → reject (CSRF / replay protection).
     if not state or pending is None:
         return HttpResponseBadRequest("Invalid or expired authorization state.")
@@ -645,14 +640,10 @@ def callback(request):
                 f"service account. Admin controls are still locked."
             )
         else:
-            request.session[MANAGE_NOTICE_SESSION_KEY] = (
-                "Admin controls are unlocked."
-            )
+            request.session[MANAGE_NOTICE_SESSION_KEY] = "Admin controls are unlocked."
         return redirect("manage")
 
-    auth_login(
-        request, user, backend="django.contrib.auth.backends.ModelBackend"
-    )
+    auth_login(request, user, backend="django.contrib.auth.backends.ModelBackend")
     user.touch_last_seen()
 
     # Resume an in-progress OIDC authorize (the RP) if one bounced us here —
@@ -699,9 +690,7 @@ def dev_login(request):
         email_confirmed=False,
     )
     _apply_dev_superuser(user)
-    auth_login(
-        request, user, backend="django.contrib.auth.backends.ModelBackend"
-    )
+    auth_login(request, user, backend="django.contrib.auth.backends.ModelBackend")
     user.touch_last_seen()
 
     # Resume an in-progress OIDC authorize, exactly as `callback` does — same
@@ -839,9 +828,7 @@ def apply(request):
         return redirect("home")
 
     try:
-        membership.submit_application(
-            request.user, request.POST.get("note", "")
-        )
+        membership.submit_application(request.user, request.POST.get("note", ""))
     except membership.ApplicationError as exc:
         request.session[APPLY_ERROR_SESSION_KEY] = str(exc)
 
@@ -1216,8 +1203,7 @@ def about_team(request):
         {
             "about_page": "team",
             "avatars": {
-                slug: avatars.get(handle, "")
-                for slug, handle in TEAM_HANDLES.items()
+                slug: avatars.get(handle, "") for slug, handle in TEAM_HANDLES.items()
             },
         },
     )
@@ -1375,7 +1361,8 @@ def parascribe(request):
     if client.is_configured:
         try:
             models = [
-                model for model in client.models(_active_tier(request.user))
+                model
+                for model in client.models(_active_tier(request.user))
                 if model.is_transcription
             ]
         except litellm.LiteLLMError as exc:
@@ -1549,12 +1536,16 @@ def systems_deploy_history(request, host):
     zai-ops would never write is a 404."""
     if not health.valid_host(host):
         raise Http404
-    return render(request, "systems_deploy_history.html", {
-        "host": host,
-        "name": health.display_name(host),
-        "records": health.deploy_history(host),
-        "limit": health.DEPLOY_HISTORY_LIMIT,
-    })
+    return render(
+        request,
+        "systems_deploy_history.html",
+        {
+            "host": host,
+            "name": health.display_name(host),
+            "records": health.deploy_history(host),
+            "limit": health.DEPLOY_HISTORY_LIMIT,
+        },
+    )
 
 
 @require_http_methods(["GET"])
@@ -1603,7 +1594,9 @@ def systems_notes(request):
         ids = {int(v["workspace"]) for v in vaults if (v["workspace"] or "").isdigit()}
         names = {
             str(pk): name
-            for pk, name in Workspace.objects.filter(pk__in=ids).values_list("pk", "name")
+            for pk, name in Workspace.objects.filter(pk__in=ids).values_list(
+                "pk", "name"
+            )
         }
 
         by_did = {}
@@ -1649,7 +1642,11 @@ def systems_notes(request):
         members = sorted(
             by_did.values(),
             key=lambda row: (
-                -(row["total_bytes"] if row["total_bytes"] is not None else row["vault_bytes"]),
+                -(
+                    row["total_bytes"]
+                    if row["total_bytes"] is not None
+                    else row["vault_bytes"]
+                ),
                 row["handle"] or row["did"],
             ),
         )
@@ -1734,8 +1731,7 @@ def manage(request):
         current = {}
         for entry in entries:
             if entry.is_current and (
-                entry.did not in current
-                or entry.added_at > current[entry.did].added_at
+                entry.did not in current or entry.added_at > current[entry.did].added_at
             ):
                 current[entry.did] = entry
         admins = sorted(current.values(), key=lambda e: e.added_at)
@@ -1777,9 +1773,7 @@ def manage(request):
     # Applications are matched against every member, not only the active ones —
     # an application from somebody previously revoked has still been decided
     # once, and the queue should not offer it as though it were new.
-    applications = _applications(
-        registry, list(MembershipCache.objects.all())
-    )
+    applications = _applications(registry, list(MembershipCache.objects.all()))
 
     # One resolution pass over every DID on the page — applicants, members,
     # whoever granted them, and the admins — so the lookups are shared rather
@@ -1825,9 +1819,7 @@ def manage(request):
             "service_session": membership.service_session_status(),
             "tiers": membership.TIERS,
             "default_tier": membership.DEFAULT_TIER,
-            "manage_notice": request.session.pop(
-                MANAGE_NOTICE_SESSION_KEY, None
-            ),
+            "manage_notice": request.session.pop(MANAGE_NOTICE_SESSION_KEY, None),
             "manage_error": request.session.pop(MANAGE_ERROR_SESSION_KEY, None),
         },
     )
@@ -2292,9 +2284,7 @@ def _register_registry_session(user, token_data, pending):
         log.warning("registry session registration failed for %s: %s", user.did, exc)
         return
 
-    AtprotoToken.objects.filter(user=user).update(
-        registry_session_at=timezone.now()
-    )
+    AtprotoToken.objects.filter(user=user).update(registry_session_at=timezone.now())
 
 
 # --- OIDC provider endpoints -----------------------------------------------
@@ -2652,9 +2642,7 @@ def membership_push(request):
     # deployment that simply had not configured it yet.
     expected = settings.MEMBERSHIP_PUSH_TOKEN
     if not expected:
-        return JsonResponse(
-            {"error": "membership push is not configured"}, status=503
-        )
+        return JsonResponse({"error": "membership push is not configured"}, status=503)
 
     auth = request.META.get("HTTP_AUTHORIZATION", "")
     presented = auth[7:] if auth.startswith("Bearer ") else ""
@@ -2663,7 +2651,7 @@ def membership_push(request):
 
     try:
         payload = json.loads(request.body)
-    except (ValueError, UnicodeDecodeError):
+    except ValueError, UnicodeDecodeError:
         return JsonResponse({"error": "body is not valid JSON"}, status=400)
 
     try:
@@ -2689,7 +2677,7 @@ def _client_credentials(request):
         try:
             decoded = base64.b64decode(auth[6:]).decode()
             cid, secret = decoded.split(":", 1)
-        except (ValueError, UnicodeDecodeError):
+        except ValueError, UnicodeDecodeError:
             return None, None
     return cid, secret
 
@@ -2869,9 +2857,7 @@ def _token_public(request, cid):
         return _public_code_grant(request, cid)
     if grant_type == "refresh_token":
         return _public_refresh_grant(request, cid)
-    return _error(
-        "unsupported_grant_type", "only authorization_code and refresh_token"
-    )
+    return _error("unsupported_grant_type", "only authorization_code and refresh_token")
 
 
 @csrf_exempt  # machine-to-machine: a client secret, or a PKCE verifier
@@ -2886,9 +2872,7 @@ def token(request):
     # A blank configured secret must refuse, not match. Comparing against ""
     # would accept a request that also sent nothing, so a deployment that had
     # not set one would hand tokens to anyone naming the client.
-    secret_ok = bool(client.secret) and hmac.compare_digest(
-        secret or "", client.secret
-    )
+    secret_ok = bool(client.secret) and hmac.compare_digest(secret or "", client.secret)
     if not secret_ok:
         return _error("invalid_client", "client authentication failed", status=401)
 
@@ -2910,9 +2894,7 @@ def token(request):
 
     # Single-use, race-safe: only the request that flips used False→True wins,
     # so concurrent redemptions of the same code can't both mint a token.
-    claimed = OidcAuthCode.objects.filter(code=code_value, used=False).update(
-        used=True
-    )
+    claimed = OidcAuthCode.objects.filter(code=code_value, used=False).update(used=True)
     if not claimed:
         return _error("invalid_grant", "code already used")
 

@@ -12,9 +12,7 @@ class UrlForTests(SimpleTestCase):
     """Every shape `git describe --tags --always --dirty` can produce."""
 
     def test_exact_tag_links_to_the_tag_page(self):
-        self.assertEqual(
-            version.url_for("v0.2.0"), f"{REPO}/releases/tag/v0.2.0"
-        )
+        self.assertEqual(version.url_for("v0.2.0"), f"{REPO}/releases/tag/v0.2.0")
 
     def test_pre_release_tag_is_still_read_as_a_tag(self):
         # The `-rc1` suffix must not be mistaken for describe's own
@@ -24,9 +22,7 @@ class UrlForTests(SimpleTestCase):
         )
 
     def test_commits_past_a_tag_link_to_the_commit(self):
-        self.assertEqual(
-            version.url_for("v0.2.0-3-gabc1234"), f"{REPO}/commit/abc1234"
-        )
+        self.assertEqual(version.url_for("v0.2.0-3-gabc1234"), f"{REPO}/commit/abc1234")
 
     def test_untagged_checkout_links_to_the_commit(self):
         self.assertEqual(version.url_for("abc1234"), f"{REPO}/commit/abc1234")

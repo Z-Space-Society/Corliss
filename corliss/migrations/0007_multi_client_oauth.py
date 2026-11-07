@@ -6,71 +6,122 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('corliss', '0006_workspace'),
+        ("corliss", "0006_workspace"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='OidcClientDocument',
+            name="OidcClientDocument",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('client_id', models.CharField(max_length=2000, unique=True)),
-                ('document', models.JSONField(blank=True, default=dict)),
-                ('fetched_at', models.DateTimeField()),
-                ('expires_at', models.DateTimeField()),
-                ('last_error', models.CharField(blank=True, max_length=500)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("client_id", models.CharField(max_length=2000, unique=True)),
+                ("document", models.JSONField(blank=True, default=dict)),
+                ("fetched_at", models.DateTimeField()),
+                ("expires_at", models.DateTimeField()),
+                ("last_error", models.CharField(blank=True, max_length=500)),
             ],
         ),
         migrations.AddField(
-            model_name='oidcauthcode',
-            name='code_challenge',
+            model_name="oidcauthcode",
+            name="code_challenge",
             field=models.CharField(blank=True, max_length=128),
         ),
         migrations.AddField(
-            model_name='oidcauthcode',
-            name='resource',
+            model_name="oidcauthcode",
+            name="resource",
             field=models.CharField(blank=True, max_length=2000),
         ),
         migrations.AlterField(
-            model_name='oidcauthcode',
-            name='client_id',
+            model_name="oidcauthcode",
+            name="client_id",
             field=models.CharField(max_length=2000),
         ),
         migrations.AlterField(
-            model_name='oidcauthcode',
-            name='redirect_uri',
+            model_name="oidcauthcode",
+            name="redirect_uri",
             field=models.CharField(max_length=2000),
         ),
         migrations.CreateModel(
-            name='OidcRefreshToken',
+            name="OidcRefreshToken",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('token_hash', models.CharField(max_length=64, unique=True)),
-                ('client_id', models.CharField(max_length=2000)),
-                ('resource', models.CharField(max_length=2000)),
-                ('scope', models.CharField(blank=True, max_length=255)),
-                ('family', models.UUIDField(db_index=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('expires_at', models.DateTimeField()),
-                ('used_at', models.DateTimeField(blank=True, null=True)),
-                ('superseded_at', models.DateTimeField(blank=True, null=True)),
-                ('parent', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='children', to='corliss.oidcrefreshtoken')),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='oidc_refresh_tokens', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("token_hash", models.CharField(max_length=64, unique=True)),
+                ("client_id", models.CharField(max_length=2000)),
+                ("resource", models.CharField(max_length=2000)),
+                ("scope", models.CharField(blank=True, max_length=255)),
+                ("family", models.UUIDField(db_index=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("expires_at", models.DateTimeField()),
+                ("used_at", models.DateTimeField(blank=True, null=True)),
+                ("superseded_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "parent",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="children",
+                        to="corliss.oidcrefreshtoken",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="oidc_refresh_tokens",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='OidcConsent',
+            name="OidcConsent",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('client_id', models.CharField(max_length=2000)),
-                ('resource', models.CharField(max_length=2000)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='oidc_consents', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("client_id", models.CharField(max_length=2000)),
+                ("resource", models.CharField(max_length=2000)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="oidc_consents",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'constraints': [models.UniqueConstraint(fields=('user', 'client_id', 'resource'), name='unique_oidc_consent')],
+                "constraints": [
+                    models.UniqueConstraint(
+                        fields=("user", "client_id", "resource"),
+                        name="unique_oidc_consent",
+                    )
+                ],
             },
         ),
     ]

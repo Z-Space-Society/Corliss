@@ -194,7 +194,12 @@ class RelayClientTests(VaultsCase):
         self.assertEqual(names, ["First", "Second"])
 
     def test_a_listing_that_is_not_the_expected_shape_is_an_error(self):
-        for body in ([], {"vaults": "none"}, {"vaults": [5]}, {"vaults": [{"name": 5}]}):
+        for body in (
+            [],
+            {"vaults": "none"},
+            {"vaults": [5]},
+            {"vaults": [{"name": 5}]},
+        ):
             with self.subTest(body=body), Relay(list_answer=answer(200, body)):
                 with self.assertRaises(sync_relay.SyncRelayError):
                     sync_relay.list_vaults(DID)
@@ -503,7 +508,11 @@ class ConnectedAppsTests(VaultsCase):
 
         refreshed = self.client.post(
             reverse("token"),
-            {"grant_type": "refresh_token", "refresh_token": raw, "client_id": OPENCODE},
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": raw,
+                "client_id": OPENCODE,
+            },
         )
         self.assertEqual(refreshed.status_code, 400)
         self.assertEqual(refreshed.json()["error"], "invalid_grant")
@@ -641,8 +650,13 @@ class SystemsNotesTests(TestCase):
                 held("Notes", DID, note_count=4, bytes=1000),
                 held("Work", DID, note_count=1, bytes=500),
                 held("Private", BOB, note_count=2, bytes=300),
-                held("Garden Club", DID, workspace=str(self.workspace.pk),
-                     note_count=9, bytes=7000),
+                held(
+                    "Garden Club",
+                    DID,
+                    workspace=str(self.workspace.pk),
+                    note_count=9,
+                    bytes=7000,
+                ),
                 held("Gone", BOB, workspace="999", note_count=0, bytes=10),
             ],
             "unfiled": [
@@ -667,8 +681,14 @@ class SystemsNotesTests(TestCase):
         )
 
         rows = {
-            row["did"]: (row["vaults"], row["notes"], row["vault_bytes"],
-                         row["unfiled_docs"], row["unfiled_bytes"], row["total_bytes"])
+            row["did"]: (
+                row["vaults"],
+                row["notes"],
+                row["vault_bytes"],
+                row["unfiled_docs"],
+                row["unfiled_bytes"],
+                row["total_bytes"],
+            )
             for row in resp.context["members"]
         }
         # Alice made the workspace's vault; it is not in her total.
@@ -683,7 +703,10 @@ class SystemsNotesTests(TestCase):
 
     def test_while_the_relay_is_indexing_the_unfiled_figures_are_unknown(self):
         self._admin(True)
-        body = {"vaults": [held("Notes", DID, note_count=1, bytes=100)], "unfiled": None}
+        body = {
+            "vaults": [held("Notes", DID, note_count=1, bytes=100)],
+            "unfiled": None,
+        }
         resp, _ = self.get(body)
         self.assertTrue(resp.context["indexing"])
         (row,) = resp.context["members"]

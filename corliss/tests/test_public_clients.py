@@ -342,7 +342,9 @@ class ResourceSettingTests(SimpleTestCase):
             with self.subTest(raw=raw), override_settings(OIDC_RESOURCES=raw):
                 self.assertEqual(check_oidc_resources_parse(None), [])
 
-    @override_settings(OIDC_RESOURCES='[{"url": "https://sync.zai.test", "kind": "snyc"}]')
+    @override_settings(
+        OIDC_RESOURCES='[{"url": "https://sync.zai.test", "kind": "snyc"}]'
+    )
     def test_the_deploy_check_fails_a_bad_value_and_names_the_entry(self):
         errors = check_oidc_resources_parse(None)
         self.assertEqual([e.id for e in errors], ["corliss.E004"])
@@ -482,9 +484,7 @@ class PkceTests(SimpleTestCase):
     def test_a_verifier_out_of_length_fails_even_when_it_hashes_right(self):
         for verifier in ("v" * 42, "v" * 129):
             with self.subTest(length=len(verifier)):
-                self.assertFalse(
-                    oidc.pkce_verifies(verifier, challenge_for(verifier))
-                )
+                self.assertFalse(oidc.pkce_verifies(verifier, challenge_for(verifier)))
 
     def test_a_verifier_outside_the_character_set_fails(self):
         verifier = "v" * 42 + "!"
@@ -512,7 +512,9 @@ class ResourceMatchingTests(SimpleTestCase):
         self.assertEqual(oidc.match_resource(SYNC).kind, "sync")
         self.assertEqual(oidc.match_resource(MCP).kind, "mcp")
 
-    def test_a_trailing_slash_or_capitals_still_match_and_the_configured_spelling_wins(self):
+    def test_a_trailing_slash_or_capitals_still_match_and_the_configured_spelling_wins(
+        self,
+    ):
         for spelling in (SYNC + "/", "HTTPS://Sync.ZAI.test", "https://SYNC.zai.test/"):
             with self.subTest(spelling):
                 self.assertEqual(oidc.match_resource(spelling).url, SYNC)
@@ -657,7 +659,9 @@ class PublicFlowCase(KeysMixin, TestCase):
 class PublicAuthorizeTests(PublicFlowCase):
     # --- the client and where it wants the answer sent ---------------------
 
-    def test_a_redirect_the_client_did_not_declare_is_an_error_page_not_a_redirect(self):
+    def test_a_redirect_the_client_did_not_declare_is_an_error_page_not_a_redirect(
+        self,
+    ):
         self.client.force_login(self.user)
         resp = self.authorize(redirect_uri="obsidian://somewhere-else")
         self.assertEqual(resp.status_code, 400)
@@ -711,7 +715,13 @@ class PublicAuthorizeTests(PublicFlowCase):
 
         stored = self.client.session[POST_LOGIN_REDIRECT]
         carried = parse_qs(urlsplit(stored).query)
-        for name in ("client_id", "redirect_uri", "state", "code_challenge", "resource"):
+        for name in (
+            "client_id",
+            "redirect_uri",
+            "state",
+            "code_challenge",
+            "resource",
+        ):
             self.assertEqual(carried[name], [self.params()[name]], name)
 
         self.client.force_login(self.user)

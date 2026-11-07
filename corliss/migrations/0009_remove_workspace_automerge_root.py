@@ -4,14 +4,13 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('corliss', '0008_atprototoken_client_kid'),
+        ("corliss", "0008_atprototoken_client_kid"),
     ]
 
     operations = [
         migrations.RemoveField(
-            model_name='workspace',
-            name='automerge_root',
+            model_name="workspace",
+            name="automerge_root",
         ),
     ]

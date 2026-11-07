@@ -41,7 +41,7 @@ class LoginViewTests(TestCase):
     def test_login_get_renders_form(self):
         resp = self.client.get(reverse("login"))
         self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "name=\"handle\"")
+        self.assertContains(resp, 'name="handle"')
 
 
 class FooterTests(TestCase):
@@ -226,9 +226,7 @@ class AboutViewTests(NoRosterMixin, TestCase):
 
     def test_the_team_page_shows_a_face_when_there_is_one(self):
         url = "https://cdn.bsky.app/img/avatar/plain/did:plc:x/bafkrei"
-        with patch.object(
-            atproto, "avatar_urls", return_value={"bmann.ca": url}
-        ):
+        with patch.object(atproto, "avatar_urls", return_value={"bmann.ca": url}):
             resp = self.client.get(reverse("about_team"))
         self.assertContains(resp, url)
 
@@ -251,9 +249,7 @@ class AboutViewTests(NoRosterMixin, TestCase):
         for name in ("about", "about_system", "about_team"):
             with self.subTest(page=name):
                 html = self.client.get(reverse(name)).content.decode()
-                self.assertEqual(
-                    self.ACTIVE_ITEM.findall(html), [reverse(name)]
-                )
+                self.assertEqual(self.ACTIVE_ITEM.findall(html), [reverse(name)])
 
     def test_a_page_outside_the_section_marks_nothing(self):
         html = self.client.get(reverse("home")).content.decode()
@@ -427,7 +423,9 @@ class NavMenuTests(NoRosterMixin, TestCase):
         proxmox, beszel = html.index(">Proxmox<"), html.index(">Beszel<")
         self.assertLess(proxmox, beszel)
         # Nothing between them: directly under, not merely somewhere below.
-        self.assertNotIn("nav__dropdown-item", html[proxmox + 1:html.rindex("<a", 0, beszel)])
+        self.assertNotIn(
+            "nav__dropdown-item", html[proxmox + 1 : html.rindex("<a", 0, beszel)]
+        )
 
     @override_settings(BESZEL_URL="https://monitor.example.com")
     def test_a_plain_member_never_sees_the_beszel_link(self):
@@ -512,8 +510,9 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         # settings and pay the timeout for each.
         self._states = {}
         self._manifests = {}
-        self._health_patcher = patch("corliss.health.check_all",
-                                     side_effect=self._fake_check)
+        self._health_patcher = patch(
+            "corliss.health.check_all", side_effect=self._fake_check
+        )
         self._health_patcher.start()
         self.addCleanup(self._health_patcher.stop)
 
@@ -532,9 +531,14 @@ class SystemsViewTests(NoRosterMixin, TestCase):
                         "label": health._LABELS[
                             self._states.get(probe.name, health.UNKNOWN)
                         ],
-                        **self._manifests.get(probe.name, {
-                            "version": None, "revision": None, "provisioned_at": "",
-                        }),
+                        **self._manifests.get(
+                            probe.name,
+                            {
+                                "version": None,
+                                "revision": None,
+                                "provisioned_at": "",
+                            },
+                        ),
                     }
                     for probe in probes
                 ],
@@ -552,9 +556,19 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("systems"))
         self.assertEqual(resp.status_code, 200)
-        for service in ("Garage", "PostgreSQL", "Redis", "Caddy", "HappyView",
-                        "LiteLLM", "Sync relay", "PDS", "Corliss", "Open WebUI",
-                        "scn-chat"):
+        for service in (
+            "Garage",
+            "PostgreSQL",
+            "Redis",
+            "Caddy",
+            "HappyView",
+            "LiteLLM",
+            "Sync relay",
+            "PDS",
+            "Corliss",
+            "Open WebUI",
+            "scn-chat",
+        ):
             self.assertContains(resp, service)
 
     def test_each_state_renders_its_own_word_and_dot(self):
@@ -596,14 +610,18 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("systems"))
         headings = re.findall(r"<th>([^<]+)</th>", resp.content.decode())
-        self.assertEqual(headings[:5], ["Service", "What it does", "zai-ops", "Version", "Status"])
+        self.assertEqual(
+            headings[:5], ["Service", "What it does", "zai-ops", "Version", "Status"]
+        )
 
     def test_a_manifest_renders_its_revision_and_version(self):
-        self._manifests = {"Redis": {
-            "version": "5:8.0.2-3+deb13u2",
-            "revision": "v0.7.0-dirty",
-            "provisioned_at": "2026-09-16T16:57:26Z",
-        }}
+        self._manifests = {
+            "Redis": {
+                "version": "5:8.0.2-3+deb13u2",
+                "revision": "v0.7.0-dirty",
+                "provisioned_at": "2026-09-16T16:57:26Z",
+            }
+        }
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("systems"))
@@ -639,10 +657,16 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         self._as_cluster_admin()
         self.client.force_login(self.user)
 
-        with patch("corliss.health.requests.get",
-                   side_effect=requests.ConnectionError("refused")), \
-                patch("corliss.health.socket.create_connection",
-                      side_effect=ConnectionRefusedError()):
+        with (
+            patch(
+                "corliss.health.requests.get",
+                side_effect=requests.ConnectionError("refused"),
+            ),
+            patch(
+                "corliss.health.socket.create_connection",
+                side_effect=ConnectionRefusedError(),
+            ),
+        ):
             resp = self.client.get(reverse("systems"))
 
         self.assertEqual(resp.status_code, 200)
@@ -720,9 +744,7 @@ class ManageViewTests(NoRosterMixin, TestCase):
         answering no here and the superuser flag is the only thing letting this
         request through.
         """
-        root = User.objects.create_superuser(
-            username="admin", did="did:local:admin"
-        )
+        root = User.objects.create_superuser(username="admin", did="did:local:admin")
         self.client.force_login(root)
 
         with self._roster():
@@ -748,9 +770,7 @@ class ManageViewTests(NoRosterMixin, TestCase):
         on it do not: `_edit_roster` re-asks `membership.is_cluster_admin`, the
         module function, which carries no superuser clause. Widening the
         property into the write paths for consistency is what this pins."""
-        root = User.objects.create_superuser(
-            username="admin", did="did:local:admin"
-        )
+        root = User.objects.create_superuser(username="admin", did="did:local:admin")
         self.client.force_login(root)
 
         with self._roster():
@@ -776,9 +796,11 @@ class ManageViewTests(NoRosterMixin, TestCase):
         from corliss import membership
 
         self._applications(
-            [membership.Application(
-                "did:plc:applicant", _at("2026-08-17T13:44:05Z"), "HEYO"
-            )]
+            [
+                membership.Application(
+                    "did:plc:applicant", _at("2026-08-17T13:44:05Z"), "HEYO"
+                )
+            ]
         )
         self._as_cluster_admin()
         self.client.force_login(self.user)
@@ -812,11 +834,15 @@ class ManageViewTests(NoRosterMixin, TestCase):
         # Each decided application predates the event that decided it, which is
         # the ordinary order of things: you ask, then you are answered.
         # `_grant` stamps 2026-01-01; the revocation above stamps 2026-09-01.
-        self._applications([
-            membership.Application("did:plc:member", _at("2025-12-01T00:00:00Z")),
-            membership.Application("did:plc:exmember", _at("2026-08-02T00:00:00Z")),
-            membership.Application("did:plc:applicant", _at("2026-08-03T00:00:00Z")),
-        ])
+        self._applications(
+            [
+                membership.Application("did:plc:member", _at("2025-12-01T00:00:00Z")),
+                membership.Application("did:plc:exmember", _at("2026-08-02T00:00:00Z")),
+                membership.Application(
+                    "did:plc:applicant", _at("2026-08-03T00:00:00Z")
+                ),
+            ]
+        )
         self._as_cluster_admin()
         self.client.force_login(self.user)
 
@@ -859,11 +885,13 @@ class ManageViewTests(NoRosterMixin, TestCase):
             last_event_at="2026-02-01T00:00:00Z",
             author_did="did:plc:anadmin",
         )
-        self._applications([
-            membership.Application(
-                "did:plc:exmember", _at("2026-08-02T00:00:00Z"), "let me back in"
-            ),
-        ])
+        self._applications(
+            [
+                membership.Application(
+                    "did:plc:exmember", _at("2026-08-02T00:00:00Z"), "let me back in"
+                ),
+            ]
+        )
         self._as_cluster_admin()
         self.client.force_login(self.user)
 
@@ -886,9 +914,13 @@ class ManageViewTests(NoRosterMixin, TestCase):
         The handle is still what is *displayed* — that half is unchanged."""
         from corliss import membership
 
-        self._applications([
-            membership.Application("did:plc:applicant", _at("2026-08-01T00:00:00Z")),
-        ])
+        self._applications(
+            [
+                membership.Application(
+                    "did:plc:applicant", _at("2026-08-01T00:00:00Z")
+                ),
+            ]
+        )
         with patch.object(
             membership,
             "handles_for",
@@ -911,9 +943,11 @@ class ManageViewTests(NoRosterMixin, TestCase):
         from corliss import membership
 
         _grant(did="did:plc:member")  # stamps 2026-01-01
-        self._applications([
-            membership.Application("did:plc:member", _at("2025-12-01T00:00:00Z")),
-        ])
+        self._applications(
+            [
+                membership.Application("did:plc:member", _at("2025-12-01T00:00:00Z")),
+            ]
+        )
         self._as_cluster_admin()
         self.client.force_login(self.user)
 
@@ -1173,7 +1207,7 @@ class ManageViewTests(NoRosterMixin, TestCase):
         self.assertContains(resp, "could not reach the registry")
 
     def test_an_unreadable_roster_shows_a_failure_not_an_empty_table(self):
-        """"Could not find out" and "there are no admins" are different facts."""
+        """ "Could not find out" and "there are no admins" are different facts."""
         from corliss import membership
 
         self._as_cluster_admin()
@@ -1444,8 +1478,12 @@ LITELLM_SETTINGS = {
 
 def _key(token="abc123def456", alias="alice.bsky.social/laptop"):
     return litellm.ApiKey(
-        token=token, masked="sk-...4f2a", alias=alias,
-        spend=0, created_at="2026-08-01", blocked=False,
+        token=token,
+        masked="sk-...4f2a",
+        alias=alias,
+        spend=0,
+        created_at="2026-08-01",
+        blocked=False,
     )
 
 
@@ -1500,7 +1538,9 @@ class ApiViewTests(NoRosterMixin, TestCase):
 
     @override_settings(**LITELLM_SETTINGS)
     def test_the_page_lists_the_signed_in_members_keys(self):
-        with patch.object(litellm.LiteLLM, "keys_for", return_value=[_key()]) as keys_for:
+        with patch.object(
+            litellm.LiteLLM, "keys_for", return_value=[_key()]
+        ) as keys_for:
             with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
                 resp = self.client.get(reverse("api"))
         keys_for.assert_called_once_with(DID)
@@ -1519,7 +1559,9 @@ class ApiViewTests(NoRosterMixin, TestCase):
     @override_settings(**LITELLM_SETTINGS)
     def test_creating_a_key_shows_the_secret_exactly_once(self):
         with patch.object(litellm.LiteLLM, "issue_key", return_value="sk-brand-new"):
-            resp = self.client.post(reverse("api"), {"action": "create", "label": "laptop"})
+            resp = self.client.post(
+                reverse("api"), {"action": "create", "label": "laptop"}
+            )
         # Not followed: fetching the redirect target here would render the page
         # once before the assertions below, and rendering is what consumes the
         # secret. That is the behaviour under test, so it must not be spent by
@@ -1542,8 +1584,12 @@ class ApiViewTests(NoRosterMixin, TestCase):
         with patch.object(litellm.LiteLLM, "issue_key", return_value="sk-x") as issue:
             self.client.post(
                 reverse("api"),
-                {"action": "create", "label": "laptop",
-                 "did": "did:plc:someoneelse", "tier": "level-9"},
+                {
+                    "action": "create",
+                    "label": "laptop",
+                    "did": "did:plc:someoneelse",
+                    "tier": "level-9",
+                },
             )
         did, label = issue.call_args.args
         self.assertEqual(did, DID)
@@ -1553,7 +1599,8 @@ class ApiViewTests(NoRosterMixin, TestCase):
     @override_settings(**LITELLM_SETTINGS)
     def test_a_refused_issue_renders_the_reason_and_mints_nothing(self):
         with patch.object(
-            litellm.LiteLLM, "issue_key",
+            litellm.LiteLLM,
+            "issue_key",
             side_effect=litellm.LiteLLMError("key limit reached"),
         ):
             self.client.post(reverse("api"), {"action": "create", "label": "laptop"})
@@ -1585,7 +1632,8 @@ class ApiViewTests(NoRosterMixin, TestCase):
     @override_settings(**LITELLM_SETTINGS)
     def test_a_member_at_the_cap_is_told_rather_than_offered_the_form(self):
         with patch.object(
-            litellm.LiteLLM, "keys_for",
+            litellm.LiteLLM,
+            "keys_for",
             return_value=[_key(token=f"tok{n}0000000") for n in range(5)],
         ):
             with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
@@ -1597,7 +1645,8 @@ class ApiViewTests(NoRosterMixin, TestCase):
     def test_unreadable_usage_does_not_take_the_keys_panel_with_it(self):
         with patch.object(litellm.LiteLLM, "keys_for", return_value=[_key()]):
             with patch.object(
-                litellm.LiteLLM, "usage",
+                litellm.LiteLLM,
+                "usage",
                 side_effect=litellm.LiteLLMError("usage is down"),
             ):
                 resp = self.client.get(reverse("api"))
@@ -1610,7 +1659,8 @@ class ApiViewTests(NoRosterMixin, TestCase):
         # "Could not list your keys" and "you have no keys" are different
         # facts, and rendering the empty state for the first is a lie.
         with patch.object(
-            litellm.LiteLLM, "keys_for",
+            litellm.LiteLLM,
+            "keys_for",
             side_effect=litellm.LiteLLMError("the API service could not be reached"),
         ):
             resp = self.client.get(reverse("api"))
@@ -1621,7 +1671,9 @@ class ApiViewTests(NoRosterMixin, TestCase):
     @override_settings(**LITELLM_SETTINGS)
     def test_usage_is_asked_for_the_trailing_window(self):
         with patch.object(litellm.LiteLLM, "keys_for", return_value=[]):
-            with patch.object(litellm.LiteLLM, "usage", return_value=([], None)) as usage:
+            with patch.object(
+                litellm.LiteLLM, "usage", return_value=([], None)
+            ) as usage:
                 self.client.get(reverse("api"))
         did, start, end = usage.call_args.args
         self.assertEqual(did, DID)
@@ -1652,8 +1704,10 @@ class ApiViewTests(NoRosterMixin, TestCase):
         with patch.object(
             litellm.LiteLLM,
             "models",
-            return_value=[_model("nomic-embed-text", mode="embedding"),
-                          _model("qwen3-coder")],
+            return_value=[
+                _model("nomic-embed-text", mode="embedding"),
+                _model("qwen3-coder"),
+            ],
         ):
             with patch.object(litellm.LiteLLM, "keys_for", return_value=[]):
                 with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
@@ -1673,7 +1727,8 @@ class ApiViewTests(NoRosterMixin, TestCase):
     @override_settings(**LITELLM_SETTINGS)
     def test_unreadable_models_do_not_take_the_keys_panel_with_them(self):
         with patch.object(
-            litellm.LiteLLM, "models",
+            litellm.LiteLLM,
+            "models",
             side_effect=litellm.LiteLLMError("models are down"),
         ):
             with patch.object(litellm.LiteLLM, "keys_for", return_value=[_key()]):
@@ -1694,7 +1749,9 @@ class ApiViewTests(NoRosterMixin, TestCase):
             with patch.object(litellm.LiteLLM, "usage", return_value=([], None)):
                 first = self.client.get(reverse("api"))
                 second = self.client.get(reverse("api"))
-        self.assertContains(first, "export SCN_API_KEY=<span data-key-slot>sk-brand-new")
+        self.assertContains(
+            first, "export SCN_API_KEY=<span data-key-slot>sk-brand-new"
+        )
         self.assertNotContains(second, "sk-brand-new")
         self.assertContains(second, "export SCN_API_KEY=<span data-key-slot>sk-")
 
@@ -1714,9 +1771,7 @@ class ApiViewTests(NoRosterMixin, TestCase):
 
 class CallbackViewTests(TestCase):
     def test_unknown_state_is_rejected(self):
-        resp = self.client.get(
-            reverse("callback"), {"state": "bogus", "code": "x"}
-        )
+        resp = self.client.get(reverse("callback"), {"state": "bogus", "code": "x"})
         self.assertEqual(resp.status_code, 400)
 
     def test_missing_state_is_rejected(self):
@@ -1736,11 +1791,10 @@ class CallbackViewTests(TestCase):
         mock_email.return_value = ("", False)
         _seed_pending(self.client, "state1")
         resp = self.client.get(
-            reverse("callback"), {"state": "state1", "code": "code", "iss": "https://auth.example"}
+            reverse("callback"),
+            {"state": "state1", "code": "code", "iss": "https://auth.example"},
         )
-        self.assertRedirects(
-            resp, reverse("home"), fetch_redirect_response=False
-        )
+        self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
         user = User.objects.get(did=DID)
         self.assertEqual(user.username, "alice.bsky.social")
         self.assertEqual(user.pds_url, "https://pds.example.com")
@@ -1871,7 +1925,8 @@ class CallbackViewTests(TestCase):
         mock_email.return_value = ("", False)
         _seed_pending(self.client, "state2", handle="new.handle")
         self.client.get(
-            reverse("callback"), {"state": "state2", "code": "code", "iss": "https://auth.example"}
+            reverse("callback"),
+            {"state": "state2", "code": "code", "iss": "https://auth.example"},
         )
         user = User.objects.get(did=DID)
         self.assertEqual(user.username, "new.handle")  # refreshed
@@ -1907,7 +1962,8 @@ class CallbackViewTests(TestCase):
         )
         _seed_pending(self.client, "state3", did=DID)
         resp = self.client.get(
-            reverse("callback"), {"state": "state3", "code": "code", "iss": "https://auth.example"}
+            reverse("callback"),
+            {"state": "state3", "code": "code", "iss": "https://auth.example"},
         )
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(User.objects.filter(did=DID).exists())
@@ -1959,9 +2015,10 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
                 "n2",
             ),
         ):
-            with patch.object(
-                atproto, "fetch_session_email", return_value=("", False)
-            ), patch.object(atproto, "fetch_display_name", return_value=""):
+            with (
+                patch.object(atproto, "fetch_session_email", return_value=("", False)),
+                patch.object(atproto, "fetch_display_name", return_value=""),
+            ):
                 return self.client.get(
                     reverse("callback"),
                     {
@@ -2000,9 +2057,7 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
 
         resp = self._complete(SERVICE_DID)
 
-        self.assertRedirects(
-            resp, reverse("manage"), fetch_redirect_response=False
-        )
+        self.assertRedirects(resp, reverse("manage"), fetch_redirect_response=False)
         self.assertEqual(self.client.session["_auth_user_id"], str(self.user.pk))
 
     def test_it_stores_the_session_against_the_service_account(self):
@@ -2033,9 +2088,7 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
         resp = self._complete(DID)
 
         self.assertEqual(resp.status_code, 400)
-        self.assertFalse(
-            AtprotoToken.objects.filter(user__did=SERVICE_DID).exists()
-        )
+        self.assertFalse(AtprotoToken.objects.filter(user__did=SERVICE_DID).exists())
         # And the admin is still themselves, not half-swapped into something.
         self.assertEqual(self.client.session["_auth_user_id"], str(self.user.pk))
 
@@ -2051,9 +2104,10 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
                 "n2",
             ),
         ):
-            with patch.object(
-                atproto, "fetch_session_email", return_value=("", False)
-            ), patch.object(atproto, "fetch_display_name", return_value=""):
+            with (
+                patch.object(atproto, "fetch_session_email", return_value=("", False)),
+                patch.object(atproto, "fetch_display_name", return_value=""),
+            ):
                 self.client.get(
                     reverse("callback"),
                     {"state": "plain", "code": "c", "iss": "https://auth.example"},
@@ -2083,9 +2137,7 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
         resp = self.client.post(reverse("manage_lock"))
 
         self.assertRedirects(resp, reverse("manage"), fetch_redirect_response=False)
-        self.assertFalse(
-            AtprotoToken.objects.filter(user__did=SERVICE_DID).exists()
-        )
+        self.assertFalse(AtprotoToken.objects.filter(user__did=SERVICE_DID).exists())
         # Your own session is untouched: locking is not a sign-out.
         self.assertEqual(self.client.session["_auth_user_id"], str(self.user.pk))
 
@@ -2097,9 +2149,7 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("manage_lock"))
 
         self.assertRedirects(resp, reverse("manage"), fetch_redirect_response=False)
-        self.assertTrue(
-            AtprotoToken.objects.filter(user__did=SERVICE_DID).exists()
-        )
+        self.assertTrue(AtprotoToken.objects.filter(user__did=SERVICE_DID).exists())
 
     def test_a_non_admin_cannot_lock(self):
         self.client.force_login(self.user)
@@ -2108,9 +2158,7 @@ class ServiceUnlockTests(NoRosterMixin, TestCase):
         resp = self.client.post(reverse("manage_lock"))
 
         self.assertEqual(resp.status_code, 404)
-        self.assertTrue(
-            AtprotoToken.objects.filter(user__did=SERVICE_DID).exists()
-        )
+        self.assertTrue(AtprotoToken.objects.filter(user__did=SERVICE_DID).exists())
 
 
 @override_settings(SCN_SERVICE_DID=SERVICE_DID)
@@ -2144,8 +2192,9 @@ class InviteAndCascadeTests(NoRosterMixin, TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
-        handles = patch.object(atproto, "fetch_did_document",
-                               side_effect=atproto.OAuthError("no net"))
+        handles = patch.object(
+            atproto, "fetch_did_document", side_effect=atproto.OAuthError("no net")
+        )
         handles.start()
         self.addCleanup(handles.stop)
         apps = patch.object(
@@ -2258,9 +2307,7 @@ class ParascribeViewTests(NoRosterMixin, TestCase):
 
     def test_signed_out_is_sent_to_login(self):
         resp = self.client.get(reverse("parascribe"))
-        self.assertRedirects(
-            resp, f"{reverse('login')}?next={reverse('parascribe')}"
-        )
+        self.assertRedirects(resp, f"{reverse('login')}?next={reverse('parascribe')}")
 
     @override_settings(API_URL="https://api.example.com", **LITELLM_SETTINGS)
     def test_a_non_member_is_welcome_and_asks_for_no_tier(self):
@@ -2274,10 +2321,12 @@ class ParascribeViewTests(NoRosterMixin, TestCase):
     def test_the_examples_name_a_transcription_model_from_the_members_tier(self):
         _grant()
         self.client.force_login(self.user)
-        resp, call = self._get([
-            _model("GX10/northmini"),
-            _model("GTX1080/parakeet-v2", mode="audio_transcription"),
-        ])
+        resp, call = self._get(
+            [
+                _model("GX10/northmini"),
+                _model("GTX1080/parakeet-v2", mode="audio_transcription"),
+            ]
+        )
         call.assert_called_once_with("level-2")
         self.assertEqual(resp.context["example_model"], "GTX1080/parakeet-v2")
         # A chat model would answer the transcription endpoint with a 400.
@@ -2309,7 +2358,9 @@ class ParascribeViewTests(NoRosterMixin, TestCase):
         self.assertEqual(resp.context["models_error"], "proxy down")
         self.assertEqual(resp.context["example_model"], views.EXAMPLE_MODEL_FALLBACK)
 
-    @override_settings(API_URL="https://api.example.com", LITELLM_URL="", LITELLM_PROVISIONER_KEY="")
+    @override_settings(
+        API_URL="https://api.example.com", LITELLM_URL="", LITELLM_PROVISIONER_KEY=""
+    )
     def test_no_litellm_still_shows_the_examples_and_asks_nothing(self):
         self.client.force_login(self.user)
         resp, call = self._get()
@@ -2330,14 +2381,23 @@ class ParascribeViewTests(NoRosterMixin, TestCase):
     def test_the_tools_menu_links_it_for_a_non_member(self):
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertContains(resp, f'<a class="nav__dropdown-item" href="{reverse("parascribe")}">')
+        self.assertContains(
+            resp, f'<a class="nav__dropdown-item" href="{reverse("parascribe")}">'
+        )
 
 
 _RECORD = {
-    "host": "corliss", "name": "Corliss", "stamp": "20261018T140211Z", "result": "failed",
-    "succeeded": False, "failed_task": "corliss : Sync the venv", "version": "",
-    "zai_ops": "v0.12.0", "trigger": "timer",
-    "started_at": "2026-10-18T14:02:11Z", "finished_at": "2026-10-18T14:04:40Z",
+    "host": "corliss",
+    "name": "Corliss",
+    "stamp": "20261018T140211Z",
+    "result": "failed",
+    "succeeded": False,
+    "failed_task": "corliss : Sync the venv",
+    "version": "",
+    "zai_ops": "v0.12.0",
+    "trigger": "timer",
+    "started_at": "2026-10-18T14:02:11Z",
+    "finished_at": "2026-10-18T14:04:40Z",
 }
 
 
@@ -2359,12 +2419,16 @@ class SystemsDeploysViewTests(NoRosterMixin, TestCase):
         # The logs name hosts, addresses and paths.
         _grant()
         self.client.force_login(self.user)
-        with patch("corliss.health.last_deploys", return_value=[_RECORD]), \
-                patch("corliss.health.deploy_history", return_value=[_RECORD]), \
-                patch("corliss.health.deploy_log", return_value=(_RECORD, "log")):
-            for url in (reverse("systems_deploys"),
-                        reverse("systems_deploy_history", args=["corliss"]),
-                        reverse("systems_deploy_log", args=["corliss", "20261018T140211Z"])):
+        with (
+            patch("corliss.health.last_deploys", return_value=[_RECORD]),
+            patch("corliss.health.deploy_history", return_value=[_RECORD]),
+            patch("corliss.health.deploy_log", return_value=(_RECORD, "log")),
+        ):
+            for url in (
+                reverse("systems_deploys"),
+                reverse("systems_deploy_history", args=["corliss"]),
+                reverse("systems_deploy_log", args=["corliss", "20261018T140211Z"]),
+            ):
                 self.assertEqual(self.client.get(url).status_code, 404, url)
 
     def test_the_last_deploy_shows_its_result_and_failed_task(self):
@@ -2373,20 +2437,28 @@ class SystemsDeploysViewTests(NoRosterMixin, TestCase):
             resp = self.client.get(reverse("systems_deploys"))
         self.assertContains(resp, "Failed")
         self.assertContains(resp, "corliss : Sync the venv")
-        self.assertContains(resp, reverse("systems_deploy_log", args=["corliss", "20261018T140211Z"]))
+        self.assertContains(
+            resp, reverse("systems_deploy_log", args=["corliss", "20261018T140211Z"])
+        )
 
     def test_unreadable_and_empty_say_different_things(self):
         self._as_cluster_admin()
         with patch("corliss.health.last_deploys", return_value=None):
-            self.assertContains(self.client.get(reverse("systems_deploys")), "can't be read")
+            self.assertContains(
+                self.client.get(reverse("systems_deploys")), "can't be read"
+            )
         with patch("corliss.health.last_deploys", return_value=[]):
-            self.assertContains(self.client.get(reverse("systems_deploys")), "No deploys recorded yet")
+            self.assertContains(
+                self.client.get(reverse("systems_deploys")), "No deploys recorded yet"
+            )
 
     def test_a_service_with_no_records_says_so(self):
         # Every /systems/ row links here, so "none yet" is a page, not a 404.
         self._as_cluster_admin()
         with patch("corliss.health.deploy_history", return_value=[]):
-            resp = self.client.get(reverse("systems_deploy_history", args=["object-store"]))
+            resp = self.client.get(
+                reverse("systems_deploy_history", args=["object-store"])
+            )
         self.assertContains(resp, "No deploys recorded for Garage yet")
 
     def test_a_name_zai_ops_would_not_write_is_404(self):
@@ -2396,7 +2468,11 @@ class SystemsDeploysViewTests(NoRosterMixin, TestCase):
 
     def test_the_log_renders_as_text(self):
         self._as_cluster_admin()
-        with patch("corliss.health.deploy_log", return_value=(_RECORD, "<b>FAILED</b>")):
-            resp = self.client.get(reverse("systems_deploy_log", args=["corliss", "20261018T140211Z"]))
+        with patch(
+            "corliss.health.deploy_log", return_value=(_RECORD, "<b>FAILED</b>")
+        ):
+            resp = self.client.get(
+                reverse("systems_deploy_log", args=["corliss", "20261018T140211Z"])
+            )
         self.assertContains(resp, "&lt;b&gt;FAILED&lt;/b&gt;")
         self.assertNotContains(resp, "<b>FAILED</b>")

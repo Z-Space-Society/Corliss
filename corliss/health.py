@@ -370,8 +370,12 @@ def _manifest_client():
     IP, which has no subdomain to put a bucket name in.
     """
     origin = _origin(settings.GARAGE_S3_URL)
-    if not (origin and settings.MANIFEST_BUCKET
-            and settings.MANIFEST_ACCESS_KEY and settings.MANIFEST_SECRET_KEY):
+    if not (
+        origin
+        and settings.MANIFEST_BUCKET
+        and settings.MANIFEST_ACCESS_KEY
+        and settings.MANIFEST_SECRET_KEY
+    ):
         return None
 
     try:
@@ -442,24 +446,70 @@ def _manifest(client, key):
 # something that is not there, so a row belongs here only if something can be
 # asked whether it is up.
 STACK = [
-    ("Core", [
-        Probe("object-store", "Garage", "S3 object store and system backup target", _garage),
-        Probe("postgres", "PostgreSQL", "Cluster's central database", _postgres),
-        Probe("redis", "Redis", "In-memory store for sessions, caching, and short-lived data", _redis),
-    ]),
-    ("Platform", [
-        Probe("proxy", "Caddy", "The only LAN-facing container, terminates TLS", _caddy),
-        Probe("happyview", "HappyView", "Membership registry: applications, grants, admin roster", _happyview),
-        Probe("litellm", "LiteLLM", "API gateway in front of the models", _litellm),
-        Probe("sync-relay", "Sync relay", "Automerge sync server", _sync_relay),
-        Probe("pds", "PDS", "AT Protocol personal data server: accounts and their repos", _pds),
-    ]),
-    ("Applications", [
-        Probe("corliss", "Corliss", "Login, membership, OIDC, and API keys", _corliss),
-        Probe("open-webui", "Open WebUI", "Chat app", _open_webui),
-        Probe("scn-chat", "scn-chat", "AI assistant chat, signed in with a member's own PDS", _scn_chat),
-        Probe("beszel", "Beszel", "Monitoring hub: per-machine metrics and pending updates", _beszel),
-    ]),
+    (
+        "Core",
+        [
+            Probe(
+                "object-store",
+                "Garage",
+                "S3 object store and system backup target",
+                _garage,
+            ),
+            Probe("postgres", "PostgreSQL", "Cluster's central database", _postgres),
+            Probe(
+                "redis",
+                "Redis",
+                "In-memory store for sessions, caching, and short-lived data",
+                _redis,
+            ),
+        ],
+    ),
+    (
+        "Platform",
+        [
+            Probe(
+                "proxy",
+                "Caddy",
+                "The only LAN-facing container, terminates TLS",
+                _caddy,
+            ),
+            Probe(
+                "happyview",
+                "HappyView",
+                "Membership registry: applications, grants, admin roster",
+                _happyview,
+            ),
+            Probe("litellm", "LiteLLM", "API gateway in front of the models", _litellm),
+            Probe("sync-relay", "Sync relay", "Automerge sync server", _sync_relay),
+            Probe(
+                "pds",
+                "PDS",
+                "AT Protocol personal data server: accounts and their repos",
+                _pds,
+            ),
+        ],
+    ),
+    (
+        "Applications",
+        [
+            Probe(
+                "corliss", "Corliss", "Login, membership, OIDC, and API keys", _corliss
+            ),
+            Probe("open-webui", "Open WebUI", "Chat app", _open_webui),
+            Probe(
+                "scn-chat",
+                "scn-chat",
+                "AI assistant chat, signed in with a member's own PDS",
+                _scn_chat,
+            ),
+            Probe(
+                "beszel",
+                "Beszel",
+                "Monitoring hub: per-machine metrics and pending updates",
+                _beszel,
+            ),
+        ],
+    ),
 ]
 
 # Probed on the request's own thread rather than in the pool, for the reason in
@@ -524,8 +574,10 @@ def _measure():
                     "label": _LABELS[states[probe.name]],
                     # None when there is no manifest to show; the template
                     # renders that as a blank, never as a guess.
-                    **(manifests.get(probe.name)
-                       or {"version": None, "revision": None, "provisioned_at": ""}),
+                    **(
+                        manifests.get(probe.name)
+                        or {"version": None, "revision": None, "provisioned_at": ""}
+                    ),
                 }
                 for probe in probes
             ],
@@ -550,9 +602,7 @@ def check_all(*, refresh=False):
 
     groups = _measure()
     all_up = all(
-        service["state"] == UP
-        for group in groups
-        for service in group["services"]
+        service["state"] == UP for group in groups for service in group["services"]
     )
     cache.set(_CACHE_KEY, groups, HEALTH_CACHE_TTL if all_up else HEALTH_DEGRADED_TTL)
     return groups
@@ -608,7 +658,7 @@ def _deploy_record(client, key):
         return None
 
     return {
-        "host": (host := key[len(DEPLOYS_PREFIX):].split("/", 1)[0]),
+        "host": (host := key[len(DEPLOYS_PREFIX) :].split("/", 1)[0]),
         "name": display_name(host),
         "stamp": key.rsplit("/", 1)[1].removesuffix(".json"),
         "result": result,
@@ -626,7 +676,8 @@ def _list(client, **kwargs):
     """Every page of a ListObjectsV2, as (keys, common prefixes)."""
     keys, prefixes = [], []
     for page in client.get_paginator("list_objects_v2").paginate(
-            Bucket=settings.MANIFEST_BUCKET, **kwargs):
+        Bucket=settings.MANIFEST_BUCKET, **kwargs
+    ):
         keys += [o["Key"] for o in page.get("Contents", [])]
         prefixes += [p["Prefix"] for p in page.get("CommonPrefixes", [])]
     return keys, prefixes
@@ -649,7 +700,7 @@ def last_deploys():
         return None
     try:
         _, prefixes = _list(client, Prefix=DEPLOYS_PREFIX, Delimiter="/")
-        hosts = sorted(p[len(DEPLOYS_PREFIX):].rstrip("/") for p in prefixes)
+        hosts = sorted(p[len(DEPLOYS_PREFIX) :].rstrip("/") for p in prefixes)
         latest = []
         for host in hosts:
             keys = _record_keys(client, host)

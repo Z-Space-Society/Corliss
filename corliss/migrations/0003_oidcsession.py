@@ -6,24 +6,43 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('corliss', '0002_membershipcache'),
+        ("corliss", "0002_membershipcache"),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='OidcSession',
+            name="OidcSession",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('client_id', models.CharField(max_length=255)),
-                ('sid', models.CharField(max_length=128)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('last_authorized_at', models.DateTimeField(auto_now=True)),
-                ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='oidc_sessions', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("client_id", models.CharField(max_length=255)),
+                ("sid", models.CharField(max_length=128)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("last_authorized_at", models.DateTimeField(auto_now=True)),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="oidc_sessions",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'constraints': [models.UniqueConstraint(fields=('user', 'client_id'), name='unique_oidc_session_per_client')],
+                "constraints": [
+                    models.UniqueConstraint(
+                        fields=("user", "client_id"),
+                        name="unique_oidc_session_per_client",
+                    )
+                ],
             },
         ),
     ]

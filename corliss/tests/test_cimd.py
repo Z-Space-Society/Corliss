@@ -112,7 +112,10 @@ class Network:
             return self.session
 
         self._patches = [
-            patch("corliss.oidc.socket.getaddrinfo", return_value=_answers(*self._addresses)),
+            patch(
+                "corliss.oidc.socket.getaddrinfo",
+                return_value=_answers(*self._addresses),
+            ),
             patch("corliss.oidc._pinned_session", pinned),
         ]
         self.resolve = self._patches[0].start()
@@ -141,7 +144,9 @@ class FetchTests(SimpleTestCase):
 
         url, kwargs = net.session.calls[0]
         # The address that was checked, with TLS and Host for the real name.
-        self.assertEqual(url, f"https://{PUBLIC_IP}:443/oauth/claude-code-client-metadata")
+        self.assertEqual(
+            url, f"https://{PUBLIC_IP}:443/oauth/claude-code-client-metadata"
+        )
         self.assertEqual(kwargs["headers"]["Host"], "claude.ai")
         self.assertEqual(net.hostnames, ["claude.ai"])
         self.assertIs(kwargs["allow_redirects"], False)
@@ -211,7 +216,9 @@ class FetchTests(SimpleTestCase):
     def test_an_ipv6_address_is_bracketed(self):
         with Network(addresses=("2606:4700::6810:1",)) as net:
             oidc.fetch_client_document(URL)
-        self.assertTrue(net.session.calls[0][0].startswith("https://[2606:4700::6810:1]:443/"))
+        self.assertTrue(
+            net.session.calls[0][0].startswith("https://[2606:4700::6810:1]:443/")
+        )
 
     def test_a_redirect_is_a_failure(self):
         response = FakeResponse(status=302, headers={"Location": "https://evil.test/"})
@@ -248,8 +255,9 @@ class FetchTests(SimpleTestCase):
                 clock[0] += 2
                 yield b" "
 
-        with Network(FakeResponse(chunks=chunks())), patch(
-            "corliss.oidc.time.monotonic", lambda: clock[0]
+        with (
+            Network(FakeResponse(chunks=chunks())),
+            patch("corliss.oidc.time.monotonic", lambda: clock[0]),
         ):
             with self.assertRaises(oidc.ClientDocumentError):
                 oidc.fetch_client_document(URL)
@@ -276,7 +284,9 @@ class FetchTests(SimpleTestCase):
             "redirect_uris not a list": {"redirect_uris": "http://localhost/callback"},
             "a redirect that is not a string": {"redirect_uris": [1]},
             "client_name missing": {"client_name": None},
-            "a client secret method": {"token_endpoint_auth_method": "client_secret_post"},
+            "a client secret method": {
+                "token_endpoint_auth_method": "client_secret_post"
+            },
             "a custom scheme": {"redirect_uris": ["obsidian://scn-obsidian"]},
             "http off loopback": {"redirect_uris": ["http://example.test/cb"]},
             "one bad redirect among good": {
@@ -285,13 +295,17 @@ class FetchTests(SimpleTestCase):
             "grant_types not a list": {"grant_types": "refresh_token"},
         }
         for name, change in cases.items():
-            document = {k: v for k, v in {**DOCUMENT, **change}.items() if v is not None}
+            document = {
+                k: v for k, v in {**DOCUMENT, **change}.items() if v is not None
+            }
             with self.subTest(name), Network(FakeResponse(document)):
                 with self.assertRaises(oidc.ClientDocumentError):
                     oidc.fetch_client_document(URL)
 
     def test_no_auth_method_stated_is_accepted(self):
-        document = {k: v for k, v in DOCUMENT.items() if k != "token_endpoint_auth_method"}
+        document = {
+            k: v for k, v in DOCUMENT.items() if k != "token_endpoint_auth_method"
+        }
         with Network(FakeResponse(document)):
             oidc.fetch_client_document(URL)
 
@@ -360,8 +374,9 @@ class ResolveAndCacheTests(TestCase):
         with Network():
             oidc.resolve_client(URL)
         self._expire()
-        with Network(requests.ConnectionError("down")), self.assertLogs(
-            "corliss.oidc", level="WARNING"
+        with (
+            Network(requests.ConnectionError("down")),
+            self.assertLogs("corliss.oidc", level="WARNING"),
         ):
             client = oidc.resolve_client(URL)
         self.assertEqual(client.name, "Claude Code")
@@ -371,8 +386,9 @@ class ResolveAndCacheTests(TestCase):
         with Network():
             oidc.resolve_client(URL)
         self._expire()
-        with Network(requests.ConnectionError("down")) as net, self.assertLogs(
-            "corliss.oidc", level="WARNING"
+        with (
+            Network(requests.ConnectionError("down")) as net,
+            self.assertLogs("corliss.oidc", level="WARNING"),
         ):
             oidc.resolve_client(URL)
             oidc.resolve_client(URL)
@@ -383,8 +399,9 @@ class ResolveAndCacheTests(TestCase):
         with Network():
             oidc.resolve_client(URL)
         self._expire(ago=oidc.CIMD_STALE_LIMIT + timedelta(minutes=1))
-        with Network(requests.ConnectionError("down")), self.assertLogs(
-            "corliss.oidc", level="WARNING"
+        with (
+            Network(requests.ConnectionError("down")),
+            self.assertLogs("corliss.oidc", level="WARNING"),
         ):
             with self.assertRaises(oidc.ClientError) as caught:
                 oidc.resolve_client(URL)
@@ -392,8 +409,9 @@ class ResolveAndCacheTests(TestCase):
         self.assertIsNone(oidc.known_client(URL))
 
     def test_a_failed_first_fetch_is_remembered_and_not_retried(self):
-        with Network(FakeResponse(status=404)) as net, self.assertLogs(
-            "corliss.oidc", level="WARNING"
+        with (
+            Network(FakeResponse(status=404)) as net,
+            self.assertLogs("corliss.oidc", level="WARNING"),
         ):
             for _ in range(3):
                 with self.assertRaises(oidc.ClientError) as caught:
@@ -405,7 +423,10 @@ class ResolveAndCacheTests(TestCase):
         self.assertIn("404", row.last_error)
 
     def test_a_remembered_failure_is_tried_again_once_it_expires(self):
-        with Network(FakeResponse(status=404)), self.assertLogs("corliss.oidc", level="WARNING"):
+        with (
+            Network(FakeResponse(status=404)),
+            self.assertLogs("corliss.oidc", level="WARNING"),
+        ):
             with self.assertRaises(oidc.ClientError):
                 oidc.resolve_client(URL)
         self._expire()
@@ -458,7 +479,9 @@ class AuthorizeWithAFetchedClientTests(TestCase):
         self.assertEqual(resp.context["client_name"], "Claude Code")
         self.assertTrue(resp.context["loopback"])
 
-    def test_a_stranger_fetches_nothing_and_is_sent_to_sign_in_with_the_request_kept(self):
+    def test_a_stranger_fetches_nothing_and_is_sent_to_sign_in_with_the_request_kept(
+        self,
+    ):
         with Network() as net:
             resp = self._authorize()
             self.assertEqual(net.fetches, 0)
@@ -505,7 +528,9 @@ class AuthorizeWithAFetchedClientTests(TestCase):
                 self.assertTemplateUsed(resp, "oauth_error.html")
                 self.assertNotIn(POST_LOGIN_REDIRECT, self.client.session)
 
-    def test_a_stranger_with_a_request_too_long_to_resume_gets_a_page_not_a_redirect(self):
+    def test_a_stranger_with_a_request_too_long_to_resume_gets_a_page_not_a_redirect(
+        self,
+    ):
         with Network() as net:
             resp = self._authorize(state="s" * 2100)
             self.assertEqual(net.fetches, 0)
@@ -515,8 +540,9 @@ class AuthorizeWithAFetchedClientTests(TestCase):
 
     def test_a_document_that_cannot_be_fetched_is_an_error_page(self):
         self.client.force_login(self.user)
-        with Network(FakeResponse(status=500)), self.assertLogs(
-            "corliss.oidc", level="WARNING"
+        with (
+            Network(FakeResponse(status=500)),
+            self.assertLogs("corliss.oidc", level="WARNING"),
         ):
             resp = self._authorize()
         self.assertEqual(resp.status_code, 400)

@@ -86,7 +86,9 @@ class SigningTests(TestCase):
 
         token_es = signing.sign_es256({"foo": "bar"})
         key_es = jwt.PyJWK.from_dict(signing.atproto_public_jwk()).key
-        self.assertEqual(jwt.decode(token_es, key=key_es, algorithms=["ES256"])["foo"], "bar")
+        self.assertEqual(
+            jwt.decode(token_es, key=key_es, algorithms=["ES256"])["foo"], "bar"
+        )
 
     def test_missing_key_fails_closed(self):
         with override_settings(ATPROTO_EC_PRIVATE_KEY_PATH=""):
@@ -118,7 +120,10 @@ class KeyRotationTests(TestCase):
             ("ec", ec.generate_private_key(ec.SECP256R1())),
             ("ec_prev", ec.generate_private_key(ec.SECP256R1())),
             ("rsa", rsa.generate_private_key(public_exponent=65537, key_size=2048)),
-            ("rsa_prev", rsa.generate_private_key(public_exponent=65537, key_size=2048)),
+            (
+                "rsa_prev",
+                rsa.generate_private_key(public_exponent=65537, key_size=2048),
+            ),
         ):
             cls.paths[name] = d / f"{name}.pem"
             _write_key(cls.paths[name], key)

@@ -75,9 +75,7 @@ class AppointAdminTests(RosterWriteMixin, TestCase):
     def test_it_leaves_the_existing_entries_alone(self):
         membership.appoint_admin(JACOB, BORIS)
 
-        self.assertEqual(
-            self._current_dids(), [SERVICE_DID, OTHER_ADMIN, BORIS]
-        )
+        self.assertEqual(self._current_dids(), [SERVICE_DID, OTHER_ADMIN, BORIS])
         # Untouched, not rewritten with today's timestamp: the record is the
         # history of who held authority and when.
         self.assertEqual(self._written_entry(OTHER_ADMIN)["addedAt"], GENESIS)

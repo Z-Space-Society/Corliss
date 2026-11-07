@@ -53,8 +53,13 @@ class FakeResponse:
         return self._body
 
 
-def key_row(did=MEMBER, token="abc123def456", alias="jacob/laptop",
-            created="2026-08-01", team_id="t-two"):
+def key_row(
+    did=MEMBER,
+    token="abc123def456",
+    alias="jacob/laptop",
+    created="2026-08-01",
+    team_id="t-two",
+):
     """One entry as `/key/list?return_full_object=true` returns it."""
     return {
         "token": token,
@@ -81,12 +86,12 @@ class Router:
         self.calls = []
 
     def __call__(self, method, url, **kwargs):
-        path = url[len(URL):]
+        path = url[len(URL) :]
         self.calls.append((method, path, kwargs.get("json"), kwargs.get("params")))
         try:
             answer = self.routes[(method, path)]
         except KeyError:  # pragma: no cover - a test asked for the unexpected
-            raise AssertionError(f"unrouted call: {method} {path}")
+            raise AssertionError(f"unrouted call: {method} {path}") from None
         if callable(answer):
             answer = answer(len([c for c in self.calls if c[1] == path]))
         return answer
@@ -117,8 +122,10 @@ class ConfigurationTests(TestCase):
     def test_unreachable_never_leaks_the_internal_address(self):
         # This text is rendered to a member on /api/. It must not carry the
         # URL, which is the internal address the provisioner key lives behind.
-        with patch("corliss.litellm.requests.request",
-                   side_effect=requests.ConnectionError("boom")):
+        with patch(
+            "corliss.litellm.requests.request",
+            side_effect=requests.ConnectionError("boom"),
+        ):
             with self.assertRaises(litellm.LiteLLMError) as caught:
                 client().keys_for(MEMBER)
         self.assertNotIn("10.1.1", str(caught.exception))
@@ -130,9 +137,17 @@ class TeamTests(TestCase):
         cache.clear()
 
     def _router(self, teams):
-        return Router({("GET", "/team/list"): FakeResponse(
-            {"teams": [{"team_alias": a, "team_id": i} for a, i in teams.items()]}
-        )})
+        return Router(
+            {
+                ("GET", "/team/list"): FakeResponse(
+                    {
+                        "teams": [
+                            {"team_alias": a, "team_id": i} for a, i in teams.items()
+                        ]
+                    }
+                )
+            }
+        )
 
     def test_tier_resolves_to_the_team_with_that_alias(self):
         router = self._router({"level-1": "t-one", "level-2": "t-two"})
@@ -212,12 +227,19 @@ class ModelTests(TestCase):
         cache.clear()
 
     def _router(self, models, teams=(("level-2", "t-two", []),)):
-        return Router({
-            ("GET", "/model/info"): FakeResponse({"data": models}),
-            ("GET", "/team/list"): FakeResponse({"teams": [
-                {"team_alias": a, "team_id": i, "models": m} for a, i, m in teams
-            ]}),
-        })
+        return Router(
+            {
+                ("GET", "/model/info"): FakeResponse({"data": models}),
+                ("GET", "/team/list"): FakeResponse(
+                    {
+                        "teams": [
+                            {"team_alias": a, "team_id": i, "models": m}
+                            for a, i, m in teams
+                        ]
+                    }
+                ),
+            }
+        )
 
     def test_an_unscoped_tier_reaches_every_model(self):
         # `models: []` is LiteLLM's own spelling of "everything", and it is what
@@ -267,10 +289,12 @@ class ModelTests(TestCase):
     def test_one_model_on_two_backends_is_one_row(self):
         # `/model/info` returns an entry per deployment. A member addresses the
         # model by name either way and does not care how many serve it.
-        router = self._router([
-            model_row("qwen3-coder", api_base="http://10.1.1.113:8080/v1"),
-            model_row("qwen3-coder", api_base="http://10.1.1.114:8080/v1"),
-        ])
+        router = self._router(
+            [
+                model_row("qwen3-coder", api_base="http://10.1.1.113:8080/v1"),
+                model_row("qwen3-coder", api_base="http://10.1.1.114:8080/v1"),
+            ]
+        )
         with patch("corliss.litellm.requests.request", router):
             found = client().models("level-2")
         self.assertEqual([m.name for m in found], ["qwen3-coder"])
@@ -290,10 +314,12 @@ class ModelTests(TestCase):
     def test_chat_models_sort_before_the_embedder(self):
         # The embedder is infrastructure that happens to be visible; someone
         # reading this page came looking for something to send messages to.
-        router = self._router([
-            model_row("nomic-embed-text", mode="embedding"),
-            model_row("qwen3-coder"),
-        ])
+        router = self._router(
+            [
+                model_row("nomic-embed-text", mode="embedding"),
+                model_row("qwen3-coder"),
+            ]
+        )
         with patch("corliss.litellm.requests.request", router):
             found = client().models("level-2")
         self.assertEqual([m.name for m in found], ["qwen3-coder", "nomic-embed-text"])
@@ -348,13 +374,16 @@ class ModelTests(TestCase):
         router = self._router(CLUSTER_MODELS)
         with patch("corliss.litellm.requests.request", router):
             found = client().models("level-2")
-        self.assertEqual([m.name for m in found], [
-            "GTX1080/Qwen3.5-4B-notemp",
-            "GX10/gemma-26b",
-            "GX10/northmini",
-            "GTX1080/parakeet-v2",
-            "nomic-embed-text",
-        ])
+        self.assertEqual(
+            [m.name for m in found],
+            [
+                "GTX1080/Qwen3.5-4B-notemp",
+                "GX10/gemma-26b",
+                "GX10/northmini",
+                "GTX1080/parakeet-v2",
+                "nomic-embed-text",
+            ],
+        )
 
     def test_nothing_on_the_cluster_declares_a_context_length(self):
         # The state that makes /api/ drop the Context column. Not an assertion
@@ -368,12 +397,18 @@ class ModelTests(TestCase):
     def test_an_unreadable_catalogue_raises_rather_than_reporting_none(self):
         # "No models" and "could not ask" are different facts and the view
         # renders them differently.
-        router = Router({
-            ("GET", "/team/list"): FakeResponse(
-                {"teams": [{"team_alias": "level-2", "team_id": "t-two", "models": []}]}
-            ),
-            ("GET", "/model/info"): FakeResponse("nonsense", status_code=500),
-        })
+        router = Router(
+            {
+                ("GET", "/team/list"): FakeResponse(
+                    {
+                        "teams": [
+                            {"team_alias": "level-2", "team_id": "t-two", "models": []}
+                        ]
+                    }
+                ),
+                ("GET", "/model/info"): FakeResponse("nonsense", status_code=500),
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             with self.assertRaises(litellm.LiteLLMError):
                 client().models("level-2")
@@ -402,28 +437,50 @@ class TeamIndexTests(TestCase):
         cache.clear()
 
     def test_the_alias_map_survives_carrying_the_model_lists(self):
-        router = Router({("GET", "/team/list"): FakeResponse({"teams": [
-            {"team_alias": "level-1", "team_id": "t-one", "models": ["llama-3.3"]},
-            {"team_alias": "level-2", "team_id": "t-two", "models": []},
-        ]})})
+        router = Router(
+            {
+                ("GET", "/team/list"): FakeResponse(
+                    {
+                        "teams": [
+                            {
+                                "team_alias": "level-1",
+                                "team_id": "t-one",
+                                "models": ["llama-3.3"],
+                            },
+                            {"team_alias": "level-2", "team_id": "t-two", "models": []},
+                        ]
+                    }
+                )
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
-            self.assertEqual(
-                client().teams(), {"level-1": "t-one", "level-2": "t-two"}
-            )
+            self.assertEqual(client().teams(), {"level-1": "t-one", "level-2": "t-two"})
 
     def test_a_team_with_no_models_field_is_not_a_crash(self):
         # LiteLLM has answered without it. An absent list and an empty one mean
         # the same thing here, so neither may raise.
-        router = Router({("GET", "/team/list"): FakeResponse(
-            {"teams": [{"team_alias": "level-2", "team_id": "t-two"}]}
-        )})
+        router = Router(
+            {
+                ("GET", "/team/list"): FakeResponse(
+                    {"teams": [{"team_alias": "level-2", "team_id": "t-two"}]}
+                )
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             self.assertEqual(client().team_id_for("level-2"), "t-two")
 
     def test_both_shapes_come_from_a_single_fetch(self):
-        router = Router({("GET", "/team/list"): FakeResponse({"teams": [
-            {"team_alias": "level-2", "team_id": "t-two", "models": []},
-        ]})})
+        router = Router(
+            {
+                ("GET", "/team/list"): FakeResponse(
+                    {
+                        "teams": [
+                            {"team_alias": "level-2", "team_id": "t-two", "models": []},
+                        ]
+                    }
+                )
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             instance = client()
             instance.teams()
@@ -436,9 +493,13 @@ class KeyListingTests(TestCase):
         # Belt and braces over the user_id query parameter. If a LiteLLM
         # version ever ignores that filter, this is what stops one member
         # being handed another's key list — the worst failure available here.
-        router = Router({("GET", "/key/list"): FakeResponse(
-            {"keys": [key_row(MEMBER), key_row(OTHER, token="deadbeef00")]}
-        )})
+        router = Router(
+            {
+                ("GET", "/key/list"): FakeResponse(
+                    {"keys": [key_row(MEMBER), key_row(OTHER, token="deadbeef00")]}
+                )
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             keys = client().keys_for(MEMBER)
         self.assertEqual([k.token for k in keys], ["abc123def456"])
@@ -450,18 +511,24 @@ class KeyListingTests(TestCase):
         self.assertEqual(router.calls[0][3]["user_id"], MEMBER)
 
     def test_the_label_is_the_members_half_of_the_alias(self):
-        router = Router({("GET", "/key/list"): FakeResponse(
-            {"keys": [key_row(alias="jacob.example.com/laptop")]}
-        )})
+        router = Router(
+            {
+                ("GET", "/key/list"): FakeResponse(
+                    {"keys": [key_row(alias="jacob.example.com/laptop")]}
+                )
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             self.assertEqual(client().keys_for(MEMBER)[0].label, "laptop")
 
     def test_an_alias_with_no_separator_still_renders(self):
-        row = litellm.ApiKey(token="t", masked="", alias="legacy", spend=0,
-                             created_at="", blocked=False)
+        row = litellm.ApiKey(
+            token="t", masked="", alias="legacy", spend=0, created_at="", blocked=False
+        )
         self.assertEqual(row.label, "legacy")
-        blank = litellm.ApiKey(token="t", masked="", alias="", spend=0,
-                               created_at="", blocked=False)
+        blank = litellm.ApiKey(
+            token="t", masked="", alias="", spend=0, created_at="", blocked=False
+        )
         self.assertEqual(blank.label, "(unnamed)")
 
 
@@ -615,11 +682,15 @@ class RevokeKeyTests(TestCase):
 
 class TeamMembershipTests(TestCase):
     def test_set_team_moves_the_member_off_every_other_team(self):
-        router = Router({
-            ("GET", "/user/info"): FakeResponse({"user_info": {"teams": ["t-old"]}}),
-            ("POST", "/team/member_delete"): FakeResponse({}),
-            ("POST", "/team/member_add"): FakeResponse({}),
-        })
+        router = Router(
+            {
+                ("GET", "/user/info"): FakeResponse(
+                    {"user_info": {"teams": ["t-old"]}}
+                ),
+                ("POST", "/team/member_delete"): FakeResponse({}),
+                ("POST", "/team/member_add"): FakeResponse({}),
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             client().set_team(MEMBER, "t-new")
         self.assertEqual(
@@ -632,39 +703,53 @@ class TeamMembershipTests(TestCase):
         )
 
     def test_set_team_none_leaves_the_member_in_no_team(self):
-        router = Router({
-            ("GET", "/user/info"): FakeResponse({"user_info": {"teams": ["t-old"]}}),
-            ("POST", "/team/member_delete"): FakeResponse({}),
-        })
+        router = Router(
+            {
+                ("GET", "/user/info"): FakeResponse(
+                    {"user_info": {"teams": ["t-old"]}}
+                ),
+                ("POST", "/team/member_delete"): FakeResponse({}),
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             client().set_team(MEMBER, None)
         self.assertEqual(len(router.bodies("POST", "/team/member_delete")), 1)
 
     def test_an_unchanged_team_is_not_re_added(self):
-        router = Router({
-            ("GET", "/user/info"): FakeResponse({"user_info": {"teams": ["t-two"]}}),
-        })
+        router = Router(
+            {
+                ("GET", "/user/info"): FakeResponse(
+                    {"user_info": {"teams": ["t-two"]}}
+                ),
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             client().set_team(MEMBER, "t-two")
         self.assertEqual(router.bodies("POST", "/team/member_add"), [])
 
     def test_already_a_member_is_tolerated(self):
-        router = Router({
-            ("GET", "/user/info"): FakeResponse({"user_info": {"teams": []}}),
-            ("POST", "/team/member_add"): FakeResponse(
-                {"error": "User already in team"}, status_code=400
-            ),
-        })
+        router = Router(
+            {
+                ("GET", "/user/info"): FakeResponse({"user_info": {"teams": []}}),
+                ("POST", "/team/member_add"): FakeResponse(
+                    {"error": "User already in team"}, status_code=400
+                ),
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             client().set_team(MEMBER, "t-two")  # must not raise
 
     def test_not_a_member_is_tolerated_on_removal(self):
-        router = Router({
-            ("GET", "/user/info"): FakeResponse({"user_info": {"teams": ["t-old"]}}),
-            ("POST", "/team/member_delete"): FakeResponse(
-                {"error": "Team member not found"}, status_code=400
-            ),
-        })
+        router = Router(
+            {
+                ("GET", "/user/info"): FakeResponse(
+                    {"user_info": {"teams": ["t-old"]}}
+                ),
+                ("POST", "/team/member_delete"): FakeResponse(
+                    {"error": "Team member not found"}, status_code=400
+                ),
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             client().set_team(MEMBER, None)  # must not raise
 
@@ -679,14 +764,18 @@ class PruneForeignKeysTests(TestCase):
     """
 
     def _router(self, held):
-        return Router({
-            ("GET", "/key/list"): FakeResponse({"keys": list(held)}),
-            ("POST", "/key/delete"): FakeResponse({}),
-        })
+        return Router(
+            {
+                ("GET", "/key/list"): FakeResponse({"keys": list(held)}),
+                ("POST", "/key/delete"): FakeResponse({}),
+            }
+        )
 
     def test_keys_on_another_team_are_deleted(self):
-        held = [key_row(token="aaa11122233", team_id="t-old"),
-                key_row(token="bbb44455566", team_id="t-old")]
+        held = [
+            key_row(token="aaa11122233", team_id="t-old"),
+            key_row(token="bbb44455566", team_id="t-old"),
+        ]
         router = self._router(held)
         with patch("corliss.litellm.requests.request", router):
             self.assertEqual(client().prune_foreign_keys(MEMBER, "t-new"), 2)
@@ -704,8 +793,10 @@ class PruneForeignKeysTests(TestCase):
         self.assertEqual(router.bodies("POST", "/key/delete"), [])
 
     def test_only_the_stale_ones_go(self):
-        held = [key_row(token="staleaaa1111", team_id="t-old"),
-                key_row(token="currentbb222", team_id="t-new")]
+        held = [
+            key_row(token="staleaaa1111", team_id="t-old"),
+            key_row(token="currentbb222", team_id="t-new"),
+        ]
         router = self._router(held)
         with patch("corliss.litellm.requests.request", router):
             self.assertEqual(client().prune_foreign_keys(MEMBER, "t-new"), 1)
@@ -726,10 +817,19 @@ class UsageTests(TestCase):
         "results": [
             {
                 "date": "2026-08-18",
-                "breakdown": {"model_groups": {"claude-opus": {"metrics": {
-                    "prompt_tokens": 10, "completion_tokens": 5,
-                    "total_tokens": 15, "spend": 0.01, "api_requests": 2,
-                }}}},
+                "breakdown": {
+                    "model_groups": {
+                        "claude-opus": {
+                            "metrics": {
+                                "prompt_tokens": 10,
+                                "completion_tokens": 5,
+                                "total_tokens": 15,
+                                "spend": 0.01,
+                                "api_requests": 2,
+                            }
+                        }
+                    }
+                },
                 "metrics": {"api_requests": 2},
             },
             {
@@ -744,8 +844,11 @@ class UsageTests(TestCase):
             },
         ],
         "metadata": {
-            "total_prompt_tokens": 10, "total_completion_tokens": 5,
-            "total_tokens": 15, "total_spend": 0.01, "total_api_requests": 5,
+            "total_prompt_tokens": 10,
+            "total_completion_tokens": 5,
+            "total_tokens": 15,
+            "total_spend": 0.01,
+            "total_api_requests": 5,
         },
     }
 
@@ -754,14 +857,20 @@ class UsageTests(TestCase):
         # caller requested, `models` by the upstream route it resolved to
         # ("openai/nomic-embed-text"). A member's table names what they typed.
         activity = {
-            "results": [{
-                "date": "2026-08-18",
-                "breakdown": {
-                    "model_groups": {"nomic-embed-text": {"metrics": {"api_requests": 3}}},
-                    "models": {"openai/nomic-embed-text": {"metrics": {"api_requests": 3}}},
-                },
-                "metrics": {"api_requests": 3},
-            }],
+            "results": [
+                {
+                    "date": "2026-08-18",
+                    "breakdown": {
+                        "model_groups": {
+                            "nomic-embed-text": {"metrics": {"api_requests": 3}}
+                        },
+                        "models": {
+                            "openai/nomic-embed-text": {"metrics": {"api_requests": 3}}
+                        },
+                    },
+                    "metrics": {"api_requests": 3},
+                }
+            ],
             "metadata": {},
         }
         router = Router({("GET", "/user/daily/activity"): FakeResponse(activity)})
@@ -812,31 +921,35 @@ class LifecycleTests(TestCase):
         cache.clear()
 
     def test_a_grant_provisions_the_user_into_their_tiers_team(self):
-        router = Router({
-            ("POST", "/user/new"): FakeResponse({}),
-            ("GET", "/team/list"): FakeResponse(
-                {"teams": [{"team_alias": "level-2", "team_id": "t-two"}]}
-            ),
-            ("GET", "/user/info"): FakeResponse({"user_info": {"teams": []}}),
-            ("POST", "/team/member_add"): FakeResponse({}),
-            ("GET", "/key/list"): FakeResponse({"keys": []}),
-            ("POST", "/key/delete"): FakeResponse({}),
-        })
+        router = Router(
+            {
+                ("POST", "/user/new"): FakeResponse({}),
+                ("GET", "/team/list"): FakeResponse(
+                    {"teams": [{"team_alias": "level-2", "team_id": "t-two"}]}
+                ),
+                ("GET", "/user/info"): FakeResponse({"user_info": {"teams": []}}),
+                ("POST", "/team/member_add"): FakeResponse({}),
+                ("GET", "/key/list"): FakeResponse({"keys": []}),
+                ("POST", "/key/delete"): FakeResponse({}),
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             self.assertTrue(litellm.on_membership_granted(MEMBER, "level-2"))
-        self.assertEqual(
-            router.bodies("POST", "/user/new")[0]["user_id"], MEMBER
-        )
+        self.assertEqual(router.bodies("POST", "/user/new")[0]["user_id"], MEMBER)
 
     def test_a_revocation_deletes_the_keys_before_touching_the_team(self):
         # The order is the point: if the second half fails the member has
         # already lost access, and a retry only finishes the paperwork.
-        router = Router({
-            ("GET", "/key/list"): FakeResponse({"keys": [key_row()]}),
-            ("POST", "/key/delete"): FakeResponse({}),
-            ("GET", "/user/info"): FakeResponse({"user_info": {"teams": ["t-two"]}}),
-            ("POST", "/team/member_delete"): FakeResponse({}),
-        })
+        router = Router(
+            {
+                ("GET", "/key/list"): FakeResponse({"keys": [key_row()]}),
+                ("POST", "/key/delete"): FakeResponse({}),
+                ("GET", "/user/info"): FakeResponse(
+                    {"user_info": {"teams": ["t-two"]}}
+                ),
+                ("POST", "/team/member_delete"): FakeResponse({}),
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             self.assertTrue(litellm.on_membership_revoked(MEMBER))
         paths = [c[1] for c in router.calls]
@@ -845,18 +958,22 @@ class LifecycleTests(TestCase):
     def test_an_outage_is_reported_as_false_and_never_raised(self):
         # A push must not fail because LiteLLM is down: the grant already
         # happened in the registry, and sync_litellm is the repair.
-        with patch("corliss.litellm.requests.request",
-                   side_effect=requests.ConnectionError("down")):
+        with patch(
+            "corliss.litellm.requests.request",
+            side_effect=requests.ConnectionError("down"),
+        ):
             self.assertFalse(litellm.on_membership_granted(MEMBER, "level-2"))
             self.assertFalse(litellm.on_membership_revoked(MEMBER))
 
     def test_a_revocation_whose_team_removal_fails_still_reports_success(self):
         # The keys are gone, which is the half that matters.
-        router = Router({
-            ("GET", "/key/list"): FakeResponse({"keys": [key_row()]}),
-            ("POST", "/key/delete"): FakeResponse({}),
-            ("GET", "/user/info"): FakeResponse("boom", status_code=500),
-        })
+        router = Router(
+            {
+                ("GET", "/key/list"): FakeResponse({"keys": [key_row()]}),
+                ("POST", "/key/delete"): FakeResponse({}),
+                ("GET", "/user/info"): FakeResponse("boom", status_code=500),
+            }
+        )
         with patch("corliss.litellm.requests.request", router):
             self.assertTrue(litellm.on_membership_revoked(MEMBER))
 
@@ -881,7 +998,9 @@ class SyncCommandTests(TestCase):
 
     def _row(self, did=MEMBER, *, active=True, tier="level-2"):
         return MembershipCache.objects.create(
-            did=did, active=active, tier=tier,
+            did=did,
+            active=active,
+            tier=tier,
             last_rkey=f"{did}:3lqx7qzabc2de",
             last_event_at="2026-01-01T00:00:00Z",
             author_did="did:plc:anadmin",
@@ -907,7 +1026,9 @@ class SyncCommandTests(TestCase):
 
     def test_an_active_member_is_provisioned(self):
         self._row()
-        with patch.object(litellm.LiteLLM, "ensure_user", return_value="t-two") as ensure:
+        with patch.object(
+            litellm.LiteLLM, "ensure_user", return_value="t-two"
+        ) as ensure:
             with patch.object(litellm.LiteLLM, "prune_foreign_keys", return_value=0):
                 output = self.run_command()
         ensure.assert_called_once_with(MEMBER, handle="alice.example", tier="level-2")
@@ -948,7 +1069,8 @@ class SyncCommandTests(TestCase):
     def test_a_member_that_cannot_be_aligned_exits_non_zero(self):
         self._row()
         with patch.object(
-            litellm.LiteLLM, "ensure_user",
+            litellm.LiteLLM,
+            "ensure_user",
             side_effect=litellm.LiteLLMError("no API tier for 'level-2'"),
         ):
             with self.assertRaises(CommandError) as caught:
@@ -959,7 +1081,8 @@ class SyncCommandTests(TestCase):
         self._row(MEMBER)
         self._row(OTHER, tier="level-1")
         with patch.object(
-            litellm.LiteLLM, "ensure_user",
+            litellm.LiteLLM,
+            "ensure_user",
             side_effect=[litellm.LiteLLMError("boom"), "t-one"],
         ) as ensure:
             with patch.object(litellm.LiteLLM, "prune_foreign_keys", return_value=0):

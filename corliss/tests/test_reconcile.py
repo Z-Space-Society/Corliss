@@ -15,7 +15,7 @@ quietly wrong rather than broken:
   event behind it is what a leaked push token leaves.
 """
 
-from datetime import datetime, timezone as dt_timezone
+from datetime import UTC, datetime
 
 from django.test import TestCase
 
@@ -34,7 +34,9 @@ TID_2 = "3lqx7qzabc2df"
 TID_3 = "3lqx7qzabc2dg"
 
 
-def grant(did=MEMBER, tier="level-2", tid=TID_1, author=JACOB, at="2026-03-01T00:00:00Z"):
+def grant(
+    did=MEMBER, tier="level-2", tid=TID_1, author=JACOB, at="2026-03-01T00:00:00Z"
+):
     return {
         "event": "grant",
         "did": did,
@@ -82,7 +84,7 @@ def cache_row(did=MEMBER, active=True, tier="level-2", tid=TID_1, author=JACOB):
         active=active,
         tier=tier,
         last_rkey=f"{did}:{tid}",
-        last_event_at=datetime(2026, 3, 1, tzinfo=dt_timezone.utc),
+        last_event_at=datetime(2026, 3, 1, tzinfo=UTC),
         author_did=author,
     )
 

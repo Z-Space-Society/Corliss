@@ -297,8 +297,7 @@ def check_client_id_url(url):
         or parts.fragment
     ):
         raise ClientDocumentError(
-            "client_id must be an https URL with a path, no credentials and "
-            "no fragment"
+            "client_id must be an https URL with a path, no credentials and no fragment"
         )
     return parts, port
 
@@ -681,7 +680,7 @@ def _loopback_parts(uri):
     """
     try:
         parts = urlsplit(uri)
-        parts.port  # raises on a port that is not a number
+        _ = parts.port  # raises on a port that is not a number
     except ValueError:
         return None
     if parts.scheme != "http" or parts.hostname not in _LOOPBACK_HOSTS:

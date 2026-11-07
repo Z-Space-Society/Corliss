@@ -62,9 +62,7 @@ class Command(BaseCommand):
                 "member": membership.is_active_member(did),
                 "is_staff": did in staff,
             }
-            for did, entry in sorted(
-                current.items(), key=lambda item: item[1].added_at
-            )
+            for did, entry in sorted(current.items(), key=lambda item: item[1].added_at)
         ]
 
         self.stdout.write(

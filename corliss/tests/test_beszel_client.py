@@ -166,8 +166,14 @@ class BeszelTokenTests(NoRosterMixin, TestCase):
             self.admin, client_id=client_id, redirect_uri=redirect_uri, scope="openid"
         )
 
-    def _redeem(self, code, *, client_id=BESZEL_ID, secret=BESZEL_SECRET,
-                redirect_uri=BESZEL_REDIRECT):
+    def _redeem(
+        self,
+        code,
+        *,
+        client_id=BESZEL_ID,
+        secret=BESZEL_SECRET,
+        redirect_uri=BESZEL_REDIRECT,
+    ):
         return self.client.post(
             reverse("token"),
             {
@@ -229,7 +235,9 @@ class BeszelTokenTests(NoRosterMixin, TestCase):
 
     def test_a_beszel_code_cannot_be_redeemed_as_open_webui(self):
         resp = self._redeem(
-            self._code(), client_id=OWUI_ID, secret=OWUI_SECRET,
+            self._code(),
+            client_id=OWUI_ID,
+            secret=OWUI_SECRET,
         )
         self.assertEqual(resp.json()["error"], "invalid_grant")
 
@@ -237,18 +245,27 @@ class BeszelTokenTests(NoRosterMixin, TestCase):
 class ClientIdCheckTests(TestCase):
     """corliss.E005: two confidential clients under one id."""
 
-    @override_settings(OIDC_CLIENT_ID="open-webui", BESZEL_OIDC_CLIENT_ID="open-webui",
-                       BESZEL_OIDC_CLIENT_SECRET="s")
+    @override_settings(
+        OIDC_CLIENT_ID="open-webui",
+        BESZEL_OIDC_CLIENT_ID="open-webui",
+        BESZEL_OIDC_CLIENT_SECRET="s",
+    )
     def test_a_shared_id_fails_the_check(self):
         errors = check_confidential_client_ids_differ(None)
         self.assertEqual([e.id for e in errors], ["corliss.E005"])
 
-    @override_settings(OIDC_CLIENT_ID="open-webui", BESZEL_OIDC_CLIENT_ID="beszel",
-                       BESZEL_OIDC_CLIENT_SECRET="s")
+    @override_settings(
+        OIDC_CLIENT_ID="open-webui",
+        BESZEL_OIDC_CLIENT_ID="beszel",
+        BESZEL_OIDC_CLIENT_SECRET="s",
+    )
     def test_distinct_ids_pass(self):
         self.assertEqual(check_confidential_client_ids_differ(None), [])
 
-    @override_settings(OIDC_CLIENT_ID="open-webui", BESZEL_OIDC_CLIENT_ID="open-webui",
-                       BESZEL_OIDC_CLIENT_SECRET="")
+    @override_settings(
+        OIDC_CLIENT_ID="open-webui",
+        BESZEL_OIDC_CLIENT_ID="open-webui",
+        BESZEL_OIDC_CLIENT_SECRET="",
+    )
     def test_an_unconfigured_hub_is_not_a_clash(self):
         self.assertEqual(check_confidential_client_ids_differ(None), [])
