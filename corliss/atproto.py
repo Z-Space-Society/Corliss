@@ -779,8 +779,8 @@ def put_record(
     """`com.atproto.repo.putRecord` into `repo`, as the member. Upserts.
 
     Returns `(response, nonce)` rather than raising on a non-2xx, because the
-    caller has to read the error before deciding: a 401 `invalid_token` is
-    recoverable by refreshing, and everything else is not. `write_record` is
+    caller has to read the status before deciding: a 401 is recoverable by
+    refreshing, and everything else is not. `write_record` is
     where that decision lives.
 
     The PDS enforces that `repo` is the authenticated member's own — this is
@@ -811,12 +811,17 @@ def put_record(
 def write_record(user, collection, rkey, record):
     """Write a record into the member's own repo, refreshing if the PDS says to.
 
-    **One retry, for one reason.** The PDS answers a stale access token with 401
-    `invalid_token`; that is the only failure this recovers from, and it does so
-    once. Any other failure is returned to the caller as an `OAuthError` — a
-    write that fails twice for the same reason will fail a third time, and the
-    member is better served by an error they can act on than by a page that
-    hangs while we try again.
+    **One retry, on a 401.** A stale access token is answered with 401, but PDS
+    implementations disagree on the error code: the reference PDS says
+    `invalid_token`, ours says `AuthenticationRequired` ("token expired").
+    Keying on one name left the other unrefreshed, which is how the service
+    account's roster write failed in production. So any 401 refreshes once and
+    retries once. A DPoP nonce challenge never gets here (`post_json_with_dpop`
+    absorbs it), and a 401 that is not an expiry costs one refresh and comes
+    back the same. Any other failure is returned to the caller as an
+    `OAuthError`: a write that fails twice for the same reason will fail a
+    third time, and the member is better served by an error they can act on
+    than by a page that hangs while we try again.
 
     Corliss's Django session outlives a PDS access token by a wide margin, so
     this path is not an edge case: a member who signed in this morning and
@@ -857,7 +862,7 @@ def write_record(user, collection, rkey, record):
 
     try:
         resp = attempt()
-        if resp.status_code == 401 and _xrpc_error(resp) == "invalid_token":
+        if resp.status_code == 401:
             _refresh(token, dpop_key)
             resp = attempt()
     except requests.RequestException as exc:
@@ -882,7 +887,7 @@ def refresh_session(token):
     The public door onto `_refresh` for the one caller that has to act *before*
     a failure: `membership.refresh_service_session`, keeping the service
     account's session alive between roster edits that happen monthly. Everywhere
-    else refreshes reactively, on the PDS answering `invalid_token`, which is
+    else refreshes reactively, on the PDS answering 401, which is
     the better default — the note in `_refresh` about not pre-empting a clock we
     do not own still stands for every other path.
     """

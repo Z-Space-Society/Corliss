@@ -703,6 +703,13 @@ degrades **only** roster editing — approve, revoke, login and every member-fac
 page run on the admins' own sessions — and the lock shows its health so a lapse
 is found before somebody needs it.
 
+A write as the service account, or as a member applying, refreshes the stored
+session once on **any** 401 and retries once. It used to refresh only on the
+error code `invalid_token`, which is what the reference PDS sends. Ours answers
+an expired token with `AuthenticationRequired`, so the roster write failed with
+"token expired" rather than refreshing. A test feeding the write a second
+PDS's error shape would have caught it, and `test_apply.py` now has one.
+
 Two edits are refused outright: removing the last current admin, and removing the
 service account. The first would end every approve and revoke with no way back;
 the second removes the identity that performs these writes.
