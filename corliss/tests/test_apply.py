@@ -270,9 +270,7 @@ class WriteRecordTests(TestCase):
                     atproto.write_record(self.user, COLLECTION, "self", {})
 
     def test_no_token_row_is_NoSession_not_a_crash(self):
-        stranger = make_member(
-            did="did:dev:bob", handle="bob", with_token=False
-        )
+        stranger = make_member(did="did:dev:bob", handle="bob", with_token=False)
         with self.assertRaises(atproto.NoSession):
             atproto.write_record(stranger, COLLECTION, "self", {})
 
@@ -508,9 +506,7 @@ class HomePageStateTests(ClearsCache):
         # Not `assert_not_called`: the nav's roster read goes through the same
         # function. The claim is narrower and the one that matters — nobody went
         # looking for an application in a repo we cannot locate.
-        self.assertNotIn(
-            COLLECTION, [call.args[1] for call in find.call_args_list]
-        )
+        self.assertNotIn(COLLECTION, [call.args[1] for call in find.call_args_list])
         self.assertContains(resp, "no connection to a PDS")
         self.assertNotContains(resp, 'action="/membership/apply"')
 

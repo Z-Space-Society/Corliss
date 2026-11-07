@@ -256,6 +256,19 @@ and a real metadata fetch.
 ./manage.py test
 ```
 
+### Lint and format
+
+```bash
+uv run ruff check .    # add --fix for the safe fixes
+uv run ruff format .
+```
+
+[ruff](https://docs.astral.sh/ruff/) is a dev dependency, pinned like the rest,
+and the deploy's `uv sync --no-dev` leaves it out. The rules are named in
+`[tool.ruff.lint]` rather than left to ruff's default, so a ruff upgrade never
+changes what counts as an error without an edit there. Line length is the
+formatter's to keep, which is why `E501` is off.
+
 ### Checking for updates
 
 Dependencies are declared in [`pyproject.toml`](pyproject.toml) and pinned —

@@ -43,8 +43,9 @@ REGISTRY_SETTINGS = {
 }
 
 
-def space_grant(did=MEMBER, tid=TID_1, tier="level-2", author=ADMIN,
-                at="2026-03-01T00:00:00Z"):
+def space_grant(
+    did=MEMBER, tid=TID_1, tier="level-2", author=ADMIN, at="2026-03-01T00:00:00Z"
+):
     """A grant exactly as `atproto.spaces.query` hands it back — no `did`."""
     return {
         "rkey": f"{did}:{tid}",
@@ -53,8 +54,7 @@ def space_grant(did=MEMBER, tid=TID_1, tier="level-2", author=ADMIN,
     }
 
 
-def space_revocation(did=MEMBER, tid=TID_2, author=ADMIN,
-                     at="2026-03-02T00:00:00Z"):
+def space_revocation(did=MEMBER, tid=TID_2, author=ADMIN, at="2026-03-02T00:00:00Z"):
     return {
         "rkey": f"{did}:{tid}",
         "authorDid": author,
@@ -103,9 +103,7 @@ class DidOfTests(TestCase):
 
     def test_round_trips_the_whole_rkey(self):
         rkey = f"{MEMBER}:{TID_1}"
-        self.assertEqual(
-            f"{membership.did_of(rkey)}:{membership.tid_of(rkey)}", rkey
-        )
+        self.assertEqual(f"{membership.did_of(rkey)}:{membership.tid_of(rkey)}", rkey)
 
     def test_an_rkey_with_no_subject_is_refused(self):
         for bad in [TID_1, f":{TID_1}"]:
@@ -144,9 +142,7 @@ class EnvelopeTests(TestCase):
         entry = space_grant()
         del entry["record"]["tier"]
 
-        envelope = membership.MembershipRegistry._to_envelope(
-            entry, membership.GRANT
-        )
+        envelope = membership.MembershipRegistry._to_envelope(entry, membership.GRANT)
 
         self.assertEqual(envelope["did"], MEMBER)
         self.assertNotIn("tier", envelope["record"])
@@ -173,9 +169,7 @@ class FetchEventsTests(TestCase):
         rides in the URL, and the mitigation is the internal address rather than
         a request body.
         """
-        with patch.object(
-            requests, "get", return_value=FakeResponse(payload())
-        ) as get:
+        with patch.object(requests, "get", return_value=FakeResponse(payload())) as get:
             registry().fetch_events()
 
         args, kwargs = get.call_args
@@ -229,15 +223,11 @@ class FetchEventsTests(TestCase):
         production. A proxy preserves the original Host, so only the bypass
         needs this. Blank means "use the URL's own authority".
         """
-        with patch.object(
-            requests, "get", return_value=FakeResponse(payload())
-        ) as get:
+        with patch.object(requests, "get", return_value=FakeResponse(payload())) as get:
             membership.MembershipRegistry(URL, CLIENT_KEY, TOKEN).fetch_events()
         self.assertNotIn("Host", get.call_args.kwargs["headers"])
 
-        with patch.object(
-            requests, "get", return_value=FakeResponse(payload())
-        ) as get:
+        with patch.object(requests, "get", return_value=FakeResponse(payload())) as get:
             membership.MembershipRegistry(
                 "http://10.1.1.111:3000", CLIENT_KEY, TOKEN, HOST
             ).fetch_events()
@@ -251,15 +241,11 @@ class FetchEventsTests(TestCase):
         tie reconciliation — the recovery path — to the console having been
         configured, which is the coupling this must not have.
         """
-        with patch.object(
-            requests, "get", return_value=FakeResponse(payload())
-        ) as get:
+        with patch.object(requests, "get", return_value=FakeResponse(payload())) as get:
             registry().fetch_events()
         self.assertEqual(get.call_args.kwargs["headers"]["x-client-key"], CLIENT_KEY)
 
-        with patch.object(
-            requests, "get", return_value=FakeResponse(payload())
-        ) as get:
+        with patch.object(requests, "get", return_value=FakeResponse(payload())) as get:
             membership.MembershipRegistry(URL, "", TOKEN).fetch_events()
         self.assertEqual(get.call_args.kwargs["headers"], {})
 
@@ -272,9 +258,7 @@ class FetchEventsTests(TestCase):
 
     def test_a_response_missing_a_collection_is_refused(self):
         """Half an answer must not read as "no revocations"."""
-        with patch.object(
-            requests, "get", return_value=FakeResponse({"grants": []})
-        ):
+        with patch.object(requests, "get", return_value=FakeResponse({"grants": []})):
             with self.assertRaises(membership.RegistryError):
                 registry().fetch_events()
 
@@ -434,8 +418,10 @@ class ConfigurationTests(TestCase):
     @override_settings(**REGISTRY_SETTINGS)
     def test_from_settings_reads_every_setting(self):
         built = membership.MembershipRegistry.from_settings()
-        self.assertEqual((built.url, built.client_key, built.token, built.host),
-                         (URL, CLIENT_KEY, TOKEN, ""))
+        self.assertEqual(
+            (built.url, built.client_key, built.token, built.host),
+            (URL, CLIENT_KEY, TOKEN, ""),
+        )
 
     @override_settings(**{**REGISTRY_SETTINGS, "MEMBERSHIP_REGISTRY_HOST": HOST})
     def test_from_settings_reads_the_host_override(self):

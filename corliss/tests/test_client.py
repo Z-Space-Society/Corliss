@@ -10,8 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from django.test import TestCase, override_settings
 
-from corliss import signing
-from corliss import atproto
+from corliss import atproto, signing
 
 
 class FakeResp:
@@ -53,9 +52,7 @@ def _write_keys(d: Path):
 
 class ResolutionTests(TestCase):
     def test_did_passes_through(self):
-        self.assertEqual(
-            atproto.resolve_handle_to_did("did:plc:abc"), "did:plc:abc"
-        )
+        self.assertEqual(atproto.resolve_handle_to_did("did:plc:abc"), "did:plc:abc")
 
     @patch("corliss.atproto.requests.get")
     def test_handle_resolves_via_wellknown(self, mock_get):
@@ -85,9 +82,7 @@ class ResolutionTests(TestCase):
                 }
             ],
         }
-        self.assertEqual(
-            atproto.pds_endpoint_from_doc(doc), "https://pds.example.com"
-        )
+        self.assertEqual(atproto.pds_endpoint_from_doc(doc), "https://pds.example.com")
 
     def test_pds_endpoint_missing_raises(self):
         with self.assertRaises(atproto.OAuthError):

@@ -138,9 +138,7 @@ class GateNeverReconcilesTests(NoRosterMixin, TestCase):
             self.assertFalse(membership.may_enter(STRANGER))
         fetch_events.assert_not_called()
 
-    @override_settings(
-        OIDC_CLIENT_ID=CLIENT_ID, OIDC_REDIRECT_URIS=[REDIRECT_URI]
-    )
+    @override_settings(OIDC_CLIENT_ID=CLIENT_ID, OIDC_REDIRECT_URIS=[REDIRECT_URI])
     def test_a_refused_authorize_does_not_reach_the_registry(self):
         user = User.objects.create_user(username="stranger", did=STRANGER)
         self.client.force_login(user)
@@ -175,9 +173,7 @@ class AuthorizeGateTests(NoRosterMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        self.user = User.objects.create_user(
-            username="alice.bsky.social", did=MEMBER
-        )
+        self.user = User.objects.create_user(username="alice.bsky.social", did=MEMBER)
 
     def test_a_member_gets_a_code(self):
         _grant()
@@ -240,9 +236,7 @@ class AuthorizeGateTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("authorize"), _authorize_params())
         self.assertEqual(resp.status_code, 302)
         self.assertIn(reverse("login"), resp.url)
-        self.assertIn(
-            reverse("authorize"), self.client.session[POST_LOGIN_REDIRECT]
-        )
+        self.assertIn(reverse("authorize"), self.client.session[POST_LOGIN_REDIRECT])
 
 
 @override_settings(OIDC_CLIENT_ID=CLIENT_ID, OIDC_REDIRECT_URIS=[REDIRECT_URI])
@@ -282,13 +276,15 @@ class LoginResumeGateTests(NoRosterMixin, TestCase):
         }
         session.save()
 
-        with patch.object(
-            atproto,
-            "exchange_code",
-            return_value=({"sub": MEMBER, "access_token": "AT"}, "n2"),
-        ), patch.object(
-            atproto, "fetch_session_email", return_value=("", False)
-        ), patch.object(atproto, "fetch_display_name", return_value=""):
+        with (
+            patch.object(
+                atproto,
+                "exchange_code",
+                return_value=({"sub": MEMBER, "access_token": "AT"}, "n2"),
+            ),
+            patch.object(atproto, "fetch_session_email", return_value=("", False)),
+            patch.object(atproto, "fetch_display_name", return_value=""),
+        ):
             return self.client.get(
                 reverse("callback"),
                 {"state": "state1", "code": "code", "iss": "https://auth.example"},
@@ -326,9 +322,7 @@ class HomeIsWhereRefusalsLandTests(NoRosterMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        self.user = User.objects.create_user(
-            username="alice.bsky.social", did=MEMBER
-        )
+        self.user = User.objects.create_user(username="alice.bsky.social", did=MEMBER)
 
     def test_a_non_member_gets_the_page_and_the_way_to_ask(self):
         # `pds_url` is what a real login resolves and what the apply form needs
@@ -375,9 +369,7 @@ class ApiGateTests(NoRosterMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        self.user = User.objects.create_user(
-            username="alice.bsky.social", did=MEMBER
-        )
+        self.user = User.objects.create_user(username="alice.bsky.social", did=MEMBER)
 
     @override_settings(API_URL="https://api.example.com")
     def test_a_member_sees_it(self):
@@ -457,21 +449,15 @@ class TheFourLevelsTests(NoRosterMixin, TestCase):
 
     def setUp(self):
         super().setUp()
-        self.user = User.objects.create_user(
-            username="alice.bsky.social", did=MEMBER
-        )
+        self.user = User.objects.create_user(username="alice.bsky.social", did=MEMBER)
 
     # Level 2 — @login_required. Django's own, so what is actually being
     # asserted is our half: that `login` picks its `?next=` up off the query
     # string and parks it where the atproto round trip will find it.
     def test_signed_out_is_sent_to_login_and_the_target_is_remembered(self):
         resp = self.client.get(reverse("account"))
-        self.assertRedirects(
-            resp, f"{reverse('login')}?next={reverse('account')}"
-        )
-        self.assertEqual(
-            self.client.session[POST_LOGIN_REDIRECT], reverse("account")
-        )
+        self.assertRedirects(resp, f"{reverse('login')}?next={reverse('account')}")
+        self.assertEqual(self.client.session[POST_LOGIN_REDIRECT], reverse("account"))
 
     def test_a_non_member_is_welcome_at_level_2(self):
         self.client.force_login(self.user)
@@ -492,9 +478,7 @@ class TheFourLevelsTests(NoRosterMixin, TestCase):
     def test_level_4_bounces_the_signed_out_and_remembers_where(self):
         resp = self.client.get(reverse("systems"))
         self.assertRedirects(resp, reverse("login"))
-        self.assertEqual(
-            self.client.session[POST_LOGIN_REDIRECT], reverse("systems")
-        )
+        self.assertEqual(self.client.session[POST_LOGIN_REDIRECT], reverse("systems"))
 
     def test_level_4_is_a_404_for_a_member_who_is_not_an_admin(self):
         _grant()
@@ -506,9 +490,7 @@ class TheFourLevelsTests(NoRosterMixin, TestCase):
         self.as_roster_admin(ADMIN)
         self.client.force_login(admin)
         with patch.object(health, "check_all", return_value=[]):
-            self.assertEqual(
-                self.client.get(reverse("systems")).status_code, 200
-            )
+            self.assertEqual(self.client.get(reverse("systems")).status_code, 200)
 
 
 class NextIsNotAnOpenRedirectTests(TestCase):

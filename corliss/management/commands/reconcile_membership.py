@@ -69,8 +69,7 @@ class Command(BaseCommand):
             state = f"active {item['tier']}" if item["active"] else "revoked"
             self.stdout.write(
                 self.style.ERROR(
-                    f"  ORPHAN     {item['did']} ({state}), "
-                    f"author {item['author_did']}"
+                    f"  ORPHAN     {item['did']} ({state}), author {item['author_did']}"
                 )
             )
 
@@ -84,4 +83,6 @@ class Command(BaseCommand):
                 "a row the registry does not account for. Neither is safe to gate on."
             )
 
-        self.stdout.write(self.style.SUCCESS("complete — the cache matches the registry"))
+        self.stdout.write(
+            self.style.SUCCESS("complete — the cache matches the registry")
+        )

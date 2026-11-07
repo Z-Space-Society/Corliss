@@ -622,4 +622,3 @@ class DecideMembershipViewTests(TokenMixin, TestCase):
 
         self.assertEqual(resp.status_code, 404)
         approve.assert_not_called()
-

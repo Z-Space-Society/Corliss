@@ -54,16 +54,16 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone as dt_timezone
+from datetime import UTC, datetime, timedelta
 
 import requests
 from cryptography.hazmat.primitives.asymmetric import ec
-from jwt.algorithms import ECAlgorithm
-from jwt.exceptions import InvalidKeyError
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
+from jwt.algorithms import ECAlgorithm
+from jwt.exceptions import InvalidKeyError
 
 from corliss import atproto, litellm, oidc
 from corliss.models import MembershipCache, OidcRefreshToken, User
@@ -145,13 +145,13 @@ def _parse_timestamp(value, field):
         raise PushError(f"missing or non-string {field!r}")
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        raise PushError(f"{field!r} is not an ISO-8601 datetime: {value!r}")
+    except ValueError as exc:
+        raise PushError(f"{field!r} is not an ISO-8601 datetime: {value!r}") from exc
     # The registry writes UTC with a trailing Z. Anything naive is assumed UTC
     # rather than rejected, since the alternative is dropping a real event over
     # a formatting detail.
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt_timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed
 
 
@@ -231,9 +231,7 @@ def apply_event(parsed):
     pass 2 — so putting the notification here rather than in the two callers is
     what makes "revoked" mean "signed out of chat" no matter which one noticed.
     """
-    row = MembershipCache.objects.select_for_update().filter(
-        did=parsed["did"]
-    ).first()
+    row = MembershipCache.objects.select_for_update().filter(did=parsed["did"]).first()
 
     if row is not None and tid_of(row.last_rkey) >= parsed["tid"]:
         return False
@@ -299,9 +297,7 @@ def apply_event(parsed):
         # is the same recovery the cache itself is getting. It is idempotent and
         # it never raises, which is what makes the burst safe.
         tier = parsed["tier"]
-        transaction.on_commit(
-            lambda: _notify(litellm.on_membership_granted, did, tier)
-        )
+        transaction.on_commit(lambda: _notify(litellm.on_membership_granted, did, tier))
 
     return True
 
@@ -321,9 +317,7 @@ def _notify(fn, *args):
         # test double) would make the handler that exists to swallow errors
         # raise one of its own, which is the failure this whole function is here
         # to prevent.
-        log.exception(
-            "membership: notification %s failed", getattr(fn, "__name__", fn)
-        )
+        log.exception("membership: notification %s failed", getattr(fn, "__name__", fn))
 
 
 def membership_for(user):
@@ -691,8 +685,7 @@ def _service_token(*, for_registry=False):
     token = AtprotoToken.objects.filter(user__did=service_did).first()
     if token is None or not token.access_token:
         raise RosterError(
-            f"there is no stored session for the service account. "
-            f"{SIGN_IN_AS_SERVICE}"
+            f"there is no stored session for the service account. {SIGN_IN_AS_SERVICE}"
         )
     if for_registry and not token.can_write_registry:
         raise RosterError(
@@ -820,7 +813,7 @@ def _write_roster(entries):
 
 def _now_iso():
     """Second-resolution UTC, matching what the registry Lua writes."""
-    return datetime.now(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _raw_entries():
@@ -1030,9 +1023,7 @@ def appoint_admin(actor_did, subject_did):
     # Appended, never merged into a previous term for the same DID: a re-added
     # admin gets a second entry, so the record still says when each term began
     # and ended. `Roster.covers` is written to expect exactly that.
-    entries.append(
-        {"did": subject_did, "addedAt": _now_iso(), "addedBy": actor_did}
-    )
+    entries.append({"did": subject_did, "addedAt": _now_iso(), "addedBy": actor_did})
     _write_roster(entries)
     # Ensured rather than assumed: the console's table reads admin status off
     # `is_staff`, so a member with no local row would appear not to be an admin
@@ -1103,9 +1094,7 @@ def _sync_space_access(did, access):
     """
     registry = MembershipRegistry.from_settings()
     try:
-        registry.set_space_access(
-            _service_token(for_registry=True), did, access
-        )
+        registry.set_space_access(_service_token(for_registry=True), did, access)
     except (RegistryError, RosterError) as exc:
         log.warning("space access sync for %s → %s failed: %s", did, access, exc)
         if access == "write":
@@ -1192,6 +1181,7 @@ def handles_for(dids):
         )
 
     return resolved
+
 
 # --- Reconciliation --------------------------------------------------------
 #
@@ -1480,7 +1470,7 @@ def did_from_uri(uri):
     """
     if not isinstance(uri, str) or not uri.startswith("at://"):
         raise PushError(f"not a record uri: {uri!r}")
-    did = uri[len("at://"):].split("/", 1)[0]
+    did = uri[len("at://") :].split("/", 1)[0]
     if not _DID_RE.match(did) or len(did) > MAX_DID_LEN:
         raise PushError(f"record uri does not start with a DID: {uri!r}")
     return did
@@ -1577,8 +1567,7 @@ def validate_note(note):
     note = (note or "").strip()
     if len(note) > NOTE_MAX_CHARS:
         raise ApplicationError(
-            f"That note is {len(note)} characters; the limit is "
-            f"{NOTE_MAX_CHARS}."
+            f"That note is {len(note)} characters; the limit is {NOTE_MAX_CHARS}."
         )
     if len(note.encode("utf-8")) > NOTE_MAX_BYTES:
         raise ApplicationError("That note is too long.")
@@ -1610,8 +1599,9 @@ def my_application(did, *, refresh=False):
     except atproto.OAuthError as exc:
         raise ApplicationError(str(exc)) from exc
 
-    cache.set(key, record if record is not None else _NO_APPLICATION,
-              APPLICATION_CACHE_TTL)
+    cache.set(
+        key, record if record is not None else _NO_APPLICATION, APPLICATION_CACHE_TTL
+    )
     return record
 
 
@@ -1625,7 +1615,7 @@ def application_created_at(record):
     """
     try:
         return _parse_timestamp(record.get("createdAt"), "createdAt")
-    except (AttributeError, PushError):
+    except AttributeError, PushError:
         return None
 
 
@@ -1645,9 +1635,7 @@ def submit_application(user, note=""):
 
     record = {
         "$type": REQUEST_COLLECTION,
-        "createdAt": datetime.now(dt_timezone.utc).isoformat().replace(
-            "+00:00", "Z"
-        ),
+        "createdAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
     if note:
         record["note"] = note
@@ -1662,8 +1650,7 @@ def submit_application(user, note=""):
     except atproto.OAuthError as exc:
         log.warning("application write failed for %s: %s", user.did, exc)
         raise ApplicationError(
-            "Your PDS would not accept the application. Signing in again may "
-            "fix it."
+            "Your PDS would not accept the application. Signing in again may fix it."
         ) from exc
 
     cache.set(_application_cache_key(user.did), record, APPLICATION_CACHE_TTL)
@@ -1777,9 +1764,7 @@ def provision_registry_key(registry, *, pkce_challenge):
             "registry is not configured for sessions: MEMBERSHIP_REGISTRY_URL "
             "and MEMBERSHIP_REGISTRY_CLIENT_KEY must both be set"
         )
-    payload = registry._post(
-        "/oauth/dpop-keys", {"pkce_challenge": pkce_challenge}
-    )
+    payload = registry._post("/oauth/dpop-keys", {"pkce_challenge": pkce_challenge})
     provision_id = payload.get("provision_id")
     jwk = payload.get("dpop_key")
     if not provision_id or not isinstance(jwk, dict):
@@ -1920,8 +1905,7 @@ class MembershipRegistry:
             # The body carries the Lua's own error message ("forbidden: invalid
             # service token" and friends), which is the half an operator needs.
             raise RegistryError(
-                f"registry returned HTTP {response.status_code}: "
-                f"{response.text[:300]}"
+                f"registry returned HTTP {response.status_code}: {response.text[:300]}"
             )
 
         try:
@@ -2059,8 +2043,7 @@ class MembershipRegistry:
             # operator — or an admin who has just been removed from the roster —
             # actually needs to read.
             raise RegistryError(
-                f"registry returned HTTP {response.status_code}: "
-                f"{response.text[:300]}"
+                f"registry returned HTTP {response.status_code}: {response.text[:300]}"
             )
 
         try:

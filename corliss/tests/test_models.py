@@ -216,7 +216,9 @@ class OidcClientDocumentModelTests(TestCase):
             client_id=CLIENT, fetched_at=now, expires_at=now + timedelta(hours=1)
         )
         stale = OidcClientDocument.objects.create(
-            client_id=CLIENT + "2", fetched_at=now, expires_at=now - timedelta(seconds=1)
+            client_id=CLIENT + "2",
+            fetched_at=now,
+            expires_at=now - timedelta(seconds=1),
         )
         self.assertTrue(fresh.is_fresh)
         self.assertFalse(stale.is_fresh)

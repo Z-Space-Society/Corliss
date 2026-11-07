@@ -6,7 +6,7 @@ re-admits a revoked member.
 """
 
 import json
-from datetime import datetime, timezone as dt_timezone
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
@@ -71,7 +71,7 @@ class ParseTests(TestCase):
         self.assertEqual(parsed["author_did"], ADMIN)
         self.assertEqual(
             parsed["event_at"],
-            datetime(2026, 8, 12, 18, 20, 9, tzinfo=dt_timezone.utc),
+            datetime(2026, 8, 12, 18, 20, 9, tzinfo=UTC),
         )
 
     def test_valid_revoke_carries_no_tier(self):
@@ -110,7 +110,10 @@ class ParseTests(TestCase):
             "bad did": {**grant(), "did": "not-a-did"},
             "missing author": {k: v for k, v in grant().items() if k != "authorDid"},
             "missing record": {k: v for k, v in grant().items() if k != "record"},
-            "bad timestamp": {**grant(), "record": {"tier": "level-0", "grantedAt": "nope"}},
+            "bad timestamp": {
+                **grant(),
+                "record": {"tier": "level-0", "grantedAt": "nope"},
+            },
         }
         for name, payload in cases.items():
             with self.subTest(name):

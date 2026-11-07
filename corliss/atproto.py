@@ -214,9 +214,7 @@ def make_proof(
     if nonce:
         payload["nonce"] = nonce
     if access_token:
-        payload["ath"] = signing.b64url(
-            hashlib.sha256(access_token.encode()).digest()
-        )
+        payload["ath"] = signing.b64url(hashlib.sha256(access_token.encode()).digest())
     return jwt.encode(
         payload,
         key,
@@ -227,12 +225,11 @@ def make_proof(
 
 # --- Identity resolution --------------------------------------------------
 
+
 def _resolve_via_well_known(handle: str) -> str | None:
     """The HTTPS well-known method: GET https://{handle}/.well-known/atproto-did."""
     try:
-        r = requests.get(
-            f"https://{handle}/.well-known/atproto-did", timeout=TIMEOUT
-        )
+        r = requests.get(f"https://{handle}/.well-known/atproto-did", timeout=TIMEOUT)
         if r.ok and r.text.strip().startswith("did:"):
             return r.text.strip()
     except requests.RequestException:
@@ -249,7 +246,7 @@ def _resolve_via_dns_txt(handle: str) -> str | None:
     for rdata in answers:
         txt = b"".join(rdata.strings).decode("utf-8", "replace")
         if txt.startswith("did="):
-            return txt[len("did="):]
+            return txt[len("did=") :]
     return None
 
 
@@ -319,7 +316,7 @@ def avatar_urls(handles) -> dict:
     with ThreadPoolExecutor(max_workers=len(handles) or 1) as pool:
         found = list(pool.map(_avatar_url, handles))
 
-    urls = {handle: url for handle, url in zip(handles, found) if url}
+    urls = {handle: url for handle, url in zip(handles, found, strict=True) if url}
     cache.set(key, urls, AVATAR_CACHE_TTL)
     return urls
 
@@ -360,7 +357,7 @@ def fetch_did_document(did: str) -> dict:
     if did.startswith("did:plc:"):
         url = f"https://plc.directory/{did}"
     elif did.startswith("did:web:"):
-        domain = did[len("did:web:"):]
+        domain = did[len("did:web:") :]
         url = f"https://{domain}/.well-known/did.json"
     else:
         raise OAuthError(f"unsupported DID method: {did!r}")
@@ -388,7 +385,7 @@ def pds_endpoint_from_doc(doc: dict) -> str:
 def handle_from_doc(doc: dict) -> str | None:
     for aka in doc.get("alsoKnownAs", []):
         if aka.startswith("at://"):
-            return aka[len("at://"):]
+            return aka[len("at://") :]
     return None
 
 
@@ -427,11 +424,11 @@ def find_record(did: str, collection: str, rkey: str) -> dict | None:
             r.raise_for_status()
         value = r.json().get("value")
     except requests.RequestException as exc:
-        raise OAuthError(
-            f"could not fetch {collection}/{rkey} from {did}"
-        ) from exc
+        raise OAuthError(f"could not fetch {collection}/{rkey} from {did}") from exc
     except ValueError as exc:
-        raise OAuthError(f"{pds_url} returned non-JSON for {collection}/{rkey}") from exc
+        raise OAuthError(
+            f"{pds_url} returned non-JSON for {collection}/{rkey}"
+        ) from exc
 
     if not isinstance(value, dict):
         raise OAuthError(f"{collection}/{rkey} in {did} has no record value")
@@ -454,6 +451,7 @@ def get_record(did: str, collection: str, rkey: str) -> dict:
 
 # --- Authorization-server discovery ---------------------------------------
 
+
 def discover_auth_server(pds_url: str) -> dict:
     """Resolve the PDS to its authorization-server metadata document."""
     try:
@@ -475,6 +473,7 @@ def discover_auth_server(pds_url: str) -> dict:
 
 
 # --- PKCE + client assertion ----------------------------------------------
+
 
 def pkce_pair() -> tuple[str, str]:
     """Return (code_verifier, code_challenge) for the S256 method."""
@@ -503,12 +502,11 @@ def build_client_assertion(issuer: str, kid: str | None = None) -> str:
 
 # --- DPoP-bound POST with one-shot nonce retry ----------------------------
 
+
 def _post_with_dpop(url, data, dpop_key, nonce=None):
     def _send(use_nonce):
         proof = make_proof(dpop_key, "POST", url, nonce=use_nonce)
-        return requests.post(
-            url, data=data, headers={"DPoP": proof}, timeout=TIMEOUT
-        )
+        return requests.post(url, data=data, headers={"DPoP": proof}, timeout=TIMEOUT)
 
     return _retry_once_for_nonce(_send, nonce)
 
@@ -550,8 +548,15 @@ def _get_with_dpop(url, access_token, dpop_key, nonce=None):
 
 
 def post_json_with_dpop(
-    url, payload, access_token, dpop_key, nonce=None, *, headers=None,
-    htu=None, timeout=TIMEOUT,
+    url,
+    payload,
+    access_token,
+    dpop_key,
+    nonce=None,
+    *,
+    headers=None,
+    htu=None,
+    timeout=TIMEOUT,
 ):
     """POST JSON to a DPoP-bound XRPC procedure, with one-shot nonce retry.
 
@@ -645,6 +650,7 @@ def fetch_display_name(did: str) -> str:
 
 # --- Email sourcing (transition:email) -------------------------------------
 
+
 def fetch_session_email(pds_url, access_token, *, dpop_key, nonce=None):
     """Read `email`/`emailConfirmed` from the member's PDS via `getSession`.
 
@@ -658,12 +664,13 @@ def fetch_session_email(pds_url, access_token, *, dpop_key, nonce=None):
         if not resp.ok:
             return "", False
         data = resp.json()
-    except (requests.RequestException, ValueError):
+    except requests.RequestException, ValueError:
         return "", False
     return data.get("email") or "", bool(data.get("emailConfirmed"))
 
 
 # --- PAR + token exchange -------------------------------------------------
+
 
 def pushed_authorization_request(
     meta, *, dpop_key, state, code_challenge, login_hint, scope=None
@@ -743,9 +750,7 @@ def refresh_tokens(meta, *, refresh_token, dpop_key, nonce=None, client_kid=None
         "refresh_token": refresh_token,
         "client_id": client_id(),
         "client_assertion_type": CLIENT_ASSERTION_TYPE,
-        "client_assertion": build_client_assertion(
-            meta["issuer"], kid=client_kid
-        ),
+        "client_assertion": build_client_assertion(meta["issuer"], kid=client_kid),
     }
     resp, new_nonce = _post_with_dpop(
         meta["token_endpoint"], data, dpop_key, nonce=nonce
@@ -827,9 +832,7 @@ def write_record(user, collection, rkey, record):
     try:
         token = user.atproto_token
     except AtprotoToken.DoesNotExist:
-        raise NoSession(
-            f"{user.did} has no stored PDS session"
-        ) from None
+        raise NoSession(f"{user.did} has no stored PDS session") from None
 
     if not token.access_token:
         raise NoSession(f"{user.did} has no access token")
@@ -895,9 +898,7 @@ def _refresh(token, dpop_key):
     clock we do not own is not worth pre-empting.
     """
     if not token.refresh_token:
-        raise NoSession(
-            "session has no refresh token; sign in again"
-        )
+        raise NoSession("session has no refresh token; sign in again")
 
     try:
         data, nonce = refresh_tokens(

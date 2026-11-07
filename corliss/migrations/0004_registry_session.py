@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('corliss', '0003_oidcsession'),
+        ("corliss", "0003_oidcsession"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='atprototoken',
-            name='registry_session_at',
+            model_name="atprototoken",
+            name="registry_session_at",
             field=models.DateTimeField(blank=True, null=True),
         ),
     ]

@@ -105,10 +105,16 @@ urlpatterns = [
     path("systems/", views.systems, name="systems"),
     # What each provision run did, recorded by zai-ops in the manifest bucket.
     path("systems/deploys/", views.systems_deploys, name="systems_deploys"),
-    path("systems/deploys/<str:host>/", views.systems_deploy_history,
-         name="systems_deploy_history"),
-    path("systems/deploys/<str:host>/<str:stamp>/", views.systems_deploy_log,
-         name="systems_deploy_log"),
+    path(
+        "systems/deploys/<str:host>/",
+        views.systems_deploy_history,
+        name="systems_deploy_history",
+    ),
+    path(
+        "systems/deploys/<str:host>/<str:stamp>/",
+        views.systems_deploy_log,
+        name="systems_deploy_log",
+    ),
     # Every vault on the relay, counts and sizes only, for cluster admins.
     path("systems/notes/", views.systems_notes, name="systems_notes"),
     path("", views.home, name="home"),

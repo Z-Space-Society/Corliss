@@ -93,7 +93,10 @@ class IssuanceTests(RefreshCase):
         )
         self.assertFalse(oidc.issues_refresh_tokens(CLAUDE))
 
-        row.document = {**document, "grant_types": ["authorization_code", "refresh_token"]}
+        row.document = {
+            **document,
+            "grant_types": ["authorization_code", "refresh_token"],
+        }
         row.save()
         self.assertTrue(oidc.issues_refresh_tokens(CLAUDE))
 
@@ -260,7 +263,9 @@ class ReuseTests(RefreshCase):
         self.assertRefused(self.refresh(sync))
         self.assertEqual(self.refresh(mcp).status_code, 200)
 
-    def test_two_requests_with_one_token_both_succeed_and_one_result_is_superseded(self):
+    def test_two_requests_with_one_token_both_succeed_and_one_result_is_superseded(
+        self,
+    ):
         """What the row lock makes of a concurrent pair: served in turn, the
         second as a retry of the first."""
         first = self.sign_in()["refresh_token"]

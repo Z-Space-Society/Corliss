@@ -32,6 +32,8 @@ from corliss.models import (
 )
 from corliss.tests.roster_fixtures import (
     OTHER_ADMIN as OTHER,
+)
+from corliss.tests.roster_fixtures import (
     SERVICE_DID,
     RosterWriteMixin,
 )
@@ -86,9 +88,7 @@ class UserAdminTests(TestCase):
         empty boxes on the form invite an operator to fill in the pair nothing
         reads — which is why `fieldsets` is declared rather than appended to."""
         user = User.objects.create_user(username="alice.bsky.social", did=DID)
-        resp = self.client.get(
-            reverse("admin:corliss_user_change", args=[user.pk])
-        )
+        resp = self.client.get(reverse("admin:corliss_user_change", args=[user.pk]))
         self.assertEqual(resp.status_code, 200)
         self.assertNotContains(resp, 'name="first_name"')
         self.assertNotContains(resp, 'name="last_name"')
@@ -101,9 +101,7 @@ class UserAdminTests(TestCase):
         user = User.objects.create_user(
             username="alice.bsky.social", did=DID, email_confirmed=True
         )
-        resp = self.client.get(
-            reverse("admin:corliss_user_change", args=[user.pk])
-        )
+        resp = self.client.get(reverse("admin:corliss_user_change", args=[user.pk]))
         self.assertContains(resp, "Email confirmed")
         self.assertNotContains(resp, 'name="email_confirmed"')
 
@@ -302,9 +300,7 @@ class MakeAdminCommandTests(RosterWriteMixin, TestCase):
         self.write_record.assert_not_called()
 
     def test_remove_ends_the_term_without_deleting_it(self):
-        User.objects.create_user(
-            username="alice.bsky.social", did=DID, is_staff=True
-        )
+        User.objects.create_user(username="alice.bsky.social", did=DID, is_staff=True)
         self.roster_entries = [
             {"did": SERVICE_DID, "addedAt": "2026-01-01T00:00:00Z"},
             {"did": OTHER, "addedAt": "2026-01-01T00:00:00Z"},
@@ -443,9 +439,7 @@ class ListAdminsCommandTests(RosterWriteMixin, TestCase):
         report = self._run()
 
         self.assertTrue(report["roster_exists"])
-        self.assertEqual(
-            {a["did"] for a in report["admins"]}, {SERVICE_DID, OTHER}
-        )
+        self.assertEqual({a["did"] for a in report["admins"]}, {SERVICE_DID, OTHER})
 
     def test_a_departed_admin_is_left_out(self):
         self.roster_entries[1]["removedAt"] = "2026-02-01T00:00:00Z"

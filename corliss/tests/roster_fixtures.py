@@ -134,7 +134,5 @@ class RosterWriteMixin:
         if not self.written:
             return []
         return [
-            e["did"]
-            for e in self.written[-1]["admins"]
-            if e.get("removedAt") is None
+            e["did"] for e in self.written[-1]["admins"] if e.get("removedAt") is None
         ]

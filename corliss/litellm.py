@@ -117,11 +117,18 @@ class ApiKey:
     """One LiteLLM key, as `/api/` renders it. Never the secret."""
 
     __slots__ = (
-        "token", "masked", "alias", "spend", "created_at", "blocked", "team_id",
+        "token",
+        "masked",
+        "alias",
+        "spend",
+        "created_at",
+        "blocked",
+        "team_id",
     )
 
-    def __init__(self, *, token, masked, alias, spend, created_at, blocked,
-                 team_id=None):
+    def __init__(
+        self, *, token, masked, alias, spend, created_at, blocked, team_id=None
+    ):
         # LiteLLM's `token` is the key's hash. It identifies the key for
         # revocation and is safe to put in a form; the `sk-…` value it hashes
         # is shown once at creation and never stored anywhere.
@@ -295,7 +302,9 @@ class LiteLLM:
         try:
             return response.json()
         except ValueError as exc:
-            raise LiteLLMError("the API service answered with something unreadable") from exc
+            raise LiteLLMError(
+                "the API service answered with something unreadable"
+            ) from exc
 
     # --- teams: the tier map -----------------------------------------------
 

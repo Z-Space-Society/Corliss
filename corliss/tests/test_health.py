@@ -55,11 +55,22 @@ class UnconfiguredTests(TestCase):
         OIDC_BACKCHANNEL_LOGOUT_URI="",
     )
     def test_every_unset_probe_reads_unknown_and_dials_nothing(self):
-        probes = (health._sync_relay, health._pds, health._redis, health._garage,
-                  health._caddy, health._litellm, health._happyview,
-                  health._open_webui, health._scn_chat, health._beszel)
-        with patch("corliss.health.requests.get") as get, \
-                patch("corliss.health.socket.create_connection") as connect:
+        probes = (
+            health._sync_relay,
+            health._pds,
+            health._redis,
+            health._garage,
+            health._caddy,
+            health._litellm,
+            health._happyview,
+            health._open_webui,
+            health._scn_chat,
+            health._beszel,
+        )
+        with (
+            patch("corliss.health.requests.get") as get,
+            patch("corliss.health.socket.create_connection") as connect,
+        ):
             for probe in probes:
                 self.assertEqual(probe(), health.UNKNOWN, probe.__name__)
         # The point is not just the answer but the absence of the attempt: an
@@ -84,9 +95,7 @@ class PdsProbeTests(TestCase):
     def test_it_asks_the_readiness_endpoint(self):
         with patch("corliss.health.requests.get", return_value=_response(200)) as get:
             self.assertEqual(health._pds(), health.UP)
-        self.assertEqual(
-            get.call_args.args[0], "http://10.1.1.114:3000/xrpc/_health"
-        )
+        self.assertEqual(get.call_args.args[0], "http://10.1.1.114:3000/xrpc/_health")
 
     def test_storage_failing_readiness_is_down(self):
         # The process is serving and its storage is not: /_alive would say up.
@@ -94,8 +103,10 @@ class PdsProbeTests(TestCase):
             self.assertEqual(health._pds(), health.DOWN)
 
     def test_an_unreachable_pds_is_down(self):
-        with patch("corliss.health.requests.get",
-                   side_effect=requests.ConnectionError("no route to host")):
+        with patch(
+            "corliss.health.requests.get",
+            side_effect=requests.ConnectionError("no route to host"),
+        ):
             self.assertEqual(health._pds(), health.DOWN)
 
     @override_settings(PDS_URL="")
@@ -116,9 +127,7 @@ class ScnChatProbeTests(TestCase):
     def test_it_asks_the_health_endpoint(self):
         with patch("corliss.health.requests.get", return_value=_response(200)) as get:
             self.assertEqual(health._scn_chat(), health.UP)
-        self.assertEqual(
-            get.call_args.args[0], "http://10.1.1.122:3000/api/health"
-        )
+        self.assertEqual(get.call_args.args[0], "http://10.1.1.122:3000/api/health")
 
     def test_a_database_failure_is_down(self):
         # /api/health answers 503 when its `select 1` fails.
@@ -126,8 +135,10 @@ class ScnChatProbeTests(TestCase):
             self.assertEqual(health._scn_chat(), health.DOWN)
 
     def test_an_unreachable_scn_chat_is_down(self):
-        with patch("corliss.health.requests.get",
-                   side_effect=requests.ConnectionError("no route to host")):
+        with patch(
+            "corliss.health.requests.get",
+            side_effect=requests.ConnectionError("no route to host"),
+        ):
             self.assertEqual(health._scn_chat(), health.DOWN)
 
     @override_settings(SCN_CHAT_URL="")
@@ -148,17 +159,17 @@ class BeszelProbeTests(TestCase):
     def test_it_asks_the_health_endpoint(self):
         with patch("corliss.health.requests.get", return_value=_response(200)) as get:
             self.assertEqual(health._beszel(), health.UP)
-        self.assertEqual(
-            get.call_args.args[0], "http://10.1.1.124:8090/api/health"
-        )
+        self.assertEqual(get.call_args.args[0], "http://10.1.1.124:8090/api/health")
 
     def test_an_error_status_is_down(self):
         with patch("corliss.health.requests.get", return_value=_response(503)):
             self.assertEqual(health._beszel(), health.DOWN)
 
     def test_an_unreachable_hub_is_down(self):
-        with patch("corliss.health.requests.get",
-                   side_effect=requests.ConnectionError("no route to host")):
+        with patch(
+            "corliss.health.requests.get",
+            side_effect=requests.ConnectionError("no route to host"),
+        ):
             self.assertEqual(health._beszel(), health.DOWN)
 
     @override_settings(BESZEL_HUB_URL="")
@@ -182,8 +193,10 @@ class HttpProbeTests(TestCase):
             self.assertEqual(health._sync_relay(), health.UP)
 
     def test_an_unreachable_service_is_down_and_does_not_propagate(self):
-        with patch("corliss.health.requests.get",
-                   side_effect=requests.ConnectionError("no route to host")):
+        with patch(
+            "corliss.health.requests.get",
+            side_effect=requests.ConnectionError("no route to host"),
+        ):
             self.assertEqual(health._sync_relay(), health.DOWN)
 
     def test_a_timeout_is_down(self):
@@ -225,8 +238,10 @@ class GarageTests(TestCase):
 
     @override_settings(GARAGE_S3_URL="http://10.1.1.101:3900")
     def test_but_nothing_answering_is_still_down(self):
-        with patch("corliss.health.requests.get",
-                   side_effect=requests.ConnectionError("refused")):
+        with patch(
+            "corliss.health.requests.get",
+            side_effect=requests.ConnectionError("refused"),
+        ):
             self.assertEqual(health._garage(), health.DOWN)
 
 
@@ -235,7 +250,6 @@ class GarageTests(TestCase):
     MEMBERSHIP_REGISTRY_HOST="view.example.net",
 )
 class HappyViewTests(TestCase):
-
     def test_the_public_host_header_is_presented(self):
         # Not because `/` needs it — measured 2026-08-31, HappyView answers 303
         # there with or without it, and the 421 "Unknown host" it is famous for
@@ -260,7 +274,9 @@ class RedisTests(TestCase):
         sock.recv.return_value = reply
         conn = MagicMock()
         conn.__enter__.return_value = sock
-        with patch("corliss.health.socket.create_connection", return_value=conn) as connect:
+        with patch(
+            "corliss.health.socket.create_connection", return_value=conn
+        ) as connect:
             state = health._redis()
         return state, connect, sock
 
@@ -281,13 +297,17 @@ class RedisTests(TestCase):
         self.assertEqual(state, health.DOWN)
 
     def test_a_refused_connection_is_down(self):
-        with patch("corliss.health.socket.create_connection",
-                   side_effect=ConnectionRefusedError()):
+        with patch(
+            "corliss.health.socket.create_connection",
+            side_effect=ConnectionRefusedError(),
+        ):
             self.assertEqual(health._redis(), health.DOWN)
 
     def test_a_dns_failure_is_down_not_an_exception(self):
-        with patch("corliss.health.socket.create_connection",
-                   side_effect=socket.gaierror("name resolution failed")):
+        with patch(
+            "corliss.health.socket.create_connection",
+            side_effect=socket.gaierror("name resolution failed"),
+        ):
             self.assertEqual(health._redis(), health.DOWN)
 
     def test_the_port_comes_from_the_url(self):
@@ -301,14 +321,16 @@ class RedisTests(TestCase):
 
 
 class PostgresTests(TestCase):
-
     def test_a_live_connection_is_up(self):
         self.assertEqual(health._postgres(), health.UP)
 
     def test_a_database_error_is_down_rather_than_a_500(self):
         from django.db import OperationalError
-        with patch("corliss.health.connection.cursor",
-                   side_effect=OperationalError("server closed the connection")):
+
+        with patch(
+            "corliss.health.connection.cursor",
+            side_effect=OperationalError("server closed the connection"),
+        ):
             self.assertEqual(health._postgres(), health.DOWN)
 
 
@@ -322,8 +344,12 @@ _MANIFEST_SETTINGS = dict(
 
 
 def _manifest_body(**fields):
-    body = {"service": "redis", "version": "5:8.0.2-3+deb13u2",
-            "zai_ops": "v0.7.0", "provisioned_at": "2026-09-16T16:57:26Z"}
+    body = {
+        "service": "redis",
+        "version": "5:8.0.2-3+deb13u2",
+        "zai_ops": "v0.7.0",
+        "provisioned_at": "2026-09-16T16:57:26Z",
+    }
     body.update(fields)
     return {"Body": io.BytesIO(json.dumps(body).encode())}
 
@@ -335,32 +361,41 @@ class ManifestTests(TestCase):
     def test_a_manifest_becomes_the_rows_revision_and_version(self):
         client = MagicMock()
         client.get_object.return_value = _manifest_body()
-        self.assertEqual(health._manifest(client, "redis"), {
-            "version": "5:8.0.2-3+deb13u2",
-            "revision": "v0.7.0",
-            "provisioned_at": "2026-09-16T16:57:26Z",
-        })
-        client.get_object.assert_called_once_with(Bucket="zai-manifests", Key="redis.json")
+        self.assertEqual(
+            health._manifest(client, "redis"),
+            {
+                "version": "5:8.0.2-3+deb13u2",
+                "revision": "v0.7.0",
+                "provisioned_at": "2026-09-16T16:57:26Z",
+            },
+        )
+        client.get_object.assert_called_once_with(
+            Bucket="zai-manifests", Key="redis.json"
+        )
 
     def test_a_missing_manifest_is_none(self):
         # The normal case for a service whose play has not run since zai-ops
         # started writing manifests.
         client = MagicMock()
         client.get_object.side_effect = ClientError(
-            {"Error": {"Code": "NoSuchKey", "Message": "not found"}}, "GetObject")
+            {"Error": {"Code": "NoSuchKey", "Message": "not found"}}, "GetObject"
+        )
         self.assertIsNone(health._manifest(client, "redis"))
 
     def test_an_unreachable_garage_is_none_not_an_exception(self):
         client = MagicMock()
         client.get_object.side_effect = EndpointConnectionError(
-            endpoint_url="http://10.1.1.101:3900")
+            endpoint_url="http://10.1.1.101:3900"
+        )
         self.assertIsNone(health._manifest(client, "redis"))
 
     def test_a_body_that_is_not_what_zai_ops_writes_is_none(self):
         client = MagicMock()
-        for body in ({"Body": io.BytesIO(b"not json")},
-                     _manifest_body(zai_ops=None),
-                     {"Body": io.BytesIO(b'{"service": "redis"}')}):
+        for body in (
+            {"Body": io.BytesIO(b"not json")},
+            _manifest_body(zai_ops=None),
+            {"Body": io.BytesIO(b'{"service": "redis"}')},
+        ):
             client.get_object.return_value = body
             self.assertIsNone(health._manifest(client, "redis"))
 
@@ -394,7 +429,9 @@ class BrokenProbeTests(TestCase):
     """Our bug is not their outage."""
 
     def test_a_probe_that_raises_reads_unknown_not_down(self):
-        probe = health.Probe("anything", "Anything", "…", MagicMock(side_effect=RuntimeError("boom")))
+        probe = health.Probe(
+            "anything", "Anything", "…", MagicMock(side_effect=RuntimeError("boom"))
+        )
         with self.assertLogs("corliss.health", level="ERROR"):
             self.assertEqual(health._safely(probe), health.UNKNOWN)
 
@@ -421,19 +458,25 @@ class CheckAllTests(TestCase):
         self.addCleanup(cache.clear)
 
     def test_it_returns_every_service_in_the_stack(self):
-        with patch("corliss.health._measure", wraps=health._measure), \
-                patch("corliss.health.requests.get", return_value=_response(200)), \
-                patch("corliss.health.socket.create_connection") as connect:
+        with (
+            patch("corliss.health._measure", wraps=health._measure),
+            patch("corliss.health.requests.get", return_value=_response(200)),
+            patch("corliss.health.socket.create_connection") as connect,
+        ):
             connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
             groups = health.check_all()
 
         named = {s["name"] for g in groups for s in g["services"]}
         self.assertEqual(named, {p.name for _, ps in health.STACK for p in ps})
-        self.assertEqual([g["name"] for g in groups], ["Core", "Platform", "Applications"])
+        self.assertEqual(
+            [g["name"] for g in groups], ["Core", "Platform", "Applications"]
+        )
 
     def test_every_service_carries_a_label_matching_its_state(self):
-        with patch("corliss.health.requests.get", return_value=_response(200)), \
-                patch("corliss.health.socket.create_connection") as connect:
+        with (
+            patch("corliss.health.requests.get", return_value=_response(200)),
+            patch("corliss.health.socket.create_connection") as connect,
+        ):
             connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
             groups = health.check_all()
 
@@ -444,25 +487,33 @@ class CheckAllTests(TestCase):
     def test_a_second_call_inside_the_ttl_issues_no_traffic(self):
         # The reason the cache exists: without it a dead service costs the full
         # timeout on every single render of this page.
-        with patch("corliss.health.requests.get", return_value=_response(200)), \
-                patch("corliss.health.socket.create_connection") as connect:
+        with (
+            patch("corliss.health.requests.get", return_value=_response(200)),
+            patch("corliss.health.socket.create_connection") as connect,
+        ):
             connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
             health.check_all()
 
-        with patch("corliss.health.requests.get") as get, \
-                patch("corliss.health.socket.create_connection") as connect:
+        with (
+            patch("corliss.health.requests.get") as get,
+            patch("corliss.health.socket.create_connection") as connect,
+        ):
             health.check_all()
         get.assert_not_called()
         connect.assert_not_called()
 
     def test_refresh_asks_again(self):
-        with patch("corliss.health.requests.get", return_value=_response(200)), \
-                patch("corliss.health.socket.create_connection") as connect:
+        with (
+            patch("corliss.health.requests.get", return_value=_response(200)),
+            patch("corliss.health.socket.create_connection") as connect,
+        ):
             connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
             health.check_all()
 
-        with patch("corliss.health.requests.get", return_value=_response(200)) as get, \
-                patch("corliss.health.socket.create_connection") as connect:
+        with (
+            patch("corliss.health.requests.get", return_value=_response(200)) as get,
+            patch("corliss.health.socket.create_connection") as connect,
+        ):
             connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
             health.check_all(refresh=True)
         self.assertTrue(get.called)
@@ -470,18 +521,26 @@ class CheckAllTests(TestCase):
     def test_an_all_clear_is_held_longer_than_a_degraded_result(self):
         # A stale green dot costs nothing; a stale red one is the exact thing
         # somebody reloading this page is trying to see change.
-        with patch("corliss.health.cache.set") as cache_set, \
-                patch("corliss.health.requests.get", return_value=_response(200)), \
-                patch("corliss.health.socket.create_connection") as connect:
+        with (
+            patch("corliss.health.cache.set") as cache_set,
+            patch("corliss.health.requests.get", return_value=_response(200)),
+            patch("corliss.health.socket.create_connection") as connect,
+        ):
             connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
             health.check_all()
         self.assertEqual(cache_set.call_args.args[2], health.HEALTH_CACHE_TTL)
 
-        with patch("corliss.health.cache.set") as cache_set, \
-                patch("corliss.health.requests.get",
-                      side_effect=requests.ConnectionError("refused")), \
-                patch("corliss.health.socket.create_connection",
-                      side_effect=ConnectionRefusedError()):
+        with (
+            patch("corliss.health.cache.set") as cache_set,
+            patch(
+                "corliss.health.requests.get",
+                side_effect=requests.ConnectionError("refused"),
+            ),
+            patch(
+                "corliss.health.socket.create_connection",
+                side_effect=ConnectionRefusedError(),
+            ),
+        ):
             health.check_all(refresh=True)
         self.assertEqual(cache_set.call_args.args[2], health.HEALTH_DEGRADED_TTL)
 
@@ -491,8 +550,10 @@ class CheckAllTests(TestCase):
         # claim is that it does not guess must not list what is not there, and
         # a row nobody can probe would also pin the cache to the degraded TTL
         # forever, so the all-clear window would never once be used.
-        with patch("corliss.health.requests.get", return_value=_response(200)), \
-                patch("corliss.health.socket.create_connection") as connect:
+        with (
+            patch("corliss.health.requests.get", return_value=_response(200)),
+            patch("corliss.health.socket.create_connection") as connect,
+        ):
             connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
             groups = health.check_all()
 
@@ -501,10 +562,16 @@ class CheckAllTests(TestCase):
         self.assertNotIn(health.UNKNOWN, states)
 
     def test_one_dead_service_does_not_take_the_others_with_it(self):
-        with patch("corliss.health.requests.get",
-                   side_effect=requests.ConnectionError("refused")), \
-                patch("corliss.health.socket.create_connection",
-                      side_effect=ConnectionRefusedError()):
+        with (
+            patch(
+                "corliss.health.requests.get",
+                side_effect=requests.ConnectionError("refused"),
+            ),
+            patch(
+                "corliss.health.socket.create_connection",
+                side_effect=ConnectionRefusedError(),
+            ),
+        ):
             groups = health.check_all()
 
         states = {s["name"]: s["state"] for g in groups for s in g["services"]}
@@ -514,9 +581,11 @@ class CheckAllTests(TestCase):
 
     @override_settings(MANIFEST_BUCKET="")
     def test_without_manifest_settings_every_row_has_blank_versions(self):
-        with patch("corliss.health.requests.get", return_value=_response(200)), \
-                patch("corliss.health.socket.create_connection") as connect, \
-                patch("corliss.health.boto3.session.Session") as session:
+        with (
+            patch("corliss.health.requests.get", return_value=_response(200)),
+            patch("corliss.health.socket.create_connection") as connect,
+            patch("corliss.health.boto3.session.Session") as session,
+        ):
             connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
             groups = health.check_all()
 
@@ -531,17 +600,19 @@ class CheckAllTests(TestCase):
         def get_object(Bucket, Key):
             return _manifest_body(service=Key[:-5], version=f"{Key[:-5]}-1")
 
-        with patch("corliss.health.requests.get", return_value=_response(200)), \
-                patch("corliss.health.socket.create_connection") as connect, \
-                patch("corliss.health.boto3.session.Session") as session:
+        with (
+            patch("corliss.health.requests.get", return_value=_response(200)),
+            patch("corliss.health.socket.create_connection") as connect,
+            patch("corliss.health.boto3.session.Session") as session,
+        ):
             connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
             session.return_value.client.return_value.get_object.side_effect = get_object
             groups = health.check_all()
 
         versions = {s["name"]: s["version"] for g in groups for s in g["services"]}
-        self.assertEqual(versions, {
-            p.name: f"{p.host}-1" for _, ps in health.STACK for p in ps
-        })
+        self.assertEqual(
+            versions, {p.name: f"{p.host}-1" for _, ps in health.STACK for p in ps}
+        )
 
     def test_rows_are_keyed_by_zai_ops_inventory_names(self):
         # The manifest is <inventory_hostname>.json since zai-ops v0.11.1. The
@@ -563,13 +634,16 @@ class CheckAllTests(TestCase):
         # A Garage outage must grey the version columns and nothing else. In
         # particular it must not shorten the all-clear, or every page view on
         # a healthy cluster would re-probe everything because of metadata.
-        with patch("corliss.health.cache.set") as cache_set, \
-                patch("corliss.health.requests.get", return_value=_response(200)), \
-                patch("corliss.health.socket.create_connection") as connect, \
-                patch("corliss.health.boto3.session.Session") as session:
+        with (
+            patch("corliss.health.cache.set") as cache_set,
+            patch("corliss.health.requests.get", return_value=_response(200)),
+            patch("corliss.health.socket.create_connection") as connect,
+            patch("corliss.health.boto3.session.Session") as session,
+        ):
             connect.return_value.__enter__.return_value.recv.return_value = b"+PONG\r\n"
-            session.return_value.client.return_value.get_object.side_effect = \
+            session.return_value.client.return_value.get_object.side_effect = (
                 EndpointConnectionError(endpoint_url="http://10.1.1.101:3900")
+            )
             groups = health.check_all()
 
         states = [s["state"] for g in groups for s in g["services"]]
@@ -578,19 +652,28 @@ class CheckAllTests(TestCase):
 
 
 def _record_body(**fields):
-    body = {"service": "corliss", "result": "succeeded", "failed_task": None,
-            "version": "v1.4.3", "zai_ops": "v0.12.0", "trigger": "timer",
-            "started_at": "2026-10-18T14:02:11Z", "finished_at": "2026-10-18T14:04:40Z"}
+    body = {
+        "service": "corliss",
+        "result": "succeeded",
+        "failed_task": None,
+        "version": "v1.4.3",
+        "zai_ops": "v0.12.0",
+        "trigger": "timer",
+        "started_at": "2026-10-18T14:02:11Z",
+        "finished_at": "2026-10-18T14:04:40Z",
+    }
     body.update(fields)
     return {"Body": io.BytesIO(json.dumps(body).encode())}
 
 
 def _pages(keys=(), prefixes=()):
     paginator = MagicMock()
-    paginator.paginate.return_value = [{
-        "Contents": [{"Key": k} for k in keys],
-        "CommonPrefixes": [{"Prefix": p} for p in prefixes],
-    }]
+    paginator.paginate.return_value = [
+        {
+            "Contents": [{"Key": k} for k in keys],
+            "CommonPrefixes": [{"Prefix": p} for p in prefixes],
+        }
+    ]
     return paginator
 
 
@@ -606,7 +689,9 @@ class DeployRecordTests(TestCase):
 
     def test_a_record_reads_back_with_its_host_and_stamp(self):
         client = MagicMock()
-        client.get_object.return_value = _record_body(result="failed", failed_task="corliss : Sync")
+        client.get_object.return_value = _record_body(
+            result="failed", failed_task="corliss : Sync"
+        )
         record = health._deploy_record(client, "deploys/corliss/20261018T140211Z.json")
         self.assertEqual(record["host"], "corliss")
         self.assertEqual(record["name"], "Corliss")
@@ -616,7 +701,9 @@ class DeployRecordTests(TestCase):
 
     def test_a_malformed_record_is_none(self):
         client = MagicMock()
-        client.get_object.return_value = {"Body": io.BytesIO(b'{"result": "succeeded"}')}
+        client.get_object.return_value = {
+            "Body": io.BytesIO(b'{"result": "succeeded"}')
+        }
         with self.assertLogs("corliss.health", "WARNING"):
             self.assertIsNone(health._deploy_record(client, "deploys/corliss/x.json"))
 
@@ -625,11 +712,16 @@ class DeployRecordTests(TestCase):
 
         def paginator(_name):
             return paginators.pop(0)
+
         paginators = [
             _pages(prefixes=["deploys/corliss/", "deploys/proxy/"]),
-            _pages(keys=["deploys/corliss/20261017T000000Z.json",
-                         "deploys/corliss/20261018T000000Z.json",
-                         "deploys/corliss/20261018T000000Z.log"]),
+            _pages(
+                keys=[
+                    "deploys/corliss/20261017T000000Z.json",
+                    "deploys/corliss/20261018T000000Z.json",
+                    "deploys/corliss/20261018T000000Z.log",
+                ]
+            ),
             _pages(keys=["deploys/proxy/20261001T000000Z.json"]),
         ]
         client.get_paginator.side_effect = paginator
@@ -643,8 +735,9 @@ class DeployRecordTests(TestCase):
     def test_an_unreadable_bucket_is_none_not_an_empty_list(self):
         # The page says "can't be read" for None and "nothing yet" for [].
         client = self._client()
-        client.get_paginator.return_value.paginate.side_effect = EndpointConnectionError(
-            endpoint_url="http://10.1.1.101:3900")
+        client.get_paginator.return_value.paginate.side_effect = (
+            EndpointConnectionError(endpoint_url="http://10.1.1.101:3900")
+        )
         with self.assertLogs("corliss.health", "WARNING"):
             self.assertIsNone(health.last_deploys())
 
@@ -666,6 +759,7 @@ class DeployRecordTests(TestCase):
             if Key.endswith(".log"):
                 raise ClientError({"Error": {"Code": "NoSuchKey"}}, "GetObject")
             return _record_body()
+
         client.get_object.side_effect = get_object
 
         with self.assertLogs("corliss.health", "WARNING"):

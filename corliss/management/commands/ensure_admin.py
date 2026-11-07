@@ -31,7 +31,9 @@ ADMIN_DID = "did:local:admin"
 
 
 class Command(BaseCommand):
-    help = "Create the local break-glass admin (username/password login only) if absent."
+    help = (
+        "Create the local break-glass admin (username/password login only) if absent."
+    )
 
     def handle(self, *args, **opts):
         # Wrapped in a transaction so a missing-password failure rolls back the
@@ -80,7 +82,9 @@ class Command(BaseCommand):
         if healed_fields:
             user.save(update_fields=healed_fields)
             self.stdout.write(
-                self.style.SUCCESS(f"healed break-glass admin: {', '.join(healed_fields)}")
+                self.style.SUCCESS(
+                    f"healed break-glass admin: {', '.join(healed_fields)}"
+                )
             )
             return
 

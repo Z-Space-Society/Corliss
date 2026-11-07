@@ -204,9 +204,7 @@ class NotifyLogoutTests(KeysMixin, TestCase):
         # only one relying parties implement — `data=`, never `json=`.
         self.assertIn("logout_token", kwargs["data"])
         self.assertNotIn("json", kwargs)
-        self.assertEqual(
-            kwargs["timeout"], oidc.LOGOUT_TOKEN_TIMEOUT_SECONDS
-        )
+        self.assertEqual(kwargs["timeout"], oidc.LOGOUT_TOKEN_TIMEOUT_SECONDS)
         claims = jwt.decode(
             kwargs["data"]["logout_token"], options={"verify_signature": False}
         )

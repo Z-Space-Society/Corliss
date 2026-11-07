@@ -91,8 +91,9 @@ class FetchApplicationsTests(TestCase):
         payload = {
             "requests": [
                 request_row(),
-                request_row(did=OTHER, created_at="2026-08-12T18:13:44.137Z",
-                            note="Boop 2000"),
+                request_row(
+                    did=OTHER, created_at="2026-08-12T18:13:44.137Z", note="Boop 2000"
+                ),
             ]
         }
         with patch.object(requests, "get", return_value=FakeResponse(payload)):

@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ('corliss', '0007_multi_client_oauth'),
+        ("corliss", "0007_multi_client_oauth"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='atprototoken',
-            name='client_kid',
+            model_name="atprototoken",
+            name="client_kid",
             field=models.CharField(blank=True, max_length=64),
         ),
     ]

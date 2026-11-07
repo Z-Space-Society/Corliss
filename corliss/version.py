@@ -60,7 +60,7 @@ def _describe(base_dir: Path) -> str:
             timeout=2,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return ""
     if completed.returncode != 0:
         return ""
@@ -72,7 +72,7 @@ def _declared(base_dir: Path) -> str:
     try:
         with (base_dir / "pyproject.toml").open("rb") as fh:
             declared = tomllib.load(fh)["project"]["version"]
-    except (OSError, KeyError, tomllib.TOMLDecodeError):
+    except OSError, KeyError, tomllib.TOMLDecodeError:
         return ""
     return f"v{declared}" if declared else ""
 
