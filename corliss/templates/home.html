@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% comment %}
 Two states, one template: signed out gets the intro, signed in gets their
@@ -24,6 +25,54 @@ every page, so this page cannot drift from them.
     <p>Shared Computer Network (SCN) is a community scale AI project to put together local hardware next to the communities that want to hold their data, compute locally, and take advantage of the context of learning together through shared data in workspaces.</p>
     <p><a href="{% url 'login' %}">Sign in with your Atmosphere Account to apply for a membership</a></p>
     <p><em>SCN is in early access mode for supporters and partners</em></p>
+
+    <h2 class="section-title">Partners</h2>
+    <p>We work with organizations that share our commitment to
+    community-scale, sovereign AI.</p>
+    <ul class="partners">
+      <li class="partner">
+        <a class="partner__link" href="https://greyhaven.co" target="_blank"
+           rel="noopener">
+          <span class="partner__plate">
+            <img class="partner__logo"
+                 src="{% static 'img/greyhaven-logo.svg' %}" alt=""
+                 width="200" height="69" loading="lazy">
+          </span>
+          <span class="partner__name">Greyhaven</span>
+        </a>
+      </li>
+      <li class="partner">
+        <a class="partner__link" href="https://1rg.coop" target="_blank"
+           rel="noopener">
+          <span class="partner__plate">
+            <img class="partner__logo" src="{% static 'img/1rg-labs.png' %}"
+                 alt="" width="280" height="136" loading="lazy">
+          </span>
+          <span class="partner__name">1RG Labs</span>
+        </a>
+      </li>
+      <li class="partner">
+        <a class="partner__link" href="https://ethoslab.ca" target="_blank"
+           rel="noopener">
+          <span class="partner__plate">
+            <img class="partner__logo" src="{% static 'img/ethos-lab.png' %}"
+                 alt="" width="1437" height="452" loading="lazy">
+          </span>
+          <span class="partner__name">Ethos Lab</span>
+        </a>
+      </li>
+      <li class="partner">
+        <a class="partner__link" href="https://tiles.run" target="_blank"
+           rel="noopener">
+          <span class="partner__plate">
+            <img class="partner__logo" src="{% static 'img/tiles.svg' %}"
+                 alt="" width="190" height="190" loading="lazy">
+          </span>
+          <span class="partner__name">Tiles.Run</span>
+        </a>
+      </li>
+    </ul>
+
     <p>Follow <a href="https://bsky.app/profile/sharedcomputer.network">@sharedcomputer.network</a>, read the <a href="https://communityscaleai.leaflet.pub">Community Scale AI blog</a>, subscribe below:</p>
     <iframe class="intro__subscribe" width="400" height="250"
             title="Subscribe to the Community Scale AI blog"
