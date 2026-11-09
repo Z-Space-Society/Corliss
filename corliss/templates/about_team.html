@@ -89,17 +89,22 @@
 
   {% comment %}
   Advisors carry no picture: they are named and linked, not part of the
-  working group above, so the page does not fetch their avatars.
+  working group above, so the page does not fetch their avatars. The header
+  keeps the `about-person` wrapper anyway, for the same space under it.
   {% endcomment %}
   <h2 class="section-title">Advisors</h2>
 
   <div class="card">
-    <h2 class="about-person__name">Boris Mann</h2>
-    <p class="about-handle">
-      <a class="handle-link handle-link--out"
-         href="https://bsky.app/profile/bmann.ca"
-         target="_blank" rel="noopener">bmann.ca</a>
-    </p>
+    <div class="about-person">
+      <div>
+        <h2 class="about-person__name">Boris Mann</h2>
+        <p class="about-handle">
+          <a class="handle-link handle-link--out"
+             href="https://bsky.app/profile/bmann.ca"
+             target="_blank" rel="noopener">bmann.ca</a>
+        </p>
+      </div>
+    </div>
 
     <p class="page-text">A driving force in the Atmosphere community,
     <a href="https://dwebyvr.org/" target="_blank" rel="noopener">DWeb YVR</a>
@@ -111,12 +116,16 @@
   </div>
 
   <div class="card">
-    <h2 class="about-person__name">Jacob Ervin</h2>
-    <p class="about-handle">
-      <a class="handle-link handle-link--out"
-         href="https://www.linkedin.com/in/jacobkyleervin/"
-         target="_blank" rel="noopener">LinkedIn</a>
-    </p>
+    <div class="about-person">
+      <div>
+        <h2 class="about-person__name">Jacob Ervin</h2>
+        <p class="about-handle">
+          <a class="handle-link handle-link--out"
+             href="https://www.linkedin.com/in/jacobkyleervin/"
+             target="_blank" rel="noopener">LinkedIn</a>
+        </p>
+      </div>
+    </div>
 
     <p class="page-text">Director of New Product Development at Mozilla, and a
     product and technical leader with 15+ years building platforms across AI
