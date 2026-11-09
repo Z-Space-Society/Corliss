@@ -162,13 +162,11 @@ page, and this one is the page itself, so closing does not scroll anywhere.
   </div>
 
   {% comment %}
-  The workspace's notes, shared by everyone above. This is the one place they
-  are shown, and rendering it is what makes them: the relay makes the notes
-  workspace the first time Corliss asks. The Notes page is about a member's
-  Private workspace and never lists this one.
+  The workspace's notes, shared by everyone above. Rendering this page is what
+  makes them: the relay makes the notes workspace the first time Corliss asks
+  for it by name. The Notes page lists it once it exists, and never makes it.
 
-  Hidden entirely when notes are not set up on this cluster, as the nav hides
-  Notes. When the relay does not answer, the section stays and says so, the way
+  Hidden entirely when notes are not set up on this cluster. When the relay does not answer, the section stays and says so, the way
   the Notes page does, so a member is not left wondering whether the notes
   exist.
   {% endcomment %}
@@ -201,7 +199,7 @@ page, and this one is the page itself, so closing does not scroll anywhere.
         <p class="page-text">Everyone in this workspace can read and change
         these notes.{% if notes_workspace.path %} SCN Sync in Obsidian and MCP
         clients both show them as <code>{{ notes_workspace.path }}</code>.{% endif %} The
-        <a href="{% url 'notes' %}">Notes page</a> has the setup.</p>
+        <a href="{% url 'notes_connect' %}">Connect page</a> has the setup.</p>
         <p class="hint-text">Someone removed from the workspace loses its
         notes within fifteen minutes, and keeps whatever their devices
         already hold.</p>

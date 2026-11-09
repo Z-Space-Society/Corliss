@@ -87,8 +87,14 @@
 
         Open WebUI still hides entirely when OPENWEBUI_URL is unset. A disabled entry
         says "not for you yet"; on a cluster with no chat deployed, that would be
-        a different and false statement. Notes hides entirely when ENABLE_NOTES
-        is off, and Chat when CHAT_URL is unset, for the same reason.
+        a different and false statement. Chat hides entirely when CHAT_URL is
+        unset, for the same reason.
+
+        Notes is a menu, the same markup as About, with Workspaces (the
+        member's Private workspace and the workspaces they are in) and Connect
+        (Obsidian, MCP and connected apps). With ENABLE_NOTES off there is no
+        notes service to connect to, so the menu becomes a plain Workspaces
+        link to the same page: the workspaces are still where members share.
 
         Chat is closed to a non-member like its neighbours although scn-chat's
         own sign-in is open: the nav says what membership is for, and opening
@@ -96,15 +102,24 @@
         {% endcomment %}
         {% if user.is_authenticated %}
           {% if user.may_enter %}
-            <a class="nav__item" href="{% url 'workspaces' %}">Workspaces</a>
-            {% if ENABLE_NOTES %}<a class="nav__item" href="{% url 'notes' %}">Notes</a>{% endif %}
+            {% if ENABLE_NOTES %}
+              <div class="nav__menu">
+                <span class="nav__item nav__item--menu{% if notes_page %} is-active{% endif %}" tabindex="0">Notes</span>
+                <div class="nav__dropdown nav__dropdown--left">
+                  <a class="nav__dropdown-item{% if notes_page == 'workspaces' %} is-active{% endif %}"
+                     href="{% url 'notes' %}">Workspaces</a>
+                  <a class="nav__dropdown-item{% if notes_page == 'connect' %} is-active{% endif %}"
+                     href="{% url 'notes_connect' %}">Connect</a>
+                </div>
+              </div>
+            {% else %}
+              <a class="nav__item{% if notes_page %} is-active{% endif %}" href="{% url 'notes' %}">Workspaces</a>
+            {% endif %}
             {% if CHAT_URL %}<a class="nav__item" href="{{ CHAT_URL }}">Chat</a>{% endif %}
             <a class="nav__item" href="{% url 'api' %}">API</a>
           {% else %}
             <span class="nav__item nav__item--closed" aria-disabled="true"
-                  title="Members only. A cluster admin has to let you in first.">Workspaces</span>
-            {% if ENABLE_NOTES %}<span class="nav__item nav__item--closed" aria-disabled="true"
-                  title="Members only. A cluster admin has to let you in first.">Notes</span>{% endif %}
+                  title="Members only. A cluster admin has to let you in first.">{% if ENABLE_NOTES %}Notes{% else %}Workspaces{% endif %}</span>
             {% if CHAT_URL %}<span class="nav__item nav__item--closed" aria-disabled="true"
                   title="Members only. A cluster admin has to let you in first.">Chat</span>{% endif %}
             <span class="nav__item nav__item--closed" aria-disabled="true"
