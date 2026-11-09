@@ -1133,7 +1133,6 @@ def about_system(request):
 # reaches the picture with, since a Django dot-lookup cannot take a key with
 # dots in it and every one of these handles has them.
 TEAM_HANDLES = {
-    "boris": "bmann.ca",
     "jacob": "jacob.cascadia.social",
     "scott": "hadsie.com",
     "pouria": "pouriade.com",

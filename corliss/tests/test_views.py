@@ -225,7 +225,7 @@ class AboutViewTests(NoRosterMixin, TestCase):
 
     def test_the_team_page_shows_a_face_when_there_is_one(self):
         url = "https://cdn.bsky.app/img/avatar/plain/did:plc:x/bafkrei"
-        with patch.object(atproto, "avatar_urls", return_value={"bmann.ca": url}):
+        with patch.object(atproto, "avatar_urls", return_value={"hadsie.com": url}):
             resp = self.client.get(reverse("about_team"))
         self.assertContains(resp, url)
 
