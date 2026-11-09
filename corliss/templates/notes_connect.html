@@ -6,9 +6,6 @@ Notes → Connect: how to reach your notes from Obsidian and an MCP client, and
 the apps that already can. See `views.notes_connect`. The Private workspace
 and the workspaces a member is in are on Notes → Workspaces (`notes.html`).
 
-The link to `connect-opencode.sh` uses the unhashed static path, the
-address the README documents, rather than `{% static %}`'s versioned one.
-
 **Connected apps** lists the apps that can reach this member's notes without
 asking again, from `views._connected_apps`. Each is headed by its host, the
 part Corliss checked, with the name it gives itself beneath, as on the consent
@@ -63,9 +60,6 @@ screen. Disconnect is a one-button form per row.
         <button type="button" class="copy-btn" data-copy="mcp-url" hidden>Copy</button>
         <div class="endpoint" id="mcp-url">{{ mcp_url }}</div>
       </div>
-      <p class="hint-text">To connect an OpenCode harness running in a
-      terminal, use this script:
-      <a href="{% get_static_prefix %}help/scripts/connect-opencode.sh">connect-opencode.sh</a>.</p>
     {% else %}
       <p class="hint-text">No MCP address is configured on this deployment
       yet.</p>

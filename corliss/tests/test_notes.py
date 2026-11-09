@@ -15,7 +15,6 @@ from unittest.mock import patch
 
 import requests
 from django.contrib.auth import get_user_model
-from django.contrib.staticfiles import finders
 from django.test import Client as HttpClient
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -375,10 +374,6 @@ class ConnectPageTests(NotesCase):
         self.assertEqual(resp.context["sync_url"], "")
         self.assertEqual(resp.context["mcp_url"], "")
 
-    def test_the_page_links_the_connect_script_at_its_published_path(self):
-        resp = self.get()
-        self.assertContains(resp, 'href="/static/help/scripts/connect-opencode.sh"')
-
     def test_a_non_member_is_refused(self):
         MembershipCache.objects.filter(did=DID).update(active=False)
         resp = self.get()
@@ -568,15 +563,6 @@ class ConnectedAppsTests(NotesCase):
         resp = self.disconnect(OPENCODE)
         self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
         self.assertEqual(OidcRefreshToken.objects.count(), 1)
-
-
-class ConnectScriptTests(TestCase):
-    """`/static/help/scripts/connect-opencode.sh` is an address members are
-    told to fetch. Moving the file passes every page test and breaks those
-    instructions, so its path is pinned here."""
-
-    def test_the_connect_script_is_at_its_published_path(self):
-        self.assertIsNotNone(finders.find("help/scripts/connect-opencode.sh"))
 
 
 ALL = f"{RELAY}/internal/workspaces/all"
