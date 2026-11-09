@@ -20,8 +20,8 @@
         <h2 class="about-person__name">Jacob Sayles</h2>
         <p class="about-handle">
           <a class="handle-link handle-link--out"
-             href="https://bsky.app/profile/jacob.cascadia.social"
-             target="_blank" rel="noopener">jacob.cascadia.social</a>
+             href="https://cascadia.design"
+             target="_blank" rel="noopener">cascadia.design</a>
         </p>
       </div>
     </div>
@@ -68,33 +68,6 @@
 
   <div class="card">
     <div class="about-person">
-      {% if avatars.boris %}
-        <img class="about-person__avatar" src="{{ avatars.boris }}" alt=""
-             width="64" height="64" loading="lazy" referrerpolicy="no-referrer">
-      {% endif %}
-      <div>
-        <h2 class="about-person__name">Boris Mann</h2>
-        <p class="about-handle">
-          <a class="handle-link handle-link--out"
-             href="https://bsky.app/profile/bmann.ca"
-             target="_blank" rel="noopener">bmann.ca</a>
-        </p>
-      </div>
-    </div>
-
-    <p class="page-text">A driving force in the Atmosphere community,
-    <a href="https://dwebyvr.org/" target="_blank" rel="noopener">DWeb YVR</a>
-    and <a href="https://z-space.ca" target="_blank" rel="noopener">Z-Space</a>, the coworking space this cluster physically lives in.</p>
-
-    <p class="page-text">Boris has pushed hardest on what gets
-    built on top of the models: a shared, community-owned knowledge base rather
-    than one more chat window.</p>
-  </div>
-
-  <h2 class="section-title">Special projects</h2>
-
-  <div class="card">
-    <div class="about-person">
       {% if avatars.pouria %}
         <img class="about-person__avatar" src="{{ avatars.pouria }}" alt=""
              width="64" height="64" loading="lazy" referrerpolicy="no-referrer">
@@ -112,6 +85,46 @@
     <p class="page-text">Pouria is a designer and software engineer. He is the
     lead on <a href="https://gel.chat">Gel.Chat</a> an agentic user chat integrated with atproto
     permissioned data. Gel is the default agentic interface for SCN, as well as being adopted by the atproto community.</p>
+  </div>
+
+  {% comment %}
+  Advisors carry no picture: they are named and linked, not part of the
+  working group above, so the page does not fetch their avatars.
+  {% endcomment %}
+  <h2 class="section-title">Advisors</h2>
+
+  <div class="card">
+    <h2 class="about-person__name">Boris Mann</h2>
+    <p class="about-handle">
+      <a class="handle-link handle-link--out"
+         href="https://bsky.app/profile/bmann.ca"
+         target="_blank" rel="noopener">bmann.ca</a>
+    </p>
+
+    <p class="page-text">A driving force in the Atmosphere community,
+    <a href="https://dwebyvr.org/" target="_blank" rel="noopener">DWeb YVR</a>
+    and <a href="https://z-space.ca" target="_blank" rel="noopener">Z-Space</a>, the coworking space this cluster physically lives in.</p>
+
+    <p class="page-text">Boris has pushed hardest on what gets
+    built on top of the models: a shared, community-owned knowledge base rather
+    than one more chat window.</p>
+  </div>
+
+  <div class="card">
+    <h2 class="about-person__name">Jacob Ervin</h2>
+    <p class="about-handle">
+      <a class="handle-link handle-link--out"
+         href="https://www.linkedin.com/in/jacobkyleervin/"
+         target="_blank" rel="noopener">LinkedIn</a>
+    </p>
+
+    <p class="page-text">Director of New Product Development at Mozilla, and a
+    product and technical leader with 15+ years building platforms across AI
+    and emerging technologies. His focus is AI-native systems at the
+    intersection of AI and the web.</p>
+
+    <p class="page-text">He co-founded Active Replica, a platform for
+    distributed organizations that Mozilla acquired in 2022.</p>
   </div>
 
   <p class="about-more">Read on: <a href="{% url 'about' %}">what this is</a>,
