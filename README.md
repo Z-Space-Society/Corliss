@@ -1326,8 +1326,10 @@ listing asks, this page's, SCN Sync's or an MCP client's, and its path is
 | The relay unreachable, any answer but `200`, or a listing with no private vault | The instructions, and that the service did not answer. |
 | Answered | The member's private vault: its notes, size and last change, and its path. |
 
-The two addresses shown are the `sync` and `mcp` entries of `OIDC_RESOURCES`,
-so what a member pastes is the same string the relay checks tokens against.
+The two addresses shown are the first `sync` and first `mcp` entries of
+`OIDC_RESOURCES`, so what a member pastes is the same string the relay checks
+tokens against. While the notes service moves host, its new addresses are
+listed first and shown, and the old ones after keep working unshown.
 
 | Setting | Meaning |
 | ------- | ------- |
@@ -1566,7 +1568,7 @@ An operator disconnects one client from one member by deleting its rows under
 
 | Setting | Meaning |
 | ------- | ------- |
-| `OIDC_RESOURCES` | The resources a public client can get a token for, as a JSON list of `{"url", "kind", "label"}`. `kind` is `sync` or `mcp`, at most one of each. Blank issues nothing to any public client. |
+| `OIDC_RESOURCES` | The resources a public client can get a token for, as a JSON list of `{"url", "kind", "label"}`. `kind` is `sync` (what the plugin signs in for) or `mcp`. A kind may have more than one, so a service can move host without a gap: the first of each kind is the one the Notes page shows, and the rest keep issuing tokens until removed. A URL listed twice is refused. Blank issues nothing to any public client. |
 
 - **`url` becomes `aud` exactly as written**, and the relay compares it
   character for character against `SCN_SYNC_RELAY_SYNC_AUDIENCE` and

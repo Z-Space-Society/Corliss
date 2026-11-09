@@ -1490,7 +1490,6 @@ def notes(request):
         except sync_relay.SyncRelayError:
             pass
 
-    by_kind = {resource.kind: resource.url for resource in oidc.resources()}
     return render(
         request,
         "notes_mcp.html",
@@ -1500,8 +1499,10 @@ def notes(request):
             # None when the relay did not answer.
             "vault": vault,
             "reachable": vault is not None,
-            "sync_url": by_kind.get("sync", ""),
-            "mcp_url": by_kind.get("mcp", ""),
+            # The first of each kind: while a host moves, the new address
+            # is listed first and the old one keeps working unshown.
+            "sync_url": oidc.first_of_kind("sync"),
+            "mcp_url": oidc.first_of_kind("mcp"),
         },
     )
 

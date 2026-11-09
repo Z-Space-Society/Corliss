@@ -328,7 +328,10 @@ class ResourceSettingTests(SimpleTestCase):
             "url with no scheme": json.dumps([{**good, "url": "sync.zai.test"}]),
             "unknown kind": json.dumps([{**good, "kind": "notes"}]),
             "no label": json.dumps([{**good, "label": " "}]),
-            "two of one kind": json.dumps([good, {**good, "url": MCP}]),
+            "one url twice": json.dumps([good, {**good, "kind": "mcp"}]),
+            "one url twice, spelled apart": json.dumps(
+                [good, {**good, "url": SYNC.upper() + "/", "kind": "mcp"}]
+            ),
             "one good, one bad": json.dumps([good, {**good, "kind": "x"}]),
         }
         for name, raw in cases.items():
@@ -336,6 +339,26 @@ class ResourceSettingTests(SimpleTestCase):
                 resources, problems = oidc.parse_resources(raw)
                 self.assertEqual(resources, [])
                 self.assertTrue(problems)
+
+    def test_a_service_moving_host_lists_both_and_the_first_is_shown(self):
+        notes = "https://notes.zai.test"
+        moving = json.dumps(
+            [
+                {"url": notes, "kind": "sync", "label": "SCN Notes"},
+                {"url": f"{notes}/mcp", "kind": "mcp", "label": "SCN Notes over MCP"},
+                {"url": SYNC, "kind": "sync", "label": "Notes sync"},
+                {"url": MCP, "kind": "mcp", "label": "Notes for Claude"},
+            ]
+        )
+        resources, problems = oidc.parse_resources(moving)
+        self.assertEqual(problems, [])
+        self.assertEqual(len(resources), 4)
+        with override_settings(OIDC_RESOURCES=moving):
+            self.assertEqual(oidc.first_of_kind("sync"), notes)
+            self.assertEqual(oidc.first_of_kind("mcp"), f"{notes}/mcp")
+            # The old addresses still issue tokens.
+            self.assertEqual(oidc.match_resource(SYNC).kind, "sync")
+            self.assertEqual(oidc.match_resource(MCP).kind, "mcp")
 
     def test_the_deploy_check_passes_a_good_or_blank_value(self):
         for raw in ("", RESOURCES):

@@ -567,6 +567,11 @@ class Resource:
 def parse_resources(raw):
     """Read `OIDC_RESOURCES` into `(resources, problems)`.
 
+    A kind may have more than one resource, so a service can move host
+    without a gap: its new address is listed first and its old one after,
+    both issue tokens, and the Notes page shows the first of each kind
+    (`first_of_kind`). One URL listed twice is refused.
+
     Any problem yields no resources at all. A deployment whose value is
     half right would otherwise issue tokens for one service and silently
     refuse the other, which is harder to notice than refusing both.
@@ -593,8 +598,10 @@ def parse_resources(raw):
             problems.append(f"{where}: url must be an http(s) URL")
         if kind not in RESOURCE_KINDS:
             problems.append(f"{where}: kind must be one of {', '.join(RESOURCE_KINDS)}")
-        elif any(r.kind == kind for r in resources):
-            problems.append(f"{where}: a second {kind} resource")
+        if parts and any(
+            _normalise_resource(r.url) == _normalise_resource(url) for r in resources
+        ):
+            problems.append(f"{where}: {url} is listed twice")
         if not isinstance(label, str) or not label.strip():
             problems.append(f"{where}: label must be a non-empty string")
         if not problems:
@@ -607,6 +614,12 @@ def resources():
     """The configured resources. Empty when unset or invalid, which refuses
     every public client: an unconfigured deployment issues nothing."""
     return parse_resources(settings.OIDC_RESOURCES)[0]
+
+
+def first_of_kind(kind):
+    """The URL of the first configured resource of `kind`, or "". The one the
+    Notes page tells members to use while an older one still works."""
+    return next((r.url for r in resources() if r.kind == kind), "")
 
 
 def _normalise_resource(url) -> str:
