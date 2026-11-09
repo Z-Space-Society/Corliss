@@ -2,20 +2,20 @@
 {% load static %}
 
 {% comment %}
-The Obsidian page: what the notes service is, the member's private vault, and
-how to connect Obsidian and an MCP client. See `views.notes`.
+The Notes page: what the notes service is, the member's Private workspace,
+and how to connect Obsidian and an MCP client. See `views.notes`.
 
 The link to `connect-opencode.sh` uses the unhashed static path, the
 address the README documents, rather than `{% static %}`'s versioned one.
 
-**The instructions always render.** The vault depends on the sync relay
+**The instructions always render.** The workspace depends on the relay
 answering, and the rest of the page does not: a member reading how this works
 should not be shown an error where the explanation was. Three states, each
 said in words:
 
 - not configured: this deployment has no relay connected.
 - unreachable: it has one and it did not answer.
-- answered: the member's private vault. Every member has one: the relay makes
+- answered: the member's Private workspace. Every member has one: the relay makes
   it the first time anyone asks, this page included, so there is no form.
 
 **Connected apps** lists the apps that can reach this member's notes without
@@ -40,7 +40,8 @@ screen. Disconnect is a one-button form per row.
   <div class="card">
     {% if sync_url %}
       <ol class="page-text">
-        <li>In Obsidian, create a new, vault.</li>
+        {# "Vault" is Obsidian's own word for what this step makes, and stays. #}
+        <li>In Obsidian, create a new vault.</li>
         <li>In <strong>Settings → Community plugins</strong>, turn on
         community plugins</li>
         <li><strong>Browse</strong> and search for <strong>SCN Sync</strong>. Install and Enable the plugin.</li>
@@ -65,7 +66,7 @@ screen. Disconnect is a one-button form per row.
       <p class="hint-text">Your notes are also served over MCP. Add the
       address below to any assistant or tool that supports MCP servers, then
       sign in with your handle when it asks. It can read and edit the notes in
-      your vaults, with or without Obsidian.</p>
+      your workspaces, with or without Obsidian.</p>
       <p class="step-label">MCP address</p>
       <div class="endpoint-copy">
         <button type="button" class="copy-btn" data-copy="mcp-url" hidden>Copy</button>
@@ -119,12 +120,12 @@ screen. Disconnect is a one-button form per row.
     {% endif %}
   </div>
 
-  <h2 class="section-title">Your Private Vault</h2>
+  <h2 class="section-title">Your Private Workspace</h2>
   <div class="card">
     {% if not configured %}
       <p class="alert alert--notice" role="status">
         <strong>Not set up.</strong> This deployment has no notes service
-        connected, so there are no vaults here yet.
+        connected, so there are no workspaces here yet.
       </p>
     {% elif not reachable %}
       <p class="alert" role="alert">
@@ -135,21 +136,21 @@ screen. Disconnect is a one-button form per row.
       <dl class="modal__facts">
         <div class="modal__fact">
           <dt>Notes</dt>
-          <dd>{{ vault.note_count|default_if_none:"—" }}</dd>
+          <dd>{{ private.note_count|default_if_none:"—" }}</dd>
         </div>
         <div class="modal__fact">
           <dt>Size</dt>
-          <dd>{% if vault.bytes is None %}—{% else %}{{ vault.bytes|filesizeformat }}{% endif %}</dd>
+          <dd>{% if private.bytes is None %}—{% else %}{{ private.bytes|filesizeformat }}{% endif %}</dd>
         </div>
         <div class="modal__fact">
           <dt>Last change</dt>
-          <dd>{{ vault.last_change_at|date:"Y-m-d H:i"|default:"—" }}</dd>
+          <dd>{{ private.last_change_at|date:"Y-m-d H:i"|default:"—" }}</dd>
         </div>
       </dl>
-      <p class="page-text">Only you can read these notes.{% if vault.path %}
+      <p class="page-text">Only you can read these notes.{% if private.path %}
       SCN Sync in Obsidian and MCP clients both show them as
-      <code>{{ vault.path }}</code>.{% endif %} A workspace's notes are on
-      its own page.</p>
+      <code>{{ private.path }}</code>.{% endif %} A shared workspace's notes
+      are on its own page under Workspaces.</p>
     {% endif %}
   </div>
 

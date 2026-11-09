@@ -704,9 +704,10 @@ class Workspace(models.Model):
     # and `workspace_set` would make the one line anybody reads say less.
     members = models.ManyToManyField("User", blank=True, related_name="workspaces")
 
-    # No column for the workspace's notes vault. The relay holds which vault a
-    # workspace has, keyed by this row's pk, and `sync_relay.workspace_vault`
-    # asks it; a copy here would be a second answer that could disagree.
+    # No column for this group's notes workspace. The relay holds which
+    # workspace a group has, keyed by this row's pk as `group_id`, and
+    # `sync_relay.group_workspace` asks it; a copy here would be a second
+    # answer that could disagree.
 
     # Who made it, for the record. Nullable and `related_name="+"`: authorship is
     # history rather than authority. It grants nothing that being in `members`

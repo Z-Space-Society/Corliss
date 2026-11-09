@@ -162,48 +162,48 @@ page, and this one is the page itself, so closing does not scroll anywhere.
   </div>
 
   {% comment %}
-  The workspace's notes: one vault, shared by everyone above. This is the one
-  place a workspace's vault is shown, and rendering it is what makes it: the
-  relay makes the vault the first time Corliss asks. The Notes page is about a
-  member's private vault and never lists it.
+  The workspace's notes, shared by everyone above. This is the one place they
+  are shown, and rendering it is what makes them: the relay makes the notes
+  workspace the first time Corliss asks. The Notes page is about a member's
+  Private workspace and never lists this one.
 
   Hidden entirely when notes are not set up on this cluster, as the nav hides
   Notes. When the relay does not answer, the section stays and says so, the way
-  the Notes page does, so a member is not left wondering whether the vault
-  exists.
+  the Notes page does, so a member is not left wondering whether the notes
+  exist.
   {% endcomment %}
   {% if notes_configured %}
     <h2 class="section-title">Notes</h2>
     <div class="card">
-      {% if not vault_reachable %}
+      {% if not notes_reachable %}
         <p class="page-text">The notes service is not answering right now, so
-        this workspace's vault cannot be shown. Try again shortly.</p>
+        this workspace's notes cannot be shown. Try again shortly.</p>
       {% else %}
         <dl class="modal__facts">
           <div class="modal__fact">
-            <dt>Vault</dt>
-            <dd>{{ vault.name }}</dd>
+            <dt>Workspace</dt>
+            <dd>{{ notes_workspace.name }}</dd>
           </div>
           <div class="modal__fact">
             <dt>Notes</dt>
-            <dd>{{ vault.note_count|default_if_none:"—" }}</dd>
+            <dd>{{ notes_workspace.note_count|default_if_none:"—" }}</dd>
           </div>
           <div class="modal__fact">
             <dt>Last change</dt>
-            <dd>{{ vault.last_change_at|date:"Y-m-d H:i"|default:"—" }}</dd>
+            <dd>{{ notes_workspace.last_change_at|date:"Y-m-d H:i"|default:"—" }}</dd>
           </div>
         </dl>
         {% comment %}
-        `vault.path` is the relay's, the one place "Workspaces" is spelled.
-        Blank from a relay older than v0.4.2, and then the line is left out
-        rather than built here.
+        `notes_workspace.path` is the relay's, the one place "Workspaces/" is
+        spelled. If it is ever blank the line is left out rather than built
+        here.
         {% endcomment %}
         <p class="page-text">Everyone in this workspace can read and change
-        these notes.{% if vault.path %} SCN Sync in Obsidian and MCP clients
-        both show it as <code>{{ vault.path }}</code>.{% endif %} The
+        these notes.{% if notes_workspace.path %} SCN Sync in Obsidian and MCP
+        clients both show them as <code>{{ notes_workspace.path }}</code>.{% endif %} The
         <a href="{% url 'notes' %}">Notes page</a> has the setup.</p>
-        <p class="hint-text">Someone removed from the workspace loses the
-        vault within fifteen minutes, and keeps whatever their devices
+        <p class="hint-text">Someone removed from the workspace loses its
+        notes within fifteen minutes, and keeps whatever their devices
         already hold.</p>
       {% endif %}
     </div>

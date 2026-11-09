@@ -255,21 +255,21 @@ LITELLM_MAX_KEYS_PER_MEMBER = env.int("LITELLM_MAX_KEYS_PER_MEMBER", default=5)
 # here means the process is serving, not that its storage works.
 SYNC_RELAY_URL = env("SYNC_RELAY_URL", default="")
 
-# The credential Corliss presents on the relay's `/internal/vaults`, to list a
-# member's vaults and create one from the Obsidian page. **Not a probe
+# The credential Corliss presents on the relay's `/internal/workspaces`, to list
+# a member's Private workspace and make a group's. **Not a probe
 # setting**, and it sits here only because it belongs beside the address it is
 # used with: unlike everything else in this block, it is a credential.
 #
-# Shared with the relay, which reads it as SCN_SYNC_RELAY_SERVICE_TOKEN. It can
-# list and create vaults for any DID, so `corliss.sync_relay` is the only place
+# Shared with the relay, which reads it as SCN_NOTES_SERVICE_TOKEN. It can list
+# and create workspaces for any DID, so `corliss.sync_relay` is the only place
 # it is used and the DID is always the signed-in member's. Blank, or a blank
-# SYNC_RELAY_URL, leaves the Obsidian page saying vaults are not set up here.
+# SYNC_RELAY_URL, leaves the Notes page saying notes are not set up here.
 SYNC_RELAY_SERVICE_TOKEN = env("SYNC_RELAY_SERVICE_TOKEN", default="")
 
 # Whether the nav offers the Notes page (`/notes/`). Off hides the entry for
 # members and non-members alike, for a deployment that has not rolled the
 # notes service out yet. It only hides the link: the page itself still
-# answers, and says vaults are not set up when the relay is not connected.
+# answers, and says notes are not set up when the relay is not connected.
 ENABLE_NOTES = env.bool("ENABLE_NOTES", default=True)
 
 # The in-house AT Protocol PDS (its CT, port 3000), at its INTERNAL address like

@@ -27,8 +27,8 @@ section below defines them and says when to reach for which.
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
 - `notes`: the Notes page. What the notes service is, how to connect
-  Obsidian and an MCP client to it, and the member's vaults, which live on the sync
-  relay and are listed and created through `corliss.sync_relay`.
+  Obsidian and an MCP client to it, and the member's Private workspace, which
+  lives on scn-notes and is listed and created through `corliss.sync_relay`.
 - `parascribe`: how to call the cluster's transcription models. Signed-in, and
   names only the models the reader's own tier reaches.
 - `manage`: the cluster console — applications, members, admins, and
@@ -985,7 +985,7 @@ def workspace_edit(request, pk):
     script the way `/manage/`'s member panels are. A form is what you get when
     you ask to change something, not the default way to look at it.
 
-    Post/Redirect/Get for every action, the notes vault's included: they are
+    Post/Redirect/Get for every action, the notes workspace's included: they are
     writes, and a refresh that re-posted would re-run one. Member changes leave a message that rides one hop
     in the session, the way `/manage/` and `/account/` carry theirs; a successful
     save leaves none, because the text it changed is the page you land on.
@@ -1007,8 +1007,8 @@ def workspace_edit(request, pk):
         form = WorkspaceForm(request.POST, instance=workspace)
         if form.is_valid():
             form.save()
-            # A rename reaches the vault on the page this lands on, which
-            # sends the relay the workspace's name every time it renders.
+            # A rename reaches the notes workspace on the page this lands on,
+            # which sends the relay the group's name every time it renders.
             return redirect("workspace_edit", pk=workspace.pk)
     else:
         form = WorkspaceForm(instance=workspace)
@@ -1027,19 +1027,19 @@ def workspace_edit(request, pk):
         .order_by("username")
     )
 
-    # The workspace's vault, asked of the relay as the signed-in member, whom
-    # `_workspace_for_member` has already found in it. The relay makes it the
-    # first time anyone asks and gives it the name sent, which is how a new
-    # workspace gets its vault and a renamed one's vault follows. None when
-    # the relay did not answer, which the page says rather than hiding the
+    # This group's notes workspace, asked of the relay as the signed-in member,
+    # whom `_workspace_for_member` has already found in it. The relay makes it
+    # the first time anyone asks and gives it the name sent, which is how a new
+    # group gets its notes and a renamed one's notes follow. None when the
+    # relay did not answer, which the page says rather than hiding the
     # section; the next render asks again.
     configured = sync_relay.is_configured()
-    vault = None
-    vault_reachable = False
+    notes_workspace = None
+    notes_reachable = False
     if configured:
         try:
-            vault = sync_relay.workspace_vault(request.user.did, workspace)
-            vault_reachable = True
+            notes_workspace = sync_relay.group_workspace(request.user.did, workspace)
+            notes_reachable = True
         except sync_relay.SyncRelayError:
             pass
 
@@ -1052,8 +1052,8 @@ def workspace_edit(request, pk):
             "members": members,
             "candidates": candidates,
             "notes_configured": configured,
-            "vault": vault,
-            "vault_reachable": vault_reachable,
+            "notes_workspace": notes_workspace,
+            "notes_reachable": notes_reachable,
             "notice": request.session.pop(WORKSPACE_NOTICE_SESSION_KEY, None),
             "error": request.session.pop(WORKSPACE_ERROR_SESSION_KEY, None),
         },
@@ -1467,13 +1467,13 @@ def notes_disconnect(request):
 @member_required
 @require_http_methods(["GET"])
 def notes(request):
-    """The Notes page: the notes service, and the member's private vault.
+    """The Notes page: the notes service, and the member's Private workspace.
 
-    The vault is the relay's, not ours. This view asks `corliss.sync_relay`
+    The workspace is the relay's, not ours. This view asks `corliss.sync_relay`
     for it and stores nothing. The relay makes it the first time anyone asks,
     so there is nothing here to create.
 
-    **No request chooses whose vault.** The relay's service token can list
+    **No request chooses whose workspace.** The relay's service token can list
     for any DID, so the DID is `request.user.did`, and a `did` in the query
     string is never read.
 
@@ -1483,10 +1483,10 @@ def notes(request):
     did = request.user.did
     configured = sync_relay.is_configured()
 
-    vault = None
+    private = None
     if configured:
         try:
-            vault = sync_relay.private_vault(did)
+            private = sync_relay.private_workspace(did)
         except sync_relay.SyncRelayError:
             pass
 
@@ -1497,8 +1497,8 @@ def notes(request):
             "connected_apps": _connected_apps(request.user),
             "configured": configured,
             # None when the relay did not answer.
-            "vault": vault,
-            "reachable": vault is not None,
+            "private": private,
+            "reachable": private is not None,
             # The first of each kind: while a host moves, the new address
             # is listed first and the old one keeps working unshown.
             "sync_url": oidc.first_of_kind("sync"),
@@ -1579,36 +1579,38 @@ def systems_deploy_log(request, host, stamp):
 @require_http_methods(["GET"])
 @admin_required
 def systems_notes(request):
-    """Every vault on the relay, and how much each member holds.
+    """Every notes workspace on the relay, and how much each member holds.
 
     Counts and sizes only, never a note's title or text: seeing what members
     have stored is a different decision from seeing what they wrote, and the
     relay's listing carries neither. Gated with `/systems/` and read-only, so
     there is no write to re-ask authority for.
 
-    **The one caller of `sync_relay.all_vaults`.** Any other page that called
-    it would be handing every member's vault names to whoever that page lets
-    in.
+    **The one caller of `sync_relay.all_workspaces`.** Any other page that
+    called it would be handing every group's workspace names to whoever that
+    page lets in.
 
     Holders are named from our own tables, one query each, never through
     `membership.handles_for`, whose fallback fetches a DID document per
     unknown DID: this page has to render when the network does not.
     """
     configured = sync_relay.is_configured()
-    vaults = unfiled = None
+    workspaces = unfiled = None
     if configured:
         try:
-            vaults, unfiled = sync_relay.all_vaults()
+            workspaces, unfiled = sync_relay.all_workspaces()
         except sync_relay.SyncRelayError:
             pass
 
     members = []
-    if vaults is not None:
-        private = [v for v in vaults if v["workspace"] is None]
-        dids = {v["owner_did"] for v in private} | {u["did"] for u in unfiled or []}
+    if workspaces is not None:
+        private = [w for w in workspaces if w["group_id"] is None]
+        dids = {w["owner_did"] for w in private} | {u["did"] for u in unfiled or []}
         handles = dict(User.objects.filter(did__in=dids).values_list("did", "username"))
-        # A workspace ID is opaque to the relay; ours are primary keys.
-        ids = {int(v["workspace"]) for v in vaults if (v["workspace"] or "").isdigit()}
+        # A group ID is opaque to the relay; ours are `Workspace` primary keys.
+        ids = {
+            int(w["group_id"]) for w in workspaces if (w["group_id"] or "").isdigit()
+        }
         names = {
             str(pk): name
             for pk, name in Workspace.objects.filter(pk__in=ids).values_list(
@@ -1623,28 +1625,28 @@ def systems_notes(request):
                 by_did[did] = {
                     "did": did,
                     "handle": handles.get(did, ""),
-                    "vaults": 0,
+                    "workspaces": 0,
                     "notes": 0,
-                    "vault_bytes": 0,
+                    "workspace_bytes": 0,
                     "unfiled_docs": None,
                     "unfiled_bytes": None,
                     "total_bytes": None,
                 }
             return by_did[did]
 
-        for vault in vaults:
-            if vault["workspace"] is None:
-                vault["holder"] = handles.get(vault["owner_did"], "")
-                vault["holder_did"] = vault["owner_did"]
-                # A workspace's vault counts toward the workspace, not toward
-                # the member who happened to make it.
-                row = member(vault["owner_did"])
-                row["vaults"] += 1
-                row["notes"] += vault["note_count"] or 0
-                row["vault_bytes"] += vault["bytes"] or 0
+        for found in workspaces:
+            if found["group_id"] is None:
+                found["holder"] = handles.get(found["owner_did"], "")
+                found["holder_did"] = found["owner_did"]
+                # A group's workspace counts toward the group, not toward the
+                # member who happened to make it.
+                row = member(found["owner_did"])
+                row["workspaces"] += 1
+                row["notes"] += found["note_count"] or 0
+                row["workspace_bytes"] += found["bytes"] or 0
             else:
-                vault["holder"] = names.get(vault["workspace"], "")
-                vault["holder_did"] = ""
+                found["holder"] = names.get(found["group_id"], "")
+                found["holder_did"] = ""
 
         if unfiled is not None:
             for row in by_did.values():
@@ -1654,7 +1656,7 @@ def systems_notes(request):
                 row["unfiled_docs"] = entry["docs"]
                 row["unfiled_bytes"] = entry["bytes"]
             for row in by_did.values():
-                row["total_bytes"] = row["vault_bytes"] + row["unfiled_bytes"]
+                row["total_bytes"] = row["workspace_bytes"] + row["unfiled_bytes"]
 
         members = sorted(
             by_did.values(),
@@ -1662,7 +1664,7 @@ def systems_notes(request):
                 -(
                     row["total_bytes"]
                     if row["total_bytes"] is not None
-                    else row["vault_bytes"]
+                    else row["workspace_bytes"]
                 ),
                 row["handle"] or row["did"],
             ),
@@ -1673,10 +1675,10 @@ def systems_notes(request):
         "systems_notes.html",
         {
             "configured": configured,
-            "reachable": vaults is not None,
-            "vaults": vaults or [],
+            "reachable": workspaces is not None,
+            "workspaces": workspaces or [],
             "members": members,
-            "indexing": vaults is not None and unfiled is None,
+            "indexing": workspaces is not None and unfiled is None,
         },
     )
 

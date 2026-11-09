@@ -1,37 +1,43 @@
-"""Members' and workspaces' vaults, which live on scn-sync-relay.
+"""Members' and groups' notes workspaces, which live on scn-notes.
 
-The relay holds members' notes and the record of who holds which vault: a
-member, for their one private vault, or a workspace. Corliss holds none of it.
-This module asks the relay for a member's private vault, which the relay makes
-the first time anyone asks, and for a workspace's vault under the workspace's
-name, which the relay makes the first time Corliss asks and renames whenever
-the name it is sent differs. It is the only place the relay's service token is
-used.
+Two words cross here and mean different things on each side. The relay's
+**workspace** is the notes: a member's Private workspace, or the shared one a
+group of members has. Corliss's `Workspace` model is that **group**: the
+members who share one. So the relay names a group by `group_id`, which is a
+Corliss `Workspace`'s pk, and in this module a `group` argument is a
+`Workspace` row.
 
-Which workspaces a member is in reaches the relay another way: as the
-`workspaces` claim of the tokens `oidc.mint_access_token` issues. The relay
-keeps no roster, so nothing here tells it about a member joining or leaving.
+The relay holds members' notes and the record of who holds which workspace: a
+member, for their one Private workspace, or a group. Corliss holds none of it.
+This module asks the relay for a member's Private workspace, which the relay
+makes the first time anyone asks, and for a group's workspace under the
+group's name, which the relay makes the first time Corliss asks and renames
+whenever the name it is sent differs. It is the only place the relay's service
+token is used.
+
+Which groups a member is in reaches the relay another way: as the `workspaces`
+claim of the tokens `oidc.mint_access_token` issues. The relay keeps no
+roster, so nothing here tells it about a member joining or leaving.
 
 `corliss.health` also talks to the relay, to ask whether it is up. That is a
 different relationship and stays there: a liveness probe carries no credential
-and knows nothing about vaults.
+and knows nothing about workspaces.
 
 Three properties hold here, each with a plausible wrong answer:
 
 - **The address is the relay's internal one**, `SYNC_RELAY_URL`, never the
-  public sync URL members paste into Obsidian. The relay's proxy does not
+  public notes URL members paste into Obsidian. The relay's proxy does not
   route `/internal/` at all, and the service token has no business crossing
   the edge to reach a neighbour.
-- **The caller says whose vaults, and it is always the signed-in member.**
+- **The caller says whose workspaces, and it is always the signed-in member.**
   The service token can list and create for any DID, so nothing in a request
   may choose one. `views.notes` passes `request.user.did` and nothing else.
-  A workspace's vault is asked about only after `views._workspace_for_member`
-  has found the signed-in member in that workspace, so the workspace ID in a
-  URL chooses nothing either. `all_vaults` names nobody: it asks for every
-  vault at once, and only `views.systems_notes`, behind `@admin_required`,
-  calls it.
+  A group's workspace is asked about only after `views._workspace_for_member`
+  has found the signed-in member in that group, so the ID in a URL chooses
+  nothing either. `all_workspaces` names nobody: it asks for every workspace
+  at once, and only `views.systems_notes`, behind `@admin_required`, calls it.
 - **Nothing is retried and nothing is stored.** A failure is shown to the
-  member, and the next page load asks again. A vault exists when the relay
+  member, and the next page load asks again. A workspace exists when the relay
   says so and in no table of ours.
 """
 
@@ -46,30 +52,31 @@ log = logging.getLogger(__name__)
 # Sits on a member's request for a page, like `litellm.LITELLM_TIMEOUT`.
 SYNC_RELAY_TIMEOUT = 5
 
-# The relay's own limit. Checked here first so that a name it would refuse
-# never costs a round trip, and compared after trimming, as it does.
-VAULT_NAME_MAX = 100
+# The relay's own limit on a workspace's name. Checked here first so that a
+# name it would refuse never costs a round trip, and compared after trimming,
+# as it does.
+NAME_MAX = 100
 
 
 class SyncRelayError(Exception):
     """The relay could not be reached, refused us, or answered unusably."""
 
 
-def vault_name_for(workspace):
-    """The name a workspace's vault carries: the workspace's, cut to fit.
+def workspace_name_for(group):
+    """The name a group's workspace carries: the group's, cut to fit.
 
-    A workspace's name may be longer than the relay allows a vault's, and
-    refusing to make the vault over that would be a strange thing to tell
+    A group's name may be longer than the relay allows a workspace's, and
+    refusing to make the workspace over that would be a strange thing to tell
     somebody.
     """
-    return workspace.name.strip()[:VAULT_NAME_MAX]
+    return group.name.strip()[:NAME_MAX]
 
 
 def is_configured() -> bool:
     return bool(settings.SYNC_RELAY_URL and settings.SYNC_RELAY_SERVICE_TOKEN)
 
 
-def _call(method, path="/internal/vaults", **kwargs):
+def _call(method, path="/internal/workspaces", **kwargs):
     url = settings.SYNC_RELAY_URL.rstrip("/") + path
     try:
         return requests.request(
@@ -92,35 +99,34 @@ def _count(value):
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _vault(raw):
-    """One vault as the page shows it, from the relay's JSON object."""
+def _workspace(raw):
+    """One workspace as the page shows it, from the relay's JSON object."""
     if not isinstance(raw, dict):
-        raise SyncRelayError("a vault in the answer is not the expected shape")
+        raise SyncRelayError("a workspace in the answer is not the expected shape")
     name = raw.get("name")
     if name is not None and not isinstance(name, str):
-        raise SyncRelayError("a vault in the answer is not the expected shape")
+        raise SyncRelayError("a workspace in the answer is not the expected shape")
 
     def when(key):
         value = raw.get(key)
         return parse_datetime(value) if isinstance(value, str) else None
 
-    workspace = raw.get("workspace")
+    group_id = raw.get("group_id")
     return {
-        # The workspace's name for its vault. None for a member's private
-        # vault, which has none of its own from relay v0.5.0.
+        # The group's name for its workspace. None for a member's Private
+        # workspace, which has none of its own.
         "name": name,
         "url": raw.get("url", ""),
-        # The workspace's ID as a string, or None for a member's private vault.
-        "workspace": workspace if isinstance(workspace, str) else None,
+        # The group's ID as a string, or None for a member's Private workspace.
+        "group_id": group_id if isinstance(group_id, str) else None,
         # The relay's path for it: "Private", or "Workspaces/Garden Club".
-        # Shown as given, never built here; blank from a relay before v0.4.2.
+        # Shown as given, never built here.
         "path": raw["path"] if isinstance(raw.get("path"), str) else "",
         "created_at": when("created_at"),
-        # Null from the relay until something has been written to the vault.
+        # Null from the relay until something has been written to it.
         "last_change_at": when("last_change_at"),
-        # Null until the relay has walked the vault since it started, and
-        # absent from a relay older than v0.3.0. `bytes` is stored Automerge
-        # history, not the notes as files.
+        # Null until the relay has walked the workspace since it started.
+        # `bytes` is stored Automerge history, not the notes as files.
         "note_count": _count(raw.get("note_count")),
         "bytes": _count(raw.get("bytes")),
     }
@@ -133,94 +139,94 @@ def _json(response):
         raise SyncRelayError("the answer was not JSON") from exc
 
 
-def list_vaults(did, workspaces=()):
-    """`did`'s private vault, plus the vaults of the `workspaces` IDs named,
-    oldest first. The relay makes the private vault if this is the first time
-    anyone has asked for it. Raises `SyncRelayError`.
+def list_workspaces(did, groups=()):
+    """`did`'s Private workspace, plus the workspaces of the `groups` IDs
+    named, oldest first. The relay makes the Private workspace if this is the
+    first time anyone has asked for it. Raises `SyncRelayError`.
     """
     params = {"did": did}
-    if workspaces:
-        params["workspaces"] = ",".join(str(w) for w in workspaces)
+    if groups:
+        params["groups"] = ",".join(str(g) for g in groups)
     response = _call("GET", params=params)
     if response.status_code != 200:
-        log.warning("sync relay: listing vaults answered %s", response.status_code)
+        log.warning("sync relay: listing workspaces answered %s", response.status_code)
         raise SyncRelayError(f"HTTP {response.status_code}")
     body = _json(response)
-    if not isinstance(body, dict) or not isinstance(body.get("vaults"), list):
-        raise SyncRelayError("the answer was not a vault listing")
-    return [_vault(raw) for raw in body["vaults"]]
+    if not isinstance(body, dict) or not isinstance(body.get("workspaces"), list):
+        raise SyncRelayError("the answer was not a workspace listing")
+    return [_workspace(raw) for raw in body["workspaces"]]
 
 
-def private_vault(did):
-    """`did`'s private vault, made by the relay if this is the first time
+def private_workspace(did):
+    """`did`'s Private workspace, made by the relay if this is the first time
     anyone has asked for it. Raises `SyncRelayError`.
 
-    Asks with no workspaces, so the listing holds only the member's own.
+    Asks with no groups, so the listing holds only the member's own.
     """
-    for found in list_vaults(did):
-        if found["workspace"] is None:
+    for found in list_workspaces(did):
+        if found["group_id"] is None:
             return found
-    raise SyncRelayError("the listing held no private vault")
+    raise SyncRelayError("the listing held no Private workspace")
 
 
-def workspace_vault(did, workspace):
-    """The workspace's vault, carrying the workspace's current name. Raises
+def group_workspace(did, group):
+    """The group's workspace, carrying the group's current name. Raises
     `SyncRelayError`.
 
-    The relay makes it if the workspace has none, and renames it if the name
-    sent differs from the one it carries, so this one call serves the
-    workspace's page and its rename. `did` is the signed-in member, whom the
-    caller has already found in the workspace: the relay records them as its
-    maker if it makes it now.
+    The relay makes it if the group has none, and renames it if the name sent
+    differs from the one it carries, so this one call serves the group's page
+    and its rename. `did` is the signed-in member, whom the caller has already
+    found in the group: the relay records them as its maker if it makes it now.
     """
     response = _call(
         "PUT",
-        path="/internal/vaults/workspace",
         json={
             "did": did,
-            "workspace": str(workspace.pk),
-            "name": vault_name_for(workspace),
+            "group_id": str(group.pk),
+            "name": workspace_name_for(group),
         },
     )
     if response.status_code != 200:
         log.warning(
-            "sync relay: asking for a workspace vault answered %s",
+            "sync relay: asking for a group's workspace answered %s",
             response.status_code,
         )
         raise SyncRelayError(f"HTTP {response.status_code}")
-    return _vault(_json(response))
+    return _workspace(_json(response))
 
 
-def all_vaults():
-    """Every vault on the relay, and each member's documents no vault reaches,
-    as `(vaults, unfiled)`. Raises `SyncRelayError`.
+def all_workspaces():
+    """Every workspace on the relay, and each member's documents no workspace
+    reaches, as `(workspaces, unfiled)`. Raises `SyncRelayError`.
 
-    For the admin view only. Each vault is as `list_vaults` gives it, plus
-    `owner_did`: the member who made it, which for a workspace's vault is not
-    who holds it. `unfiled` is a list of `{did, docs, bytes}`, or None while
-    the relay is still indexing after a start, when it cannot tell an
-    unfiled note from one in a vault it has not walked yet.
+    For the admin view only. Each workspace is as `list_workspaces` gives it,
+    plus `owner_did`: the member who made it, which for a group's workspace is
+    not who holds it. `unfiled` is a list of `{did, docs, bytes}`, or None
+    while the relay is still indexing after a start, when it cannot tell an
+    unfiled note from one in a workspace it has not walked yet.
     """
-    response = _call("GET", path="/internal/vaults/all")
+    response = _call("GET", path="/internal/workspaces/all")
     if response.status_code != 200:
-        log.warning("sync relay: listing every vault answered %s", response.status_code)
+        log.warning(
+            "sync relay: listing every workspace answered %s", response.status_code
+        )
         raise SyncRelayError(f"HTTP {response.status_code}")
     body = _json(response)
-    if not isinstance(body, dict) or not isinstance(body.get("vaults"), list):
-        raise SyncRelayError("the answer was not a vault listing")
+    if not isinstance(body, dict) or not isinstance(body.get("workspaces"), list):
+        raise SyncRelayError("the answer was not a workspace listing")
 
-    vaults = []
-    for raw in body["vaults"]:
-        found = _vault(raw)
+    workspaces = []
+    for raw in body["workspaces"]:
+        found = _workspace(raw)
         owner = raw.get("owner_did")
         if not isinstance(owner, str):
-            raise SyncRelayError("a vault in the answer names no owner")
+            raise SyncRelayError("a workspace in the answer names no owner")
         found["owner_did"] = owner
-        vaults.append(found)
+        workspaces.append(found)
 
     raw_unfiled = body.get("unfiled")
     if raw_unfiled is None:
-        return vaults, None
+        return workspaces, None
     if not isinstance(raw_unfiled, list):
         raise SyncRelayError("unfiled is not a list")
     unfiled = []
@@ -234,4 +240,4 @@ def all_vaults():
                 "bytes": _count(entry.get("bytes")) or 0,
             }
         )
-    return vaults, unfiled
+    return workspaces, unfiled

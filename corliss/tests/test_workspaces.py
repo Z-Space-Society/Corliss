@@ -23,7 +23,14 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from corliss.models import MembershipCache, Workspace
-from corliss.tests.test_notes import RELAY, RESOURCES, TOKEN, Relay, answer, vault
+from corliss.tests.test_notes import (
+    RELAY,
+    RESOURCES,
+    TOKEN,
+    Relay,
+    answer,
+    notes_workspace,
+)
 
 User = get_user_model()
 
@@ -65,7 +72,7 @@ class NoRosterMixin:
 
 
 class NoRelayMixin:
-    """Turn the notes relay off. The workspace page asks it for the vault, and
+    """Turn the notes relay off. The workspace page asks it for the notes, and
     a development `.env` can name one, so without this the tests below that
     are not about notes would dial whatever address it gives."""
 
@@ -373,9 +380,9 @@ class WorkspaceEditTests(NoRelayMixin, NoRosterMixin, TestCase):
     SYNC_RELAY_URL=RELAY, SYNC_RELAY_SERVICE_TOKEN=TOKEN, OIDC_RESOURCES=RESOURCES
 )
 class WorkspaceNotesTests(NoRosterMixin, TestCase):
-    """A workspace's notes vault: made and kept named by rendering its page.
+    """A workspace's shared notes: made and kept named by rendering its page.
 
-    The relay holds the vault and Corliss stores nothing about it, so every
+    The relay holds the notes workspace and Corliss stores nothing about it, so every
     test here is about what is asked of the relay and what the page is given.
     """
 
@@ -388,7 +395,7 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
         self.url = reverse("workspace_edit", kwargs={"pk": self.workspace.pk})
         self.client.force_login(self.alice)
 
-    def test_the_page_asks_for_the_vault_as_the_member_under_the_workspaces_name(self):
+    def test_the_page_asks_for_the_notes_as_the_member_under_the_workspaces_name(self):
         with Relay() as relay:
             resp = self.client.get(self.url)
         self.assertEqual(
@@ -398,26 +405,28 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
                     "PUT",
                     {
                         "did": ALICE,
-                        "workspace": str(self.workspace.pk),
+                        "group_id": str(self.workspace.pk),
                         "name": "Garden Club",
                     },
                 )
             ],
         )
-        self.assertTrue(resp.context["vault_reachable"])
-        self.assertEqual(resp.context["vault"]["workspace"], str(self.workspace.pk))
+        self.assertTrue(resp.context["notes_reachable"])
+        self.assertEqual(
+            resp.context["notes_workspace"]["group_id"], str(self.workspace.pk)
+        )
 
-    def test_the_vault_is_named_by_the_relays_path(self):
+    def test_the_notes_are_named_by_the_relays_path(self):
         """The page shows what the relay sends, so a path that is not simply
         the group and the name proves nothing here builds it."""
-        sent = vault("Garden Club", workspace=str(self.workspace.pk))
+        sent = notes_workspace("Garden Club", group_id=str(self.workspace.pk))
         sent["path"] = "Shared/Garden Club"
         with Relay(workspace_answer=answer(200, sent)):
             resp = self.client.get(self.url)
         self.assertContains(resp, "Shared/Garden Club")
         self.assertNotContains(resp, "Workspaces/Garden Club")
 
-    def test_a_new_workspace_lands_on_a_page_that_makes_its_vault(self):
+    def test_a_new_workspace_lands_on_a_page_that_makes_its_notes(self):
         with Relay() as relay:
             resp = self.client.post(
                 reverse("workspace_new"), {"name": "Seed Library"}, follow=True
@@ -427,7 +436,7 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
             [c[2]["json"]["name"] for c in relay.made("PUT")], ["Seed Library"]
         )
 
-    def test_a_rename_reaches_the_vault_on_the_page_it_lands_on(self):
+    def test_a_rename_reaches_the_notes_on_the_page_it_lands_on(self):
         with Relay() as relay:
             self.client.post(
                 self.url, {"action": "save", "name": "Seed Library"}, follow=True
@@ -452,8 +461,8 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
         ):
             resp = self.client.get(self.url)
         self.assertEqual(resp.status_code, 200)
-        self.assertFalse(resp.context["vault_reachable"])
-        self.assertIsNone(resp.context["vault"])
+        self.assertFalse(resp.context["notes_reachable"])
+        self.assertIsNone(resp.context["notes_workspace"])
 
     @override_settings(SYNC_RELAY_URL="")
     def test_with_notes_not_set_up_the_relay_is_not_asked(self):

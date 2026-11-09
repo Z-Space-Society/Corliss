@@ -261,7 +261,7 @@ class AccessTokenContractTests(KeysMixin, TestCase):
         )
 
     def test_workspaces_are_the_members_own_ids_as_strings_and_never_names(self):
-        """The relay opens a workspace's vault to whoever's token lists it, so
+        """The relay opens a group's notes to whoever's token lists it, so
         this claim is workspace access to notes. The token travels in a
         websocket URL, which is why it carries IDs and not names."""
         garden = Workspace.objects.create(name="Garden Club")

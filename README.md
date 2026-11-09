@@ -33,7 +33,7 @@ only by being genuinely standalone.
 | `corliss/atproto.py` | ATProto OAuth client: client metadata, DPoP, handle/DID resolution, PDS discovery, PAR, token exchange. |
 | `corliss/oidc.py` | OIDC provider core: discovery document, client lookup, auth-code issuance, `id_token` and access token minting, the request checks for public clients, fetching and caching their metadata documents, and back-channel logout (including the outbound POST — same one-relationship-one-module rule `membership.py` follows). |
 | `corliss/membership.py` | The whole registry relationship: consuming its membership push, reconciling the cache against it, reading the application queue, writing grants and revocations as the acting admin, and resolving whether a DID is currently a member. |
-| `corliss/sync_relay.py` | Vaults on scn-sync-relay: a member's private vault and a workspace's, each made by the relay the first time it is asked, and a workspace's kept under the workspace's name. The only place the relay's service token is used. |
+| `corliss/sync_relay.py` | Notes workspaces on scn-notes: a member's Private workspace and a group's shared one, each made by the relay the first time it is asked, and a group's kept under the group's name. The only place the relay's service token is used. |
 | `corliss/litellm.py` | Provisioning members into LiteLLM and issuing their API keys — the only place a gateway credential is used (same one-relationship-one-module rule). |
 | `corliss/views.py` | Every HTTP endpoint, both halves. |
 | `corliss/urls.py` | Every route, flat and un-namespaced. |
@@ -379,11 +379,11 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Account — your own name and email (signed in) | `/account/` |
 | API keys — issue, revoke, usage (members) | `/api/` |
 | Parascribe — transcription quickstart (signed in) | `/tools/parascribe/` |
-| Notes: the notes service and your private vault (members) | `/notes/` |
+| Notes: the notes service and your Private workspace (members) | `/notes/` |
 | Disconnect one of your connected apps (members, POST) | `/notes/apps/disconnect` |
 | Workspaces — the ones you are in (members) | `/workspaces/` |
 | New workspace (members) | `/workspaces/new` |
-| A workspace — rename, add/remove members, its notes vault (its own members) | `/workspaces/<id>/` |
+| A workspace — rename, add/remove members, its shared notes (its own members) | `/workspaces/<id>/` |
 | Login / logout | `/auth/login`, `/auth/logout` |
 | ATProto callback | `/auth/oauth/callback` |
 | ATProto client metadata (**is** the `client_id`) | `/auth/client-metadata.json` |
@@ -402,7 +402,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Lock: discard the stored service session so it can be authenticated again, e.g. after the account moved PDS (POST, cluster admins) | `/manage/lock` |
 | Systems — the stack, with live health checks and each service's provisioned version (cluster admins) | `/systems/` |
 | Deploys: each service's last provision run, its history, and each run's log, as zai-ops recorded them (cluster admins) | `/systems/deploys/`, `/systems/deploys/<host>/`, `/systems/deploys/<host>/<stamp>/` |
-| Notes: every vault on the sync relay, and how much each member holds, counts and sizes only (cluster admins) | `/systems/notes/` |
+| Notes: every notes workspace on scn-notes, and how much each member holds, counts and sizes only (cluster admins) | `/systems/notes/` |
 | Django admin | `/admin/` |
 
 The parenthesised audiences above are the four access levels, and each is one
@@ -937,26 +937,27 @@ deliberately; do not quietly adopt this setting for it.
 
 ### Notes: `/systems/notes/`
 
-Every vault on scn-sync-relay with its holder, note count, size and last
-change, and per member their private vaults and what they hold in storage. It
-reads the relay's `GET /internal/vaults/all` (relay v0.4.3 or later) through
-`sync_relay.all_vaults`.
+Every notes workspace on scn-notes with its holder, note count, size and last
+change, and per member their Private workspace and what they hold in storage.
+It reads the relay's `GET /internal/workspaces/all` (scn-notes v0.7.0 or
+later) through `sync_relay.all_workspaces`.
 
 - **Counts and sizes, never titles or text.** Seeing what members have stored
   is a different decision from seeing what they wrote. The relay's listing
   carries neither, so this page cannot show them by mistake.
-- **This view is the one caller of `sync_relay.all_vaults`.** The relay route
-  takes no parameters, so nothing in a request chooses whose vaults come back;
-  the admin gate is what decides who sees them. Another page calling it would
-  hand every member's vault names to whoever that page lets in.
-- **A workspace's vault counts toward the workspace, not its creator.** The
-  relay records who made it, but the member who pressed the button does not
-  hold it, so it is not in their total.
-- **"Not in a vault" is documents the member sent that no vault reaches**:
-  deleted entries, an interrupted move, files of a type the relay does not
-  index. With the vaults' sizes, it adds up to what they hold. The relay
-  reports it only once every vault has been indexed since it started, so just
-  after a relay restart those cells read "—".
+- **This view is the one caller of `sync_relay.all_workspaces`.** The relay
+  route takes no parameters, so nothing in a request chooses whose workspaces
+  come back; the admin gate is what decides who sees them. Another page
+  calling it would hand every group's workspace names to whoever that page
+  lets in.
+- **A shared workspace counts toward its group, not its creator.** The relay
+  records who made it, but the member whose page load made it does not hold
+  it, so it is not in their total.
+- **"Outside workspaces" is documents the member sent that no workspace
+  reaches**: deleted entries, an interrupted move, files of a type the relay
+  does not index. With the workspaces' sizes, it adds up to what they hold.
+  The relay reports it only once every workspace has been indexed since it
+  started, so just after a relay restart those cells read "—".
 - **Holders are named from our tables**, one query each, never through
   `membership.handles_for`, which would fetch a DID document per unknown DID.
   A DID with no `User` row reads as an unknown member, with the DID on the
@@ -1180,45 +1181,48 @@ roster. Making one takes a cluster membership; changing one takes being in it.
   registry is down. The view re-asks both questions regardless: a datalist is a
   convenience, and a POST can carry anything.
 
-### A workspace's notes vault
+### A workspace's shared notes
 
-A workspace has one notes vault on
-[scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay), shared by
-everyone in it. It is shown on the workspace's page and nowhere else:
-`/notes/` is about a member's private vault and never lists it. There is no
-button to make it: rendering the page asks the relay for it with
-`PUT /internal/vaults/workspace` (relay v0.5.0 or later), and the relay makes
-it the first time it is asked. A new workspace lands on its page, so it has its
-vault from the start.
+Two words cross between Corliss and scn-notes. scn-notes calls the notes a
+**workspace** (a member's Private workspace, or a shared one) and calls the
+members who share one a **group**, identified by `group_id`. Corliss's
+`Workspace` model is that group, and its pk is the `group_id`.
 
-- **Nothing about the vault is stored here.** The relay records which
-  workspace holds which vault, keyed by the workspace's pk, and the page asks
-  it on every render. Migration `0009` dropped `Workspace.automerge_root`,
+A Corliss workspace has one shared notes workspace on
+[scn-notes](https://github.com/Z-Space-Society/scn-notes), shared by everyone
+in it. It is shown on the workspace's page and nowhere else: `/notes/` is about
+a member's Private workspace and never lists it. There is no button to make
+it: rendering the page asks the relay for it with `PUT /internal/workspaces`
+(scn-notes v0.7.0 or later), and the relay makes it the first time it is
+asked. A new workspace lands on its page, so it has its notes from the start.
+
+- **Nothing about the notes workspace is stored here.** The relay records
+  which group holds which workspace, keyed by the `Workspace` pk, and the page
+  asks it on every render. Migration `0009` dropped `Workspace.automerge_root`,
   which was reserved for this and would have been a second answer.
 - **Who can open it is the `workspaces` claim, not a call.** Corliss puts the
-  member's workspace IDs in every sync and MCP token (see
-  [Access tokens](#access-tokens)), and the relay opens a workspace's vault to
+  member's workspace IDs in every notes and MCP token (see
+  [Access tokens](#access-tokens)), and the relay opens a group's notes to
   whoever's token lists it. Adding or removing a member therefore calls
   nothing: a removal takes effect at the member's next token, within fifteen
   minutes, the same bound as leaving the cluster.
-- **Corliss asks, and only Corliss.** The relay sees workspace IDs, never
-  names, so a sync or MCP listing cannot make a workspace's vault with the
-  right name. Corliss sends the name with every ask.
+- **Corliss asks, and only Corliss.** The relay sees group IDs, never names,
+  so a sync or MCP listing cannot make a group's workspace with the right
+  name. Corliss sends the name with every ask.
 - **The relay is asked only after `_workspace_for_member`.** The service token
-  can make or rename any workspace's vault, so the workspace in the URL is
-  trusted only once the signed-in member has been found in it. A stranger gets
+  can make or rename any group's workspace, so the ID in the URL is trusted
+  only once the signed-in member has been found in that group. A stranger gets
   the 404 before the relay is called.
-- **The vault takes the workspace's name and follows it.** Every render sends
-  the current name, and the relay renames the vault when it differs, so a save
-  that changes the name reaches the vault on the page it redirects to. If the
-  relay misses it, the next render is the retry, and nothing is queued. A name
-  over the relay's 100 characters is cut to fit.
-- **The card names the vault by the relay's `path`**, such as
+- **The notes take the workspace's name and follow it.** Every render sends
+  the current name, and the relay renames its workspace when it differs, so a
+  save that changes the name reaches the notes on the page it redirects to. If
+  the relay misses it, the next render is the retry, and nothing is queued. A
+  name over the relay's 100 characters is cut to fit.
+- **The card names the notes by the relay's `path`**, such as
   `Workspaces/Garden Club`, the name MCP and SCN Sync both use. The relay is
-  the one place "Workspaces" is spelled; nothing here builds the string, and a
-  relay older than v0.4.2, which sends no `path`, gets no such line.
-- **Two members opening the page at once get one vault.** The relay's unique
-  index decides the race and both get the winner's.
+  the one place "Workspaces/" is spelled; nothing here builds the string.
+- **Two members opening the page at once get one workspace.** The relay's
+  unique index decides the race and both get the winner's.
 
 ## The nav
 
@@ -1288,43 +1292,44 @@ touch-specific details follow from it, all in `base.css`:
 ## Notes: `/notes/`
 
 Members keep notes on the cluster and reach them from Obsidian and over MCP.
-The notes and the record of who owns which vault live on
-[scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay). This page
-explains the service, shows the member's private vault, and gives the two
-addresses to connect with. **A member has one private vault, and nothing
-creates it by hand**: from relay v0.5.0 the relay makes it the first time any
-listing asks, this page's, SCN Sync's or an MCP client's, and its path is
-`Private`.
+The notes and the record of who holds which workspace live on
+[scn-notes](https://github.com/Z-Space-Society/scn-notes). This page explains
+the service, shows the member's Private workspace, and gives the two addresses
+to connect with. **A member has one Private workspace, and nothing creates it
+by hand**: the relay makes it the first time any listing asks, this page's,
+SCN Sync's or an MCP client's, and its path is `Private`.
 
-- **Nothing about a vault is stored in Corliss.** The page asks the relay each
-  time it renders. A vault exists when the relay says so.
-- **No request chooses whose vault.** The relay's service token can list, and
-  so make, a vault for any DID, so the DID is the signed-in member's, and a
-  `did` in the query string is never read. The page takes no POST at all.
-  Handing one member another's vault would be this page's worst failure.
-- **The private vault only.** The listing names no workspaces, so a workspace's
-  vault never appears here, even for a member of it. It is on the workspace's
-  page.
+- **Nothing about a workspace is stored in Corliss.** The page asks the relay
+  each time it renders, with `GET /internal/workspaces?did=` (scn-notes v0.7.0
+  or later). A workspace exists when the relay says so.
+- **No request chooses whose workspace.** The relay's service token can list,
+  and so make, a workspace for any DID, so the DID is the signed-in member's,
+  and a `did` in the query string is never read. The page takes no POST at
+  all. Handing one member another's notes would be this page's worst failure.
+- **The Private workspace only.** The listing names no groups, so a shared
+  workspace never appears here, even for a member of it. It is on the
+  workspace's page.
+- **"Vault" stays in one place**: the setup step that has the member create a
+  vault in Obsidian, because that is Obsidian's own word for it.
 - **The relay is called at its internal address**, `SYNC_RELAY_URL`, never the
-  public sync URL shown on the page. The relay's proxy does not route
+  public notes URL shown on the page. The relay's proxy does not route
   `/internal/` at all.
 - **Redirects are not followed**, so the service token cannot be carried to an
   address the relay did not answer from.
 - **Nothing is retried.** A failure says the service did not answer, and the
   next load asks again.
-- **The instructions render in every state.** The vault depends on the relay
-  answering and the explanation does not.
+- **The instructions render in every state.** The workspace depends on the
+  relay answering and the explanation does not.
 - **Notes and Size are the relay's figures, shown as given.** Size is the
-  bytes the vault takes on the relay, which is its Automerge history: it
+  bytes the workspace takes on the relay, which is its Automerge history: it
   grows with every edit and reads larger than the notes as files. Both show
-  "—" until the relay has walked the vault since it started, and against a
-  relay older than v0.3.0, which does not send them.
+  "—" until the relay has walked the workspace since it started.
 
 | State | The page shows |
 | ----- | -------------- |
 | `SYNC_RELAY_URL` or `SYNC_RELAY_SERVICE_TOKEN` blank | The instructions, and that notes are not set up on this deployment. |
-| The relay unreachable, any answer but `200`, or a listing with no private vault | The instructions, and that the service did not answer. |
-| Answered | The member's private vault: its notes, size and last change, and its path. |
+| The relay unreachable, any answer but `200`, or a listing with no Private workspace | The instructions, and that the service did not answer. |
+| Answered | The member's Private workspace: its notes, size and last change, and its path. |
 
 The two addresses shown are the first `sync` and first `mcp` entries of
 `OIDC_RESOURCES`, so what a member pastes is the same string the relay checks
@@ -1334,7 +1339,7 @@ listed first and shown, and the old ones after keep working unshown.
 | Setting | Meaning |
 | ------- | ------- |
 | `SYNC_RELAY_URL` | The relay's **internal** origin. The same setting `/systems/` probes. |
-| `SYNC_RELAY_SERVICE_TOKEN` | The credential for the relay's `/internal/vaults`, shared with the relay as `SCN_SYNC_RELAY_SERVICE_TOKEN`. Blank leaves the page saying vaults are not set up. |
+| `SYNC_RELAY_SERVICE_TOKEN` | The credential for the relay's `/internal/workspaces`, shared with the relay as `SCN_NOTES_SERVICE_TOKEN`. Blank leaves the page saying notes are not set up. |
 | `ENABLE_NOTES` | Default `True`. `False` hides the nav's **Notes** entry from everyone, for a deployment that has not rolled the service out. It hides the link only: `/notes/` still answers. |
 
 ## Public clients: Claude, Claude Code and SCN Sync
@@ -1342,7 +1347,7 @@ listed first and shown, and the old ones after keep working unshown.
 Open WebUI is a confidential client: it holds a secret and is described by
 settings. Corliss also serves **public** clients, which hold no secret: the
 Claude apps, Claude Code, and the SCN Sync plugin for Obsidian. They sign a
-member in to reach [scn-sync-relay](https://github.com/Z-Space-Society/scn-sync-relay),
+member in to reach [scn-notes](https://github.com/Z-Space-Society/scn-notes),
 where the member's notes live. The design is in
 [`docs/specs/0001-spec-multi-client-oauth`](docs/specs/0001-spec-multi-client-oauth/0001-spec-multi-client-oauth.md).
 
@@ -1493,12 +1498,12 @@ contract with the relay, which answers anything else with a bare `401`.
   URL.
 - **`workspaces` carries IDs, never names**, for the same reason: a name in
   the URL would say in words which groups somebody is in. The relay keeps no
-  roster and opens a workspace's vault to whoever's token lists it, so this
-  claim *is* workspace access to notes. It needs scn-sync-relay v0.4.1 or
-  later; v0.4.0 expected objects with names and refuses these tokens.
-- **Deploy the relay before this Corliss.** A relay older than v0.4.0 ignores
-  the `workspace` field when a vault is made, so "Create notes vault" there
-  would quietly make a private vault in the pressing member's name.
+  roster and opens a group's notes to whoever's token lists it, so this claim
+  *is* workspace access to notes. The claim keeps the name `workspaces` though
+  scn-notes calls these groups: renaming it would break every token in flight.
+- **Deploy the relay before this Corliss.** This Corliss calls
+  `/internal/workspaces`, which scn-notes serves from v0.7.0; against an older
+  relay every notes card says the service did not answer.
 - **Fifteen minutes is the revocation bound.** Nothing revokes an access token
   once issued.
 
@@ -1571,9 +1576,10 @@ An operator disconnects one client from one member by deleting its rows under
 | `OIDC_RESOURCES` | The resources a public client can get a token for, as a JSON list of `{"url", "kind", "label"}`. `kind` is `sync` (what the plugin signs in for) or `mcp`. A kind may have more than one, so a service can move host without a gap: the first of each kind is the one the Notes page shows, and the rest keep issuing tokens until removed. A URL listed twice is refused. Blank issues nothing to any public client. |
 
 - **`url` becomes `aud` exactly as written**, and the relay compares it
-  character for character against `SCN_SYNC_RELAY_SYNC_AUDIENCE` and
-  `SCN_SYNC_RELAY_MCP_AUDIENCE`. A trailing slash on one side is a `401` with
-  no explanation. Render both services from one definition.
+  character for character against `SCN_NOTES_PUBLIC_URL` (and it with `/mcp`
+  after it), and, while the old hosts last, `SCN_NOTES_SYNC_AUDIENCE` and
+  `SCN_NOTES_MCP_AUDIENCE`. A trailing slash on one side is a `401` with no
+  explanation. Render both services from one definition.
 - **A value that does not parse fails the deploy**, as system check
   `corliss.E004`, and names the entry at fault. It is JSON in an env file, so
   a stray quote is the likely mistake. At runtime a bad value issues nothing,
@@ -1584,20 +1590,21 @@ An operator disconnects one client from one member by deleting its rows under
 Three things have to agree between Corliss and the relay, and each fails as a
 bare `401` from the relay when it does not:
 
-| Corliss | scn-sync-relay | Must be |
-| ------- | -------------- | ------- |
-| `PUBLIC_BASE_URL` | `SCN_SYNC_RELAY_OIDC_ISSUER` | The same origin, no trailing slash on the relay's side |
-| `OIDC_RESOURCES`, the `sync` and `mcp` `url`s | `SCN_SYNC_RELAY_SYNC_AUDIENCE`, `SCN_SYNC_RELAY_MCP_AUDIENCE` | Identical strings |
-| `SYNC_RELAY_SERVICE_TOKEN` | `SCN_SYNC_RELAY_SERVICE_TOKEN` | The same secret |
+| Corliss | scn-notes | Must be |
+| ------- | --------- | ------- |
+| `PUBLIC_BASE_URL` | `SCN_NOTES_OIDC_ISSUER` | The same origin, no trailing slash on the relay's side |
+| `OIDC_RESOURCES`, the first `sync` and `mcp` `url`s | `SCN_NOTES_PUBLIC_URL`, and it with `/mcp` after it | Identical strings |
+| `OIDC_RESOURCES`, the old `sync.` and `mcp.` `url`s, until they retire | `SCN_NOTES_SYNC_AUDIENCE`, `SCN_NOTES_MCP_AUDIENCE` | Identical strings |
+| `SYNC_RELAY_SERVICE_TOKEN` | `SCN_NOTES_SERVICE_TOKEN` | The same secret |
 
 The relay fetches keys from `/.well-known/jwks.json` at Corliss's **internal**
 address, and calls nothing else here. A public client needs no setting of its
 own. Nothing in front of Corliss may block `160.79.104.0/21`, where Claude's
 discovery and token requests come from.
 
-A member then makes a vault at `/notes/`, pastes the sync address shown
-there into the SCN Sync plugin, and adds the MCP address to whatever MCP
-client they use.
+A member then pastes the notes address shown at `/notes/` into the SCN Sync
+plugin, and adds the MCP address there to whatever MCP client they use. Their
+Private workspace is made by whichever of the three asks first.
 
 ### A headless agent: `connect-opencode.sh`
 
