@@ -1,6 +1,6 @@
 [project]
 name = "corliss"
-version = "1.10.5"
+version = "1.11.0"
 description = "ATProto login, OIDC out"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
