@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+
+{% comment %}
+Notes → Workspaces: the member's Private workspace, the workspaces they are
+in, and the form that makes one. See `views.notes`. How to connect Obsidian
+and MCP clients is on Notes → Connect (`notes_connect.html`).
+
+**The page renders whatever the relay does.** The Private workspace and each
+row's figures come from one relay listing; the table itself is Corliss's own,
+so it is always there. Three states for the Private card, each said in words:
+
+- not configured: this deployment has no notes service connected.
+- unreachable: it has one and it did not answer. The rows show "—".
+- answered: the member's Private workspace. Every member has one: the relay
+  makes it the first time anyone asks, this page included.
+
+A row's Notes and Last change are "—" until that workspace's notes exist,
+which its own page makes on first render.
+
+**New workspace is a modal**, opened by `:target` with no script, the markup
+`/manage/`'s member panels use. A form that fails validation renders here with
+`is-open` on the modal, because the fragment does not survive a POST. Closing
+it then goes to a fresh `/notes/`, since a class cannot be unset by a link.
+{% endcomment %}
+
+{% block title %}Notes{% endblock %}
+
+{% block content %}
+<div class="account-view console-view" id="notes">
+  <h1>Notes</h1>
+
+  <p class="page-text">Your notes, kept on this network. To read and edit them
+  in Obsidian or from an AI assistant, see
+  <a href="{% url 'notes_connect' %}">Connect</a>.</p>
+
+  <h2 class="section-title">Your Private Workspace</h2>
+  <div class="card">
+    {% if not configured %}
+      <p class="alert alert--notice" role="status">
+        <strong>Not set up.</strong> This deployment has no notes service
+        connected, so there are no workspaces here yet.
+      </p>
+    {% elif not reachable %}
+      <p class="alert" role="alert">
+        <strong>Not reachable.</strong> The notes service did not answer just
+        now. Your notes are unaffected. Try again in a moment.
+      </p>
+    {% else %}
+      <dl class="modal__facts">
+        <div class="modal__fact">
+          <dt>Notes</dt>
+          <dd>{{ private.note_count|default_if_none:"—" }}</dd>
+        </div>
+        <div class="modal__fact">
+          <dt>Size</dt>
+          <dd>{% if private.bytes is None %}—{% else %}{{ private.bytes|filesizeformat }}{% endif %}</dd>
+        </div>
+        <div class="modal__fact">
+          <dt>Last change</dt>
+          <dd>{{ private.last_change_at|date:"Y-m-d H:i"|default:"—" }}</dd>
+        </div>
+      </dl>
+      <p class="page-text">Only you can read these notes.{% if private.path %}
+      SCN Sync in Obsidian and MCP clients both show them as
+      <code>{{ private.path }}</code>.{% endif %}</p>
+    {% endif %}
+  </div>
+
+  <h2 class="section-title">Workspaces</h2>
+  <p class="page-text">A Workspace is where you, and select other members, can
+    share notes, files, and other data. Everyone who is a member of a Workspace
+    has full read/write access to the full Workspace. Only your Workspaces are
+    shown in this table.
+  </p>
+
+  {% if notice %}<p class="alert alert--notice" role="status">{{ notice }}</p>{% endif %}
+
+  <div class="card">
+    {% if workspaces %}
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th class="data-table__count">Members</th>
+              <th class="data-table__count">Notes</th>
+              <th>Last change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for workspace in workspaces %}
+              <tr>
+                <td>
+                  <a href="{% url 'workspace_edit' pk=workspace.pk %}">{{ workspace.name }}</a>
+                  {% if workspace.description %}
+                    <div class="data-table__sub">{{ workspace.description|truncatechars:80 }}</div>
+                  {% endif %}
+                </td>
+                <td class="data-table__count">{{ workspace.member_count }}</td>
+                <td class="data-table__count">{{ workspace.notes.note_count|default_if_none:"—" }}</td>
+                <td class="data-table__muted">{{ workspace.notes.last_change_at|date:"Y-m-d H:i"|default:"—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="hint-text">You are not in a workspace yet. Make one, or ask
+      someone in an existing workspace to add you. Being a cluster member does
+      not put you in any of them.</p>
+    {% endif %}
+
+    <div class="row-form row-form--add">
+      <a class="btn-row" href="#new-workspace">New workspace</a>
+    </div>
+  </div>
+
+  {% if form.errors %}{% url 'notes' as close_to %}{% else %}{% firstof '#notes' as close_to %}{% endif %}
+  <div class="modal{% if form.errors %} is-open{% endif %}" id="new-workspace" role="dialog"
+       aria-modal="true" aria-labelledby="new-workspace-title">
+    <a class="modal__scrim" href="{{ close_to }}" aria-label="Close" tabindex="-1"></a>
+    <div class="modal__panel">
+      <a class="modal__close" href="{{ close_to }}" aria-label="Close">×</a>
+      <h3 class="modal__title" id="new-workspace-title">New workspace</h3>
+      <form method="post" class="stacked-form" action="{% url 'notes' %}">
+        {% csrf_token %}
+        {{ form }}
+        <button type="submit" class="btn-primary">Create workspace</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

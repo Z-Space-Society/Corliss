@@ -154,18 +154,6 @@ class RelayClientTests(NotesCase):
             sync_relay.list_workspaces(DID, groups=[7, 9])
         self.assertEqual(relay.calls[0][2]["params"], {"did": DID, "groups": "7,9"})
 
-    def test_the_private_workspace_is_the_one_with_no_group(self):
-        shared = notes_workspace("Garden Club", group_id="7")
-        with Relay(listing=[shared, private(note_count=3)]):
-            found = sync_relay.private_workspace(DID)
-        self.assertIsNone(found["group_id"])
-        self.assertEqual(found["note_count"], 3)
-
-    def test_a_listing_with_no_private_workspace_is_an_error(self):
-        with Relay(listing=[]):
-            with self.assertRaises(sync_relay.SyncRelayError):
-                sync_relay.private_workspace(DID)
-
     @override_settings(SYNC_RELAY_URL=RELAY + "/")
     def test_a_trailing_slash_on_the_setting_does_not_double_up(self):
         with Relay() as relay:
@@ -276,23 +264,22 @@ class WhoseWorkspacesTests(NotesCase):
             self.get()
         self.assertEqual([c[2]["params"] for c in relay.calls], [{"did": DID}])
 
-    def test_the_notes_page_names_none_of_the_members_workspaces(self):
-        """Shared workspaces are on the workspace's page, never here."""
-        Workspace.objects.create(name="Garden Club").members.add(self.user)
+    def test_the_groups_named_are_the_members_own(self):
+        """From Corliss's roster: a group the member is not in is never named."""
+        mine = Workspace.objects.create(name="Garden Club")
+        mine.members.add(self.user)
+        Workspace.objects.create(name="Not Mine")
         with Relay() as relay:
-            self.get()
-        self.assertEqual([c[2]["params"] for c in relay.calls], [{"did": DID}])
+            self.get(groups="999")
+        self.assertEqual(
+            [c[2]["params"] for c in relay.calls],
+            [{"did": DID, "groups": str(mine.pk)}],
+        )
 
     def test_a_did_in_the_query_string_is_ignored(self):
         with Relay() as relay:
             self.get(did=OTHER)
         self.assertEqual([c[2]["params"] for c in relay.calls], [{"did": DID}])
-
-    def test_the_page_takes_no_post_and_the_relay_is_not_asked(self):
-        with Relay() as relay:
-            resp = self.client.post(reverse("notes"), {"name": "Notes", "did": OTHER})
-        self.assertEqual(resp.status_code, 405)
-        self.assertEqual(relay.calls, [])
 
     def test_a_non_member_is_refused_and_the_relay_is_not_asked(self):
         MembershipCache.objects.filter(did=DID).update(active=False)
@@ -310,33 +297,26 @@ class WhoseWorkspacesTests(NotesCase):
 
 
 class PageStateTests(NotesCase):
-    def assertInstructions(self, resp):
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.context["sync_url"], SYNC)
-        self.assertEqual(resp.context["mcp_url"], MCP)
-        self.assertContains(resp, SYNC)
-        self.assertContains(resp, MCP)
-
     def test_answered_shows_the_private_workspace(self):
         with Relay(listing=[private(note_count=42, bytes=1234)]):
             resp = self.get()
-        self.assertInstructions(resp)
+        self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.context["configured"])
         self.assertTrue(resp.context["reachable"])
         self.assertEqual(resp.context["private"]["path"], "Private")
         self.assertEqual(resp.context["private"]["note_count"], 42)
 
-    def test_not_configured_shows_the_instructions_and_asks_nothing(self):
+    def test_not_configured_renders_and_asks_nothing(self):
         for blank in ("SYNC_RELAY_SERVICE_TOKEN", "SYNC_RELAY_URL"):
             with self.subTest(blank=blank), override_settings(**{blank: ""}):
                 with Relay() as relay:
                     resp = self.get()
                 self.assertEqual(relay.calls, [])
-                self.assertInstructions(resp)
+                self.assertEqual(resp.status_code, 200)
                 self.assertFalse(resp.context["configured"])
                 self.assertIsNone(resp.context["private"])
 
-    def test_unreachable_or_a_bad_answer_shows_the_instructions(self):
+    def test_unreachable_or_a_bad_answer_still_renders(self):
         for failure in (
             requests.ConnectionError("refused"),
             answer(502, text="bad gateway"),
@@ -347,22 +327,62 @@ class PageStateTests(NotesCase):
             with self.subTest(failure=failure), Relay(list_answer=failure):
                 with patch.object(sync_relay.log, "warning"):
                     resp = self.get()
-                self.assertInstructions(resp)
+                self.assertEqual(resp.status_code, 200)
                 self.assertTrue(resp.context["configured"])
                 self.assertFalse(resp.context["reachable"])
 
+    def test_each_workspace_gets_its_groups_figures_and_none_without_one(self):
+        garden = Workspace.objects.create(name="Garden Club")
+        seeds = Workspace.objects.create(name="Seed Library")
+        garden.members.add(self.user)
+        seeds.members.add(self.user)
+        listing = [
+            private(),
+            notes_workspace("Garden Club", group_id=str(garden.pk), note_count=9),
+        ]
+        with Relay(listing=listing):
+            resp = self.get()
+        figures = {w.pk: w.notes for w in resp.context["workspaces"]}
+        self.assertEqual(figures[garden.pk]["note_count"], 9)
+        self.assertIsNone(figures[seeds.pk])
+
+    def test_the_workspaces_render_when_the_relay_does_not(self):
+        Workspace.objects.create(name="Garden Club").members.add(self.user)
+        with Relay(list_answer=requests.ConnectionError("refused")):
+            with patch.object(sync_relay.log, "warning"):
+                resp = self.get()
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.context["reachable"])
+        self.assertEqual([w.notes for w in resp.context["workspaces"]], [None])
+
+
+class ConnectPageTests(NotesCase):
+    def get(self, **params):
+        return self.client.get(reverse("notes_connect"), params)
+
+    def test_the_addresses_are_the_first_of_each_kind_and_the_relay_is_not_asked(self):
+        with Relay() as relay:
+            resp = self.get()
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.context["sync_url"], SYNC)
+        self.assertEqual(resp.context["mcp_url"], MCP)
+        self.assertEqual(relay.calls, [])
+
     @override_settings(OIDC_RESOURCES="")
     def test_with_no_resources_configured_the_page_still_renders(self):
-        with Relay():
-            resp = self.get()
+        resp = self.get()
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.context["sync_url"], "")
         self.assertEqual(resp.context["mcp_url"], "")
 
     def test_the_page_links_the_connect_script_at_its_published_path(self):
-        with Relay():
-            resp = self.get()
+        resp = self.get()
         self.assertContains(resp, 'href="/static/help/scripts/connect-opencode.sh"')
+
+    def test_a_non_member_is_refused(self):
+        MembershipCache.objects.filter(did=DID).update(active=False)
+        resp = self.get()
+        self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
 
     def test_the_nav_offers_the_page_to_a_member_and_closes_it_to_a_non_member(self):
         with Relay():
@@ -373,16 +393,6 @@ class PageStateTests(NotesCase):
         html = self.client.get(reverse("home")).content.decode()
         self.assertNotIn(f'href="{reverse("notes")}"', html)
         self.assertIn(">Notes</span>", html)
-
-    @override_settings(ENABLE_NOTES=False)
-    def test_the_nav_hides_the_page_when_notes_are_off(self):
-        with Relay():
-            html = self.get().content.decode()
-        self.assertNotIn(f'href="{reverse("notes")}"', html)
-
-        MembershipCache.objects.filter(did=DID).update(active=False)
-        html = self.client.get(reverse("home")).content.decode()
-        self.assertNotIn(">Notes</span>", html)
 
 
 OPENCODE = "https://opencode.ai/oauth/opencode/client.json"
@@ -424,8 +434,7 @@ class ConnectedAppsTests(NotesCase):
         return raw, row
 
     def apps(self):
-        with Relay():
-            resp = self.get()
+        resp = self.client.get(reverse("notes_connect"))
         self.assertEqual(resp.status_code, 200)
         return resp, resp.context["connected_apps"]
 
@@ -505,7 +514,9 @@ class ConnectedAppsTests(NotesCase):
 
         resp = self.disconnect(OPENCODE)
 
-        self.assertRedirects(resp, reverse("notes"), fetch_redirect_response=False)
+        self.assertRedirects(
+            resp, reverse("notes_connect"), fetch_redirect_response=False
+        )
         self.assertFalse(
             OidcRefreshToken.objects.filter(user=self.user, client_id=OPENCODE).exists()
         )
@@ -532,7 +543,9 @@ class ConnectedAppsTests(NotesCase):
     def test_disconnecting_an_app_the_member_never_connected_changes_nothing(self):
         self.connect(OPENCODE)
         resp = self.disconnect("https://nobody.test/c.json")
-        self.assertRedirects(resp, reverse("notes"), fetch_redirect_response=False)
+        self.assertRedirects(
+            resp, reverse("notes_connect"), fetch_redirect_response=False
+        )
         self.assertEqual(OidcRefreshToken.objects.count(), 1)
 
     def test_disconnect_answers_only_a_post(self):

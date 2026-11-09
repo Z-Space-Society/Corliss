@@ -2,21 +2,12 @@
 {% load static %}
 
 {% comment %}
-The Notes page: what the notes service is, the member's Private workspace,
-and how to connect Obsidian and an MCP client. See `views.notes`.
+Notes → Connect: how to reach your notes from Obsidian and an MCP client, and
+the apps that already can. See `views.notes_connect`. The Private workspace
+and the workspaces a member is in are on Notes → Workspaces (`notes.html`).
 
 The link to `connect-opencode.sh` uses the unhashed static path, the
 address the README documents, rather than `{% static %}`'s versioned one.
-
-**The instructions always render.** The workspace depends on the relay
-answering, and the rest of the page does not: a member reading how this works
-should not be shown an error where the explanation was. Three states, each
-said in words:
-
-- not configured: this deployment has no relay connected.
-- unreachable: it has one and it did not answer.
-- answered: the member's Private workspace. Every member has one: the relay makes
-  it the first time anyone asks, this page included, so there is no form.
 
 **Connected apps** lists the apps that can reach this member's notes without
 asking again, from `views._connected_apps`. Each is headed by its host, the
@@ -24,11 +15,11 @@ part Corliss checked, with the name it gives itself beneath, as on the consent
 screen. Disconnect is a one-button form per row.
 {% endcomment %}
 
-{% block title %}Notes{% endblock %}
+{% block title %}Connect{% endblock %}
 
 {% block content %}
 <div class="account-view console-view">
-  <h1>Notes</h1>
+  <h1>Connect</h1>
 
   <p class="page-text">
     Your notes, kept on this network. Read and edit them in Obsidian on your laptop and your phone with the
@@ -119,42 +110,6 @@ screen. Disconnect is a one-button form per row.
       <p class="hint-text">No apps are connected.</p>
     {% endif %}
   </div>
-
-  <h2 class="section-title">Your Private Workspace</h2>
-  <div class="card">
-    {% if not configured %}
-      <p class="alert alert--notice" role="status">
-        <strong>Not set up.</strong> This deployment has no notes service
-        connected, so there are no workspaces here yet.
-      </p>
-    {% elif not reachable %}
-      <p class="alert" role="alert">
-        <strong>Not reachable.</strong> The notes service did not answer just
-        now. Your notes are unaffected. Try again in a moment.
-      </p>
-    {% else %}
-      <dl class="modal__facts">
-        <div class="modal__fact">
-          <dt>Notes</dt>
-          <dd>{{ private.note_count|default_if_none:"—" }}</dd>
-        </div>
-        <div class="modal__fact">
-          <dt>Size</dt>
-          <dd>{% if private.bytes is None %}—{% else %}{{ private.bytes|filesizeformat }}{% endif %}</dd>
-        </div>
-        <div class="modal__fact">
-          <dt>Last change</dt>
-          <dd>{{ private.last_change_at|date:"Y-m-d H:i"|default:"—" }}</dd>
-        </div>
-      </dl>
-      <p class="page-text">Only you can read these notes.{% if private.path %}
-      SCN Sync in Obsidian and MCP clients both show them as
-      <code>{{ private.path }}</code>.{% endif %} A shared workspace's notes
-      are on its own page under Workspaces.</p>
-    {% endif %}
-  </div>
-
-
 
 </div>
 {% endblock %}

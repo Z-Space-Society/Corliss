@@ -19,16 +19,19 @@ section below defines them and says when to reach for which.
 - `account`: the member's own name and email — the only place either is
   editable, and the reason login fills those fields rather than overwriting
   them. Signed-in, not member-gated: an applicant has a name too.
-- `workspaces` / `workspace_new` / `workspace_edit`: the named places members
-  share. Member-gated to make one; past that, being in a workspace is the whole
+- `workspace_edit`: one of the named places members share. They are listed,
+  and made, on the Notes page. Member-gated to make one; past that, being in a
+  workspace is the whole
   permission and it is flat — everyone in it can rename it and change who else
   is. See the section above them for how that stays separate from GATE.
 - `api`: the member's own API keys — issue, list, revoke, and usage, read live
   from LiteLLM. Member-gated, and issuing needs a real grant on top of that:
   GATE lets a roster admin onto the page, not to a key. See `corliss.litellm`.
-- `notes`: the Notes page. What the notes service is, how to connect
-  Obsidian and an MCP client to it, and the member's Private workspace, which
-  lives on scn-notes and is listed and created through `corliss.sync_relay`.
+- `notes` / `notes_connect`: the Notes menu. `notes` is the member's Private
+  workspace and the workspaces they are in, read from scn-notes through
+  `corliss.sync_relay` in one call, and the form that makes a workspace.
+  `notes_connect` is how to connect Obsidian and an MCP client, and the apps
+  that already are.
 - `parascribe`: how to call the cluster's transcription models. Signed-in, and
   names only the models the reader's own tier reaches.
 - `manage`: the cluster console — applications, members, admins, and
@@ -925,57 +928,6 @@ def _workspace_for_member(request, pk):
 
 
 @member_required
-@require_http_methods(["GET"])
-def workspaces(request):
-    """The workspaces you are in.
-
-    Only yours. A workspace you are not in is not listed, not linked and not
-    reachable, which is the answer `_workspace_for_member` gives one URL later.
-    The page and the view cannot disagree about what you can see.
-    """
-    # Two steps, and the obvious one-step version is wrong. Filtering by
-    # `members` constrains the join to the asking member's own row, and a
-    # `Count("members")` annotated onto *that* counts what is left of the join
-    # rather than the roster: every workspace reported one member, however many
-    # it had. So the membership test picks the ids, and the count is taken on a
-    # query that has not joined the roster for any other purpose.
-    mine = Workspace.objects.filter(pk__in=request.user.workspaces.values("pk"))
-
-    return render(
-        request,
-        "workspaces.html",
-        {
-            "workspaces": mine.annotate(member_count=Count("members")),
-            "notice": request.session.pop(WORKSPACE_NOTICE_SESSION_KEY, None),
-        },
-    )
-
-
-@member_required
-@require_http_methods(["GET", "POST"])
-def workspace_new(request):
-    """Make one, and land in it.
-
-    The creator is added to `members` here and this is the only place that
-    happens implicitly. Without it they would be locked out of the workspace
-    they just made, since `created_by` grants nothing.
-    """
-    form = WorkspaceForm(request.POST or None)
-
-    if request.method == "POST" and form.is_valid():
-        workspace = form.save(commit=False)
-        workspace.created_by = request.user
-        workspace.save()
-        workspace.members.add(request.user)
-        # No notice: the page it lands on is the workspace, with the name on it.
-        # "Workspace created." over the thing just created says nothing the page
-        # does not already say.
-        return redirect("workspace_edit", pk=workspace.pk)
-
-    return render(request, "workspace_new.html", {"form": form})
-
-
-@member_required
 @require_http_methods(["GET", "POST"])
 def workspace_edit(request, pk):
     """A workspace: what it is, who is in it, and the form to change the first.
@@ -1047,6 +999,7 @@ def workspace_edit(request, pk):
         request,
         "workspace_edit.html",
         {
+            "notes_page": "workspaces",
             "workspace": workspace,
             "form": form,
             "members": members,
@@ -1134,7 +1087,7 @@ def _remove_workspace_member(request, workspace):
 
     if user.pk == request.user.pk:
         request.session[WORKSPACE_NOTICE_SESSION_KEY] = f"You left {workspace.name}."
-        return redirect("workspaces")
+        return redirect("notes")
 
     request.session[WORKSPACE_NOTICE_SESSION_KEY] = f"Removed {user.username}."
     return redirect("workspace_edit", pk=workspace.pk)
@@ -1461,46 +1414,111 @@ def notes_disconnect(request):
     client_id = request.POST.get("client_id", "")
     OidcRefreshToken.objects.filter(user=request.user, client_id=client_id).delete()
     OidcConsent.objects.filter(user=request.user, client_id=client_id).delete()
-    return redirect("notes")
+    return redirect("notes_connect")
 
 
 @member_required
-@require_http_methods(["GET"])
+@require_http_methods(["GET", "POST"])
 def notes(request):
-    """The Notes page: the notes service, and the member's Private workspace.
+    """The Notes page: the member's Private workspace, the workspaces they
+    are in, and the form that makes a new one.
 
-    The workspace is the relay's, not ours. This view asks `corliss.sync_relay`
-    for it and stores nothing. The relay makes it the first time anyone asks,
-    so there is nothing here to create.
+    **One relay call answers both halves.** The listing asks for the member's
+    DID and the IDs of the groups they are in, and the relay returns the
+    Private workspace (made if this is the first time anyone asked) and each
+    group's notes workspace that exists. Listing never makes a group's
+    workspace: its own page does, on first render, under its name.
 
-    **No request chooses whose workspace.** The relay's service token can list
-    for any DID, so the DID is `request.user.did`, and a `did` in the query
-    string is never read.
+    **No request chooses whose notes.** The relay's service token can list for
+    any DID and any group, so the DID is `request.user.did` and the groups are
+    `request.user.workspaces`, Corliss's own roster. Nothing in the query
+    string or the form is read for either.
 
-    No state of the relay raises here or hides the instructions: not
-    configured and unreachable are both things the page says about itself.
+    No state of the relay raises here or hides the table: not configured and
+    unreachable are both things the page says about itself, and the table
+    shows "—" for figures it did not get.
+
+    A POST makes a workspace, and that is the one place its creator is added
+    to `members` implicitly: without it they would be locked out of the
+    workspace they just made, since `created_by` grants nothing. Success lands
+    on the new workspace's page with no notice, because the page it lands on
+    says it. A form that fails validation renders here with the modal held
+    open, since a redirect would drop what the member typed.
     """
-    did = request.user.did
-    configured = sync_relay.is_configured()
+    form = WorkspaceForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        workspace = form.save(commit=False)
+        workspace.created_by = request.user
+        workspace.save()
+        workspace.members.add(request.user)
+        return redirect("workspace_edit", pk=workspace.pk)
 
+    # Two steps, and the obvious one-step version is wrong. Filtering by
+    # `members` constrains the join to the asking member's own row, and a
+    # `Count("members")` annotated onto *that* counts what is left of the join
+    # rather than the roster: every workspace reported one member, however many
+    # it had. So the membership test picks the ids, and the count is taken on a
+    # query that has not joined the roster for any other purpose.
+    mine = list(
+        Workspace.objects.filter(pk__in=request.user.workspaces.values("pk")).annotate(
+            member_count=Count("members")
+        )
+    )
+
+    configured = sync_relay.is_configured()
     private = None
+    by_group = {}
     if configured:
         try:
-            private = sync_relay.private_workspace(did)
+            listing = sync_relay.list_workspaces(
+                request.user.did, groups=[w.pk for w in mine]
+            )
         except sync_relay.SyncRelayError:
-            pass
+            listing = []
+        for found in listing:
+            if found["group_id"] is None:
+                private = private or found
+            else:
+                by_group[found["group_id"]] = found
+        # A listing with no Private workspace in it is not an answer: the
+        # relay makes one whenever it lists.
+        if private is None:
+            by_group = {}
+    for workspace in mine:
+        workspace.notes = by_group.get(str(workspace.pk))
 
     return render(
         request,
-        "notes_mcp.html",
+        "notes.html",
         {
-            "connected_apps": _connected_apps(request.user),
+            "notes_page": "workspaces",
             "configured": configured,
             # None when the relay did not answer.
             "private": private,
             "reachable": private is not None,
-            # The first of each kind: while a host moves, the new address
-            # is listed first and the old one keeps working unshown.
+            "workspaces": mine,
+            "form": form,
+            "notice": request.session.pop(WORKSPACE_NOTICE_SESSION_KEY, None),
+        },
+    )
+
+
+@member_required
+@require_http_methods(["GET"])
+def notes_connect(request):
+    """How to reach your notes: the Obsidian and MCP addresses, and the apps
+    that already can. Asks the relay nothing.
+
+    The addresses are the first of each kind in `OIDC_RESOURCES`: while a
+    host moves, the new address is listed first and the old one keeps working
+    unshown.
+    """
+    return render(
+        request,
+        "notes_connect.html",
+        {
+            "notes_page": "connect",
+            "connected_apps": _connected_apps(request.user),
             "sync_url": oidc.first_of_kind("sync"),
             "mcp_url": oidc.first_of_kind("mcp"),
         },

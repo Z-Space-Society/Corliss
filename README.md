@@ -379,10 +379,9 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Account — your own name and email (signed in) | `/account/` |
 | API keys — issue, revoke, usage (members) | `/api/` |
 | Parascribe — transcription quickstart (signed in) | `/tools/parascribe/` |
-| Notes: the notes service and your Private workspace (members) | `/notes/` |
+| Notes → Workspaces: your Private workspace and the workspaces you are in (members); POST makes a workspace | `/notes/` |
+| Notes → Connect: connect Obsidian and MCP clients, and your connected apps (members) | `/notes/connect/` |
 | Disconnect one of your connected apps (members, POST) | `/notes/apps/disconnect` |
-| Workspaces — the ones you are in (members) | `/workspaces/` |
-| New workspace (members) | `/workspaces/new` |
 | A workspace — rename, add/remove members, its shared notes (its own members) | `/workspaces/<id>/` |
 | Login / logout | `/auth/login`, `/auth/logout` |
 | ATProto callback | `/auth/oauth/callback` |
@@ -1104,10 +1103,13 @@ is exactly the person an admin is about to read a name for.
   console reads names off the `User` row. Every surface that shows one falls
   back to the handle rather than rendering an empty space.
 
-## Workspaces: `/workspaces/`
+## Workspaces: `/workspaces/<id>/`
 
 A workspace is a named place a few people share: a name, a description, and a
 roster. Making one takes a cluster membership; changing one takes being in it.
+They are listed, and made, on Notes → Workspaces (`/notes/`); each has its own
+page here. There is no `/workspaces/` list and no `/workspaces/new` any more:
+both moved into `/notes/` and were removed rather than redirected.
 
 - **The list's member count is taken on its own query, and that is a fix not a
   style.** `request.user.workspaces` filters the m2m join down to the asking
@@ -1151,7 +1153,7 @@ roster. Making one takes a cluster membership; changing one takes being in it.
   is a single `get_object_or_404(..., members=request.user)`, so the check *is*
   the lookup and there is no way to write the second without the first. 403 on a
   bare id would make ids enumerable, and the list never offered you that one.
-- **This is not a fifth access level.** All three views are `@member_required`;
+- **This is not a fifth access level.** `notes` and `workspace_edit` are `@member_required`;
   being in the workspace is a second question asked inside them, the same shape
   as a tier deciding what a member on `/api/` receives.
 - **Cluster membership and workspace membership are separate questions**, and
@@ -1159,13 +1161,18 @@ roster. Making one takes a cluster membership; changing one takes being in it.
   and refuses somebody GATE would refuse. Without it, a workspace would be a way
   to hand out standing the cluster never granted. Being a cluster member still
   puts you in no workspace.
+- **New workspace is a modal on `/notes/`, posting to `/notes/`.** It opens by
+  `:target` with no script, `/manage/`'s markup. A refused name renders the
+  page with the modal held open by `is-open` and what was typed kept, since the
+  fragment does not survive a POST; its close then loads `/notes/` fresh,
+  because a link cannot remove a class.
 - **The creator is added to `members` on create.** Without it they would be
   locked out of what they had just made, on the redirect, because `created_by`
   grants nothing.
 - **The last member cannot be removed.** An empty roster is a workspace nobody
   can ever open again, not even a cluster admin, because membership is the only
   key. Same failure `membership.dismiss_admin` refuses for the roster. Leaving
-  one you are not alone in is fine, and lands on the list rather than on the
+  one you are not alone in is fine, and lands on `/notes/` rather than on the
   page you can no longer open.
 - **Adding takes a handle; removing posts a DID.** A handle is what a person can
   type and read, and it is matched against local `User` rows only. This never
@@ -1190,11 +1197,12 @@ members who share one a **group**, identified by `group_id`. Corliss's
 
 A Corliss workspace has one shared notes workspace on
 [scn-notes](https://github.com/Z-Space-Society/scn-notes), shared by everyone
-in it. It is shown on the workspace's page and nowhere else: `/notes/` is about
-a member's Private workspace and never lists it. There is no button to make
-it: rendering the page asks the relay for it with `PUT /internal/workspaces`
+in it. Its card is on the workspace's page, and `/notes/` shows its note count
+and last change once it exists. There is no button to make it: rendering the
+workspace's page asks the relay for it with `PUT /internal/workspaces`
 (scn-notes v0.7.0 or later), and the relay makes it the first time it is
-asked. A new workspace lands on its page, so it has its notes from the start.
+asked. `/notes/` only lists, so it never makes one. A new workspace lands on
+its page, so it has its notes from the start.
 
 - **Nothing about the notes workspace is stored here.** The relay records
   which group holds which workspace, keyed by the `Workspace` pk, and the page
@@ -1226,12 +1234,19 @@ asked. A new workspace lands on its page, so it has its notes from the start.
 
 ## The nav
 
-Left of the divider: the brand, then **About**. Right of it: **Workspaces**,
-**Notes** (hidden when `ENABLE_NOTES` is off), **Chat** (hidden when `CHAT_URL`
-is unset), **API**, **Tools**, **Manage** for admins, then the account chip.
+Left of the divider: the brand, then **About**. Right of it: **Notes**, a menu
+of **Workspaces** and **Connect**, **Chat** (hidden when `CHAT_URL` is unset),
+**API**, **Tools**, **Manage** for admins, then the account chip.
 
+- **Notes holds the workspaces.** Workspaces are where members share notes, so
+  the list of them is Notes → Workspaces, beside Notes → Connect. With
+  `ENABLE_NOTES` off there is nothing to connect to, so the menu becomes a
+  plain **Workspaces** link to the same page, and the workspaces stay
+  reachable. The menu is highlighted on `/notes/`, `/notes/connect/` and a
+  workspace's own page (`notes_page` in the view's context, the way
+  `about_page` marks About).
 - **Chat is members-only in the nav although scn-chat's own sign-in is open.**
-  Like Workspaces, Notes and API it is a link for a member and a closed entry
+  Like Notes and API it is a link for a member and a closed entry
   for a signed-in non-member. scn-chat does not ask Corliss who may sign in, so
   this is what the nav offers, not a gate; opening the entry to non-members is
   a choice to make when scn-chat's gating is settled.
@@ -1289,28 +1304,41 @@ touch-specific details follow from it, all in `base.css`:
   instead of hanging from a trigger mid-row where they would run off the screen,
   and every target grows to thumb size.
 
-## Notes: `/notes/`
+## Notes: `/notes/` and `/notes/connect/`
 
 Members keep notes on the cluster and reach them from Obsidian and over MCP.
 The notes and the record of who holds which workspace live on
-[scn-notes](https://github.com/Z-Space-Society/scn-notes). This page explains
-the service, shows the member's Private workspace, and gives the two addresses
-to connect with. **A member has one Private workspace, and nothing creates it
-by hand**: the relay makes it the first time any listing asks, this page's,
-SCN Sync's or an MCP client's, and its path is `Private`.
+[scn-notes](https://github.com/Z-Space-Society/scn-notes). The nav's Notes menu
+has two pages:
 
+- **Workspaces, `/notes/`**: the member's Private workspace, then the
+  workspaces they are in with each one's members, note count and last change,
+  and New workspace (see [Workspaces](#workspaces-workspacesid)).
+- **Connect, `/notes/connect/`**: the two addresses to connect Obsidian and an
+  MCP client with, and the apps already connected. It asks the relay nothing.
+
+**A member has one Private workspace, and nothing creates it by hand**: the
+relay makes it the first time any listing asks, `/notes/`'s, SCN Sync's or an
+MCP client's, and its path is `Private`.
+
+- **One relay call fills `/notes/`.** `GET /internal/workspaces?did=&groups=`
+  (scn-notes v0.7.0 or later) returns the Private workspace and each listed
+  group's notes workspace that exists. A group with none yet shows "—"; the
+  listing never makes one, because only Corliss knows its name, and the
+  workspace's own page sends it.
 - **Nothing about a workspace is stored in Corliss.** The page asks the relay
-  each time it renders, with `GET /internal/workspaces?did=` (scn-notes v0.7.0
-  or later). A workspace exists when the relay says so.
-- **No request chooses whose workspace.** The relay's service token can list,
-  and so make, a workspace for any DID, so the DID is the signed-in member's,
-  and a `did` in the query string is never read. The page takes no POST at
-  all. Handing one member another's notes would be this page's worst failure.
-- **The Private workspace only.** The listing names no groups, so a shared
-  workspace never appears here, even for a member of it. It is on the
-  workspace's page.
-- **"Vault" stays in one place**: the setup step that has the member create a
-  vault in Obsidian, because that is Obsidian's own word for it.
+  each time it renders. A workspace exists when the relay says so.
+- **No request chooses whose notes.** The relay's service token can list, and
+  so make, a workspace for any DID and any group, so the DID is the signed-in
+  member's and the groups are `request.user.workspaces`, Corliss's own roster.
+  A `did` or `groups` in the query string is never read, and the page's one
+  POST makes a workspace and names nobody. Handing one member another's notes
+  would be this page's worst failure.
+- **The table is Corliss's, the figures are the relay's.** The workspaces a
+  member is in render whatever the relay does; when it does not answer, the
+  Private card says so and the figures read "—".
+- **"Vault" stays in one place**: Connect's setup step that has the member
+  create a vault in Obsidian, because that is Obsidian's own word for it.
 - **The relay is called at its internal address**, `SYNC_RELAY_URL`, never the
   public notes URL shown on the page. The relay's proxy does not route
   `/internal/` at all.
@@ -1318,8 +1346,8 @@ SCN Sync's or an MCP client's, and its path is `Private`.
   address the relay did not answer from.
 - **Nothing is retried.** A failure says the service did not answer, and the
   next load asks again.
-- **The instructions render in every state.** The workspace depends on the
-  relay answering and the explanation does not.
+- **Connect never asks the relay**, so the instructions render whatever state
+  it is in.
 - **Notes and Size are the relay's figures, shown as given.** Size is the
   bytes the workspace takes on the relay, which is its Automerge history: it
   grows with every edit and reads larger than the notes as files. Both show
@@ -1327,11 +1355,11 @@ SCN Sync's or an MCP client's, and its path is `Private`.
 
 | State | The page shows |
 | ----- | -------------- |
-| `SYNC_RELAY_URL` or `SYNC_RELAY_SERVICE_TOKEN` blank | The instructions, and that notes are not set up on this deployment. |
-| The relay unreachable, any answer but `200`, or a listing with no Private workspace | The instructions, and that the service did not answer. |
-| Answered | The member's Private workspace: its notes, size and last change, and its path. |
+| `SYNC_RELAY_URL` or `SYNC_RELAY_SERVICE_TOKEN` blank | The workspaces table, and that notes are not set up on this deployment. |
+| The relay unreachable, any answer but `200`, or a listing with no Private workspace | The workspaces table with "—" figures, and that the service did not answer. |
+| Answered | The member's Private workspace (notes, size, last change, path) and each workspace's notes and last change. |
 
-The two addresses shown are the first `sync` and first `mcp` entries of
+The two addresses Connect shows are the first `sync` and first `mcp` entries of
 `OIDC_RESOURCES`, so what a member pastes is the same string the relay checks
 tokens against. While the notes service moves host, its new addresses are
 listed first and shown, and the old ones after keep working unshown.
@@ -1340,7 +1368,7 @@ listed first and shown, and the old ones after keep working unshown.
 | ------- | ------- |
 | `SYNC_RELAY_URL` | The relay's **internal** origin. The same setting `/systems/` probes. |
 | `SYNC_RELAY_SERVICE_TOKEN` | The credential for the relay's `/internal/workspaces`, shared with the relay as `SCN_NOTES_SERVICE_TOKEN`. Blank leaves the page saying notes are not set up. |
-| `ENABLE_NOTES` | Default `True`. `False` hides the nav's **Notes** entry from everyone, for a deployment that has not rolled the service out. It hides the link only: `/notes/` still answers. |
+| `ENABLE_NOTES` | Default `True`. `False` turns the nav's **Notes** menu into a plain **Workspaces** link, for a deployment that has not rolled the service out. It changes the nav only: `/notes/connect/` still answers. |
 
 ## Public clients: Claude, Claude Code and SCN Sync
 
@@ -1461,7 +1489,7 @@ Rules with a plausible wrong answer:
   can present another client's `client_id`.
 - **GATE is asked at `authorize` and again when the form is posted.** The
   screen can sit open while a member is revoked.
-- **A member can undo an Allow.** `/notes/` lists every app holding a refresh
+- **A member can undo an Allow.** `/notes/connect/` lists every app holding a refresh
   token it can still redeem, or a remembered consent, named by host as on the
   consent screen. Disconnect deletes both for that client, filtered by the
   signed-in member and never by anything in the request. It matters more
@@ -1602,7 +1630,7 @@ address, and calls nothing else here. A public client needs no setting of its
 own. Nothing in front of Corliss may block `160.79.104.0/21`, where Claude's
 discovery and token requests come from.
 
-A member then pastes the notes address shown at `/notes/` into the SCN Sync
+A member then pastes the notes address shown at `/notes/connect/` into the SCN Sync
 plugin, and adds the MCP address there to whatever MCP client they use. Their
 Private workspace is made by whichever of the three asks first.
 
@@ -1624,7 +1652,7 @@ bash connect-opencode.sh https://mcp.sharedcomputer.network
 - **The path is an interface.** Members are told to fetch it, and whitenoise
   serves the unhashed name beside the manifest copy, so it stays put across
   releases. `ConnectScriptTests` fails if the file moves.
-- **`/notes/` links it under MCP service**, at the unhashed path. The MCP
+- **`/notes/connect/` links it under MCP service**, at the unhashed path. The MCP
   address is passed as an argument because the file is static and staging's
   differs; production's is the default.
 - **Download, then run, rather than `curl | bash`.** The script reads the

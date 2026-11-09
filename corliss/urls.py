@@ -78,16 +78,15 @@ urlpatterns = [
     # The member's own name and email. Signed-in rather than member-gated —
     # see `views.account`.
     path("account/", views.account, name="account"),
-    # The workspaces a member is in. The first family here keyed by an id rather
-    # than a fixed string, because a workspace has no name the URL could use: two
-    # groups may pick the same one. The literal route is listed before the
-    # converter so `new` can never be read as a workspace to open.
-    path("workspaces/", views.workspaces, name="workspaces"),
-    path("workspaces/new", views.workspace_new, name="workspace_new"),
+    # One workspace. Keyed by an id rather than a fixed string, because a
+    # workspace has no name the URL could use: two groups may pick the same
+    # one. The list and the form that makes one are on the Notes page.
     path("workspaces/<int:pk>/", views.workspace_edit, name="workspace_edit"),
-    # Notes kept on the sync relay: what they are, how to connect Obsidian
-    # and an MCP client, and the member's vaults. Named for what the nav calls it.
+    # The Notes menu: Workspaces (the member's Private workspace, the
+    # workspaces they are in, and making one) and Connect (Obsidian, MCP and
+    # connected apps). Named for what the nav calls them.
     path("notes/", views.notes, name="notes"),
+    path("notes/connect/", views.notes_connect, name="notes_connect"),
     path("notes/apps/disconnect", views.notes_disconnect, name="notes_disconnect"),
     path("api/", views.api, name="api"),
     path("tools/parascribe/", views.parascribe, name="parascribe"),

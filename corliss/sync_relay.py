@@ -30,8 +30,10 @@ Three properties hold here, each with a plausible wrong answer:
   route `/internal/` at all, and the service token has no business crossing
   the edge to reach a neighbour.
 - **The caller says whose workspaces, and it is always the signed-in member.**
-  The service token can list and create for any DID, so nothing in a request
-  may choose one. `views.notes` passes `request.user.did` and nothing else.
+  The service token can list and create for any DID and any group, so nothing
+  in a request may choose one. `views.notes` passes `request.user.did` and the
+  groups from `request.user.workspaces`, Corliss's own roster, and nothing
+  else.
   A group's workspace is asked about only after `views._workspace_for_member`
   has found the signed-in member in that group, so the ID in a URL chooses
   nothing either. `all_workspaces` names nobody: it asks for every workspace
@@ -155,18 +157,6 @@ def list_workspaces(did, groups=()):
     if not isinstance(body, dict) or not isinstance(body.get("workspaces"), list):
         raise SyncRelayError("the answer was not a workspace listing")
     return [_workspace(raw) for raw in body["workspaces"]]
-
-
-def private_workspace(did):
-    """`did`'s Private workspace, made by the relay if this is the first time
-    anyone has asked for it. Raises `SyncRelayError`.
-
-    Asks with no groups, so the listing holds only the member's own.
-    """
-    for found in list_workspaces(did):
-        if found["group_id"] is None:
-            return found
-    raise SyncRelayError("the listing held no Private workspace")
 
 
 def group_workspace(did, group):

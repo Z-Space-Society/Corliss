@@ -1286,7 +1286,10 @@ th.data-table__count {
   padding: 24px;
 }
 
-.modal:target {
+/* `is-open` is the server holding a modal open, for a form that failed
+   validation: the fragment that would open it does not survive the POST. */
+.modal:target,
+.modal.is-open {
   display: flex;
 }
 

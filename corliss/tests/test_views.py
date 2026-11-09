@@ -315,8 +315,8 @@ class NavMenuTests(NoRosterMixin, TestCase):
             r'<span class="(?:nav__item nav__item--menu|nav__account)[^"]*"[^>]*>',
             html,
         )
-        # About, Tools, Manage and the account chip.
-        self.assertEqual(len(triggers), 4)
+        # About, Notes, Tools, Manage and the account chip.
+        self.assertEqual(len(triggers), 5)
         for tag in triggers:
             with self.subTest(tag=tag):
                 self.assertIn('tabindex="0"', tag)

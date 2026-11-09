@@ -367,9 +367,9 @@ must not drift.
   secret out. `test_provider.py`, `test_gate.py` and `test_backchannel.py`
   pass without edits to their flow assertions.
 - **No request chooses whose notes.** `views.notes` passes
-  `request.user.did` to the relay's listing, which makes the member's Private
-  workspace when they have none, the same rule the API keys section states for
-  LiteLLM. A group's notes workspace is asked for, and so made or renamed,
+  `request.user.did` and the member's own groups from `request.user.workspaces`
+  to the relay's listing, which makes the member's Private workspace when they
+  have none, the same rule the API keys section states for LiteLLM. A group's notes workspace is asked for, and so made or renamed,
   only after `_workspace_for_member` has found the signed-in member in that
   workspace.
 - **Two words cross to the relay.** scn-notes's *workspace* is the notes; its
