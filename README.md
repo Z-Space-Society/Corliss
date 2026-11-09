@@ -1311,9 +1311,10 @@ The notes and the record of who holds which workspace live on
 [scn-notes](https://github.com/Z-Space-Society/scn-notes). The nav's Notes menu
 has two pages:
 
-- **Workspaces, `/notes/`**: the member's Private workspace, then the
-  workspaces they are in with each one's members, note count and last change,
-  and New workspace (see [Workspaces](#workspaces-workspacesid)).
+- **Workspaces, `/notes/`**: one table, the member's Private workspace first
+  (a row with no link, since it has no page or roster), then the workspaces
+  they are in, each with members, note count, size and last change, and New
+  workspace (see [Workspaces](#workspaces-workspacesid)).
 - **Connect, `/notes/connect/`**: the two addresses to connect Obsidian and an
   MCP client with, and the apps already connected. It asks the relay nothing.
 
@@ -1334,9 +1335,9 @@ MCP client's, and its path is `Private`.
   A `did` or `groups` in the query string is never read, and the page's one
   POST makes a workspace and names nobody. Handing one member another's notes
   would be this page's worst failure.
-- **The table is Corliss's, the figures are the relay's.** The workspaces a
-  member is in render whatever the relay does; when it does not answer, the
-  Private card says so and the figures read "—".
+- **The table is Corliss's, the figures are the relay's.** The rows render
+  whatever the relay does; when it is not set up or does not answer, an alert
+  above the table says so and the figures read "—".
 - **"Vault" stays in one place**: Connect's setup step that has the member
   create a vault in Obsidian, because that is Obsidian's own word for it.
 - **The relay is called at its internal address**, `SYNC_RELAY_URL`, never the
@@ -1357,7 +1358,7 @@ MCP client's, and its path is `Private`.
 | ----- | -------------- |
 | `SYNC_RELAY_URL` or `SYNC_RELAY_SERVICE_TOKEN` blank | The workspaces table, and that notes are not set up on this deployment. |
 | The relay unreachable, any answer but `200`, or a listing with no Private workspace | The workspaces table with "—" figures, and that the service did not answer. |
-| Answered | The member's Private workspace (notes, size, last change, path) and each workspace's notes and last change. |
+| Answered | Each row's notes, size and last change, the Private row's included. |
 
 The two addresses Connect shows are the first `sync` and first `mcp` entries of
 `OIDC_RESOURCES`, so what a member pastes is the same string the relay checks

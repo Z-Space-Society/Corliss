@@ -164,11 +164,6 @@ class WorkspaceCreateTests(NoRelayMixin, NoRosterMixin, TestCase):
         resp = self.client.get(reverse("notes"))
         self.assertEqual(resp.context["workspaces"][0].member_count, 2)
 
-    def test_the_empty_list_says_so(self):
-        resp = self.client.get(reverse("notes"))
-        self.assertEqual(resp.status_code, 200)
-        self.assertContains(resp, "not in a workspace yet")
-
 
 class WorkspaceVisibilityTests(NoRelayMixin, NoRosterMixin, TestCase):
     """Only yours, and a workspace you are not in does not exist."""
