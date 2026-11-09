@@ -1483,7 +1483,12 @@ Rules with a plausible wrong answer:
   `client_name` is the app's own claim about itself and is shown as that.
 - **The consent form posts a ticket, not the request.** The validated request
   waits in the session. Nothing the browser sends back is read as a request
-  parameter, and a ticket answers once.
+  parameter, and a ticket answers once. A repeat post of a ticket the session
+  already answered, within a code's lifetime, gets a "Done, close this tab"
+  page and no second code: an app outside the browser (`obsidian://`, the
+  Claude desktop hand-off) leaves the tab on the consent page, and coming back
+  to it posts the form again. That showed an "expired" error after a sign-in
+  that worked (#53); a test reposting an answered ticket would have caught it.
 - **Consent is remembered per member, client and resource, except for a
   loopback client**, which is asked every time: any program on the machine
   can present another client's `client_id`.

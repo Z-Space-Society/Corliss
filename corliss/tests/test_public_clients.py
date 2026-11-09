@@ -30,7 +30,11 @@ from corliss.models import (
     Workspace,
 )
 from corliss.tests.test_provider import _grant, _write_keys
-from corliss.views import CONSENT_SESSION_KEY, POST_LOGIN_REDIRECT
+from corliss.views import (
+    CONSENT_ANSWERED_SESSION_KEY,
+    CONSENT_SESSION_KEY,
+    POST_LOGIN_REDIRECT,
+)
 
 User = get_user_model()
 
@@ -840,10 +844,33 @@ class PublicAuthorizeTests(PublicFlowCase):
         self.assertEqual(resp.status_code, 400)
         self.assertFalse(OidcAuthCode.objects.exists())
 
-    def test_a_ticket_answers_once(self):
+    def test_a_repeat_post_shows_done_and_issues_nothing(self):
         self.client.force_login(self.user)
         ticket = self.authorize().context["ticket"]
         self.decide(ticket)
+        resp = self.decide(ticket)
+        self.assertEqual(resp.status_code, 200)
+        self.assertTemplateUsed(resp, "consent_done.html")
+        self.assertNotIn("Location", resp)
+        self.assertEqual(OidcAuthCode.objects.count(), 1)
+
+    def test_a_repeat_cancel_shows_done(self):
+        self.client.force_login(self.user)
+        ticket = self.authorize().context["ticket"]
+        self.decide(ticket, "cancel")
+        resp = self.decide(ticket, "cancel")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTemplateUsed(resp, "consent_done.html")
+        self.assertFalse(OidcAuthCode.objects.exists())
+        self.assertFalse(OidcConsent.objects.exists())
+
+    def test_an_answered_ticket_expires(self):
+        self.client.force_login(self.user)
+        ticket = self.authorize().context["ticket"]
+        self.decide(ticket)
+        session = self.client.session
+        session[CONSENT_ANSWERED_SESSION_KEY][ticket]["at"] -= oidc.CODE_TTL_SECONDS + 1
+        session.save()
         self.assertEqual(self.decide(ticket).status_code, 400)
         self.assertEqual(OidcAuthCode.objects.count(), 1)
 

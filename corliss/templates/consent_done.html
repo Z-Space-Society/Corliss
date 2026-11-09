@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% comment %}
+A repeat post of a consent ticket this session already answered. The app that
+asked lives outside the browser (an `obsidian://` redirect, the Claude desktop
+hand-off), so the tab stays on the consent page, and coming back to it posts
+the form again. See `views.consent`. Nothing is issued here.
+{% endcomment %}
+
+{% block title %}{% if outcome == "allow" %}Done{% else %}Cancelled{% endif %}{% endblock %}
+
+{% block content %}
+<div class="account-view">
+  <h1>{% if outcome == "allow" %}Done{% else %}Cancelled{% endif %}</h1>
+  <p class="page-text">You can close this tab and go back to the app.</p>
+</div>
+{% endblock %}

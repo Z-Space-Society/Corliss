@@ -146,6 +146,12 @@ CONSENT_SESSION_KEY = "corliss:oidc_consent"
 # A member with several tabs open has several requests waiting. More than this
 # is not a person, and the session is a row in the database.
 CONSENT_MAX_PENDING = 5
+# Tickets this session has already answered, ticket to {"outcome", "at"}, kept
+# for a code's lifetime and capped as above. An app outside the browser (an
+# `obsidian://` redirect, the Claude desktop hand-off) leaves the tab on the
+# consent page, and coming back to it posts the same form again. That repeat
+# gets a "done" page instead of an "expired" error after a sign-in that worked.
+CONSENT_ANSWERED_SESSION_KEY = "corliss:oidc_consent_answered"
 
 # The longest path and query a login round trip can carry. Django's
 # `url_has_allowed_host_and_scheme` refuses anything longer, so `_safe_resume`
@@ -2513,14 +2519,24 @@ def consent(request):
 
     The form carries a ticket and a decision and nothing else. The request it
     answers was validated by `authorize` and has been in the session since, so
-    a forged or replayed post finds no ticket and gets nothing.
+    a forged or replayed post finds no ticket and gets nothing. A repeat of a
+    ticket this session already answered gets a page saying so, and still no
+    second code.
 
     **GATE is asked again here.** The screen can sit open, and the member may
     have been revoked while it did.
     """
+    ticket = request.POST.get("ticket", "")
     waiting = request.session.get(CONSENT_SESSION_KEY, {})
-    pending = waiting.pop(request.POST.get("ticket", ""), None)
+    pending = waiting.pop(ticket, None)
     request.session[CONSENT_SESSION_KEY] = waiting
+
+    if pending is None and request.user.is_authenticated:
+        answered = request.session.get(CONSENT_ANSWERED_SESSION_KEY, {}).get(ticket)
+        if answered and time.time() - answered["at"] <= oidc.CODE_TTL_SECONDS:
+            return render(
+                request, "consent_done.html", {"outcome": answered["outcome"]}
+            )
 
     if (
         pending is None
@@ -2539,6 +2555,7 @@ def consent(request):
         return denial
 
     if request.POST.get("decision") != "allow":
+        _remember_consent_answer(request, ticket, "cancel")
         return _client_error_redirect(
             pending["redirect_uri"],
             pending["state"],
@@ -2550,7 +2567,22 @@ def consent(request):
         OidcConsent.record(
             request.user, client_id=pending["client_id"], resource=pending["resource"]
         )
+    _remember_consent_answer(request, ticket, "allow")
     return _issue_public_code(request.user, pending)
+
+
+def _remember_consent_answer(request, ticket, outcome):
+    """Note that this session answered `ticket`, so a repeat post of it gets
+    the done page. See `CONSENT_ANSWERED_SESSION_KEY`."""
+    now = time.time()
+    answered = {
+        t: a
+        for t, a in request.session.get(CONSENT_ANSWERED_SESSION_KEY, {}).items()
+        if now - a["at"] <= oidc.CODE_TTL_SECONDS
+    }
+    answered[ticket] = {"outcome": outcome, "at": now}
+    newest = sorted(answered, key=lambda t: answered[t]["at"])[-CONSENT_MAX_PENDING:]
+    request.session[CONSENT_ANSWERED_SESSION_KEY] = {t: answered[t] for t in newest}
 
 
 @require_http_methods(["GET"])
