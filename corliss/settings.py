@@ -120,16 +120,19 @@ BESZEL_OIDC_CLIENT_SECRET = env("BESZEL_OIDC_CLIENT_SECRET", default="")
 BESZEL_OIDC_REDIRECT_URIS = env.list("BESZEL_OIDC_REDIRECT_URIS", default=[])
 
 # The resources a public client (Claude, Claude Code, the SCN Sync plugin) can
-# be issued an access token for: the sync relay's public sync URL and its
-# public MCP URL. A JSON list of objects, one per resource:
+# be issued an access token for: the notes service's URL for the plugin, and
+# its MCP URL. A JSON list of objects, one per resource:
 #
-#   [{"url": "https://sync.example.com", "kind": "sync", "label": "Notes sync"},
-#    {"url": "https://mcp.example.com", "kind": "mcp", "label": "Notes over MCP"}]
+#   [{"url": "https://notes.example.com", "kind": "sync", "label": "SCN Notes"},
+#    {"url": "https://notes.example.com/mcp", "kind": "mcp", "label": "SCN Notes over MCP"}]
 #
 # `url` becomes the token's `aud` exactly as written here, and the relay
 # compares it character for character, so both services must be rendered from
-# one definition. `kind` is `sync` or `mcp`, at most one of each. `label` is
-# what the consent screen calls it.
+# one definition. `kind` is `sync` (what the plugin signs in for) or `mcp`.
+# A kind may have more than one resource while a service moves host: list
+# the new one first, which is the one the Notes page shows, and the old one
+# after, which keeps issuing tokens until it is removed. A URL listed twice
+# is refused. `label` is what the consent screen calls it.
 #
 # Kept as the raw string and read by `corliss.oidc.resources`. Blank issues
 # nothing to any public client. A value that does not parse also issues
