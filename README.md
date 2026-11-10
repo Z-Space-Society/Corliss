@@ -309,7 +309,7 @@ nothing, because what's running isn't any commit GitHub could show.
 Cut a release with:
 
 ```bash
-bin/release 0.3.0     # bump, re-lock, test, commit, annotated tag — no push
+bin/release 0.3.0     # bump, re-lock, test, commit, annotated tag, push, GitHub release
 bin/release --show    # reprint the deploy steps for the current tag
 ```
 
@@ -320,12 +320,19 @@ deploy runs `uv sync --locked`, so bumping `pyproject.toml` without re-running
 `uv lock` fails the deploy outright. The script always does both, runs the suite
 before it will tag, and reverts the bump if the suite fails.
 
-It stops at the tag rather than pushing, then prints the remaining steps as
-runnable commands: land any role wiring in [zai-ops](https://github.com/Z-Space-Society/zai-ops)
-first, push, let the cluster's autodeploy timer take the tag (zai-ops
-ADR-0013), and confirm the live footer. Tagging is only
-half of shipping; the checklist is the other half, and lives in the script rather
-than being duplicated here so there is one place for it to be correct.
+It is cut from `main`: the script switches there if the tree is clean, and
+warns and offers `git pull --ff-only` when `main` is behind `origin`, because a
+stale `main` would be refused at the push after the commit and tag were
+already made. It then pushes `main` and the tag and publishes the GitHub
+release with `gh` (signed in, checked before anything is written), since a
+tag left local fails the zai-ops role at checkout with a message that reads
+like a bad pin. At a terminal it asks before the push, the one step that
+cannot be undone, and that question carries the reminder to land any role
+wiring in [zai-ops](https://github.com/Z-Space-Society/zai-ops) first. After
+that it prints the remaining steps: let the cluster's autodeploy timer take
+the tag (zai-ops ADR-0013) and confirm the live footer. The checklist lives in
+the script rather than being duplicated here so there is one place for it to
+be correct.
 
 ### Admin
 

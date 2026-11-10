@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# release — cut a Corliss release, then print what's left to get it deployed.
+# release: cut a Corliss release, publish it, then print what's left to deploy.
 #
-#   bin/release 0.3.0 ["what this release brings"]   bump, lock, test, commit, tag
+#   bin/release 0.3.0 ["what this release brings"]   bump, lock, test, commit, tag,
+#                                                    push, GitHub release
 #   bin/release --show                               reprint the deploy steps
 #
 # The one job here is keeping two things that must never disagree in lockstep:
@@ -11,12 +12,14 @@
 # `uv sync --locked`, so a bump without a re-lock fails the deploy outright.
 # This script therefore always does both, or nothing.
 #
-# It deliberately stops short of pushing. Everything up to the tag is local and
-# undoable; the push is neither, and it is the operator's call. What the script
-# does instead is print every remaining step as a runnable command — because
-# tagging is only half of shipping. A cluster whose corliss_version is
-# `latest` (the zai-ops default since v0.11.1) deploys the tag on its own,
-# within one zai-ops autodeploy tick of the push (zai-ops ADR-0013).
+# It then pushes main and the tag and publishes the GitHub release, because a
+# tag left local was the step that kept getting forgotten: the zai-ops role
+# fails at checkout with `pathspec 'vX.Y.Z' did not match`, which reads like a
+# bad pin. The push is the one step that cannot be undone, so at a terminal it
+# asks first, and that question carries the zai-ops wiring reminder because
+# that is the moment it matters. A cluster whose corliss_version is `latest`
+# (the zai-ops default since v0.11.1) deploys the tag on its own, within one
+# zai-ops autodeploy tick of the push (zai-ops ADR-0013).
 set -euo pipefail
 
 # The deploy checklist below is specific to the Z-Space AI cluster (the only
@@ -34,32 +37,29 @@ die() { echo "release: $*" >&2; exit 1; }
 
 declared_version() { sed -n '/^\[project\]/,/^\[/{ s/^version = "\(.*\)"/\1/p; }' pyproject.toml | head -1; }
 
-# Everything still standing between a local tag and a live deploy. Printed as
-# commands to run in order.
+# Everything still standing between a published tag and a live deploy.
+# Printed as commands to run in order.
 print_steps() {
-  local tag="$1" annotation="$2"
+  local tag="$1"
   cat <<STEPS
 
 Remaining steps to deploy $tag:
 
-  0. If this release needs new env keys or other role wiring, that zai-ops
-     change is merged, tagged and deployed FIRST. Pushed ahead of it, the
-     autodeploy runs the role without the wiring and fails.
-       "$annotation"
-
-  1. Push the release
-       git push origin main $tag
-
-  2. Wait one autodeploy tick (about 5 minutes). A cluster on "latest"
+  1. Wait one autodeploy tick (about 5 minutes). A cluster on "latest"
      provisions corliss itself; $SITE_URL/systems/deploys/ shows the run with
      trigger "timer", and its log if it failed. A cluster pinned to a tag
      doesn't move; deploy there by hand from the control node:
        pct enter $CONTROL_NODE_CT
        cd $ZAI_OPS_DIR/ansible && ansible-playbook provision.yml --limit corliss
 
-  3. Confirm it landed. The live footer should now read $tag
+  2. Confirm it landed. The live footer should now read $tag
        curl -s $SITE_URL/auth/login | grep -o 'v[0-9][^<]*'
 STEPS
+}
+
+# The tail of a release, spelled out for when the script stops before it.
+finish_by_hand() {
+  echo "  git push origin main $1 && gh release create $1 --generate-notes --verify-tag"
 }
 
 # --- bin/release --show -------------------------------------------------------
@@ -69,7 +69,7 @@ if [[ ${1:-} == "--show" ]]; then
   tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v$(declared_version)")
   echo "declared in pyproject.toml: v$(declared_version)"
   echo "checked out here:           $running"
-  print_steps "$tag" "$(git for-each-ref --format='%(contents:subject)' "refs/tags/$tag" 2>/dev/null)"
+  print_steps "$tag"
   exit 0
 fi
 
@@ -83,13 +83,35 @@ annotation="${2:-}"
 [[ $new =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
   die "'$new' is not a bare semver version (want 0.3.0 — the 'v' belongs to the tag only)"
 
-branch=$(git rev-parse --abbrev-ref HEAD)
-[[ $branch == main ]] || die "on branch '$branch'; releases are cut from main"
+# Checked up front: finding out after the push leaves a tag with no release.
+command -v gh >/dev/null || die "gh is not installed; it publishes the GitHub release"
+gh auth status >/dev/null 2>&1 || die "gh is not signed in; run gh auth login first"
 
 git diff --quiet && git diff --cached --quiet ||
   die "working tree has uncommitted changes; commit or stash them first"
 
+# Releases are cut from main. Switching is safe here because the tree is clean.
+branch=$(git rev-parse --abbrev-ref HEAD)
+if [[ $branch != main ]]; then
+  echo "release: on '$branch', switching to main"
+  git switch --quiet main
+fi
+
+# A main behind origin would be refused at the push, after the commit and tag
+# were already made on top of the stale history.
+git fetch --quiet origin main
+behind=$(git rev-list --count main..origin/main)
+if (( behind > 0 )); then
+  echo "release: WARNING: main is $behind commit(s) behind origin/main. Pull before releasing." >&2
+  [[ -t 0 ]] || die "main is not pulled; run git pull and try again"
+  read -r -p "Pull now with git pull --ff-only? [Y/n] " reply
+  [[ ${reply:-y} =~ ^[Yy] ]] || die "main is not pulled; the push would be refused"
+  git pull --ff-only --quiet origin main
+fi
+
 [[ -z $(git tag -l "v$new") ]] || die "tag v$new already exists"
+! git ls-remote --exit-code --tags origin "v$new" >/dev/null ||
+  die "tag v$new already exists on origin"
 
 current=$(declared_version)
 [[ -n $current ]] || die "could not read version from pyproject.toml"
@@ -131,6 +153,37 @@ fi
 # --- Commit + tag -------------------------------------------------------------
 git commit --quiet pyproject.toml uv.lock -m "Release v$new"
 git tag -a "v$new" -m "$annotation"
-echo "release: committed and tagged v$new (not pushed)"
+echo "release: committed and tagged v$new"
 
-print_steps "v$new" "$annotation"
+# --- Push + GitHub release ----------------------------------------------------
+if [[ -t 0 ]]; then
+  cat <<ASK
+
+If v$new needs new env keys or other role wiring, that zai-ops change must be
+merged, tagged and deployed FIRST. Pushed ahead of it, the autodeploy runs the
+role without the wiring and fails.
+ASK
+  read -r -p "Push main and v$new and publish the GitHub release? [y/N] " reply
+  if [[ ! $reply =~ ^[Yy] ]]; then
+    echo "release: v$new is tagged locally and not pushed. To finish:"
+    finish_by_hand "v$new"
+    exit 0
+  fi
+fi
+
+echo "release: pushing main and v$new"
+git push --quiet origin main "v$new" || {
+  echo "release: push failed; v$new is tagged locally. Fix it, then:" >&2
+  finish_by_hand "v$new" >&2
+  exit 1
+}
+
+# --verify-tag refuses rather than letting gh mint a tag of its own on origin.
+gh release create "v$new" --generate-notes --verify-tag ||
+  die "pushed, but the GitHub release failed; rerun: gh release create v$new --generate-notes --verify-tag"
+
+git ls-remote --exit-code --tags origin "v$new" >/dev/null ||
+  die "v$new is not on origin after the push; check git ls-remote --tags origin"
+echo "release: v$new is on origin and published"
+
+print_steps "v$new"
