@@ -520,20 +520,6 @@ a {
   color: oklch(0.82 0.006 255);
 }
 
-.info-dot {
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  border: 1px solid oklch(0.5 0.01 255);
-  color: oklch(0.58 0.01 255);
-  font-size: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: default;
-  flex-shrink: 0;
-}
-
 .input-row {
   display: flex;
   align-items: center;
@@ -1199,6 +1185,78 @@ a.btn-primary {
   cursor: help;
   text-decoration: underline dotted var(--border);
   text-underline-offset: 3px;
+}
+
+/* An explanation behind a word in running text. Drawn here rather than left
+   to a `title`, which Safari shows late or not at all and a phone never shows.
+   Focus opens it too, so a tap or a Tab reaches it with no script. */
+.hint {
+  position: relative;
+  cursor: help;
+  text-decoration: underline dotted var(--text-muted);
+  text-underline-offset: 3px;
+}
+
+.hint:focus {
+  outline: none;
+}
+
+.hint:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.hint__tip {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  z-index: 10;
+  width: min(42ch, 80vw);
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-hover);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-style: normal;
+  line-height: 1.5;
+  white-space: normal;
+}
+
+/* An example inside the tip gets its own line: run into the sentence, a long
+   URL wraps mid-word and the text after it has nowhere to breathe. */
+.hint__tip code {
+  display: block;
+  margin: 6px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.hint:hover .hint__tip,
+.hint:focus .hint__tip {
+  display: block;
+}
+
+/* Hung from the right edge, for a trigger near the right of the screen (the
+   nav's closed items) where a left-anchored tip would run off it. */
+.hint__tip--end {
+  left: auto;
+  right: 0;
+}
+
+/* A closed nav item already reads as "present, not available"; an underline
+   on top of the dimming would make it look like a link. */
+.nav__item--closed.hint {
+  text-decoration: none;
+}
+
+/* Inside a label the tip would inherit its weight. */
+label .hint__tip {
+  font-weight: 400;
 }
 
 .data-table__muted {

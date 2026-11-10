@@ -118,12 +118,9 @@
             {% if CHAT_URL %}<a class="nav__item" href="{{ CHAT_URL }}">Chat</a>{% endif %}
             <a class="nav__item" href="{% url 'api' %}">API</a>
           {% else %}
-            <span class="nav__item nav__item--closed" aria-disabled="true"
-                  title="Members only. A cluster admin has to let you in first.">{% if ENABLE_NOTES %}Notes{% else %}Workspaces{% endif %}</span>
-            {% if CHAT_URL %}<span class="nav__item nav__item--closed" aria-disabled="true"
-                  title="Members only. A cluster admin has to let you in first.">Chat</span>{% endif %}
-            <span class="nav__item nav__item--closed" aria-disabled="true"
-                  title="Members only. A cluster admin has to let you in first.">API</span>
+            <span class="nav__item nav__item--closed hint" aria-disabled="true" tabindex="0"><span>{% if ENABLE_NOTES %}Notes{% else %}Workspaces{% endif %}</span><span class="hint__tip hint__tip--end" role="tooltip">Members only. A cluster admin has to let you in first.</span></span>
+            {% if CHAT_URL %}<span class="nav__item nav__item--closed hint" aria-disabled="true" tabindex="0"><span>Chat</span><span class="hint__tip hint__tip--end" role="tooltip">Members only. A cluster admin has to let you in first.</span></span>{% endif %}
+            <span class="nav__item nav__item--closed hint" aria-disabled="true" tabindex="0"><span>API</span><span class="hint__tip hint__tip--end" role="tooltip">Members only. A cluster admin has to let you in first.</span></span>
           {% endif %}
         {% endif %}
 

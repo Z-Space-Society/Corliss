@@ -29,7 +29,10 @@ screen. Disconnect is a one-button form per row.
     {% if sync_url %}
       <ol class="page-text">
         {# "Vault" is Obsidian's own word for what this step makes, and stays. #}
-        <li>In Obsidian, create a new vault.</li>
+        <li>In Obsidian, create a new vault. Name it
+        <span class="hint" tabindex="0"><em>SCN Notes</em><span class="hint__tip" role="tooltip">Obsidian links name the vault they open, like this:
+        <code>obsidian://open?vault=SCN%20Notes&amp;file=Workspaces%2FSCN%20Members</code>
+        When every member's vault is called SCN Notes, a link one member shares opens the same note for others.</span></span>.</li>
         <li>In <strong>Settings → Community plugins</strong>, turn on
         community plugins</li>
         <li><strong>Browse</strong> and search for <strong>SCN Sync</strong>. Install and Enable the plugin.</li>
