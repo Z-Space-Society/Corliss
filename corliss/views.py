@@ -360,7 +360,10 @@ def login(request):
             request.session[POST_LOGIN_REDIRECT] = next_url
         return render(request, "login.html")
 
-    handle = request.POST.get("handle", "").strip()
+    # The form shows an `@` before the field, so people type one too. The
+    # resolver would forgive it, but the PDS gets `handle` as the login hint
+    # and does not.
+    handle = request.POST.get("handle", "").strip().lstrip("@")
     if not handle:
         return render(request, "login.html", {"error": "Enter a handle."})
 
