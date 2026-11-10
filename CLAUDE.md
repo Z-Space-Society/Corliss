@@ -307,9 +307,10 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
   cell's `title`. `membership.ensure_user` records the handle when a grant is
   written, so a member is named rather than numbered from the moment they are
   admitted rather than from their first sign-in. The one exception is a member's
-  own panel, which is about exactly one person: there the DID is selectable text,
+  own panel, which is about exactly one person: there the DID is visible text,
   because a `title` cannot be copied and there is no column of them to keep
-  narrow. **Tables stay handles-only** — that is what the rule is protecting.
+  narrow. It links to the member's Bluesky profile, and a Copy button beside
+  it stands in for the selecting a link makes awkward. **Tables stay handles-only** — that is what the rule is protecting.
 - **A name is a second line under the handle, never a column.** It is annotated
   off the `User` row in the same subquery pass as `is_admin` — never through
   `membership.handles_for`, whose fallback is a DID-document fetch per unknown

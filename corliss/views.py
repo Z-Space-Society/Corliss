@@ -1817,6 +1817,13 @@ def manage(request):
     # once, and the queue should not offer it as though it were new.
     applications = _applications(registry, list(MembershipCache.objects.all()))
 
+    # The note someone applied with, on their own panel once they are in. The
+    # queue drops an application the moment it is decided, which left the note
+    # nowhere to be read again; the same read already returned it, so this
+    # costs no request and stores nothing. A failed read leaves it off.
+    for m in members:
+        m.application_note = applications["notes"].get(m.did, "")
+
     # One resolution pass over every DID on the page — applicants, members,
     # whoever granted them, and the admins — so the lookups are shared rather
     # than repeated per table. Display only: see `membership.handles_for`.
@@ -2130,6 +2137,7 @@ def _applications(registry, members):
             "decided": 0,
             "unreadable": 0,
             "truncated": False,
+            "notes": {},
             "error": str(exc),
         }
 
@@ -2163,6 +2171,9 @@ def _applications(registry, members):
         "decided": decided,
         "unreadable": listing.unreadable,
         "truncated": listing.truncated,
+        # Every application's note by DID, decided ones included: what the
+        # member panels show. See `manage`.
+        "notes": {a.did: a.note for a in listing if a.note},
         "error": None,
     }
 

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% comment %}
 The cluster console. Two tables from two completely different places, and the
@@ -229,7 +230,12 @@ makes it sound otherwise.
               {% endif %}
               <div class="modal__fact">
                 <dt>DID</dt>
-                <dd class="data-table__did">{{ m.did }}</dd>
+                <dd class="data-table__did"><a class="handle-link handle-link--out"
+                   id="member-{{ forloop.counter }}-did"
+                   href="https://bsky.app/profile/{{ m.did }}"
+                   target="_blank" rel="noopener">{{ m.did }}</a>
+                  <button type="button" class="copy-btn copy-btn--inline"
+                          data-copy="member-{{ forloop.counter }}-did" hidden>Copy</button></dd>
               </div>
               <div class="modal__fact">
                 <dt>Tier</dt>
@@ -247,6 +253,12 @@ makes it sound otherwise.
                 <dt>Last event</dt>
                 <dd>{{ m.last_event_at|date:"Y-m-d H:i" }}</dd>
               </div>
+              {% if m.application_note %}
+                <div class="modal__fact">
+                  <dt>Note</dt>
+                  <dd>{{ m.application_note }}</dd>
+                </div>
+              {% endif %}
             </dl>
 
             <div class="modal__actions">
@@ -386,7 +398,7 @@ makes it sound otherwise.
                   {% endif %}
                 </td>
                 <td class="data-table__muted">{{ row.created_at|date:"Y-m-d H:i"|default:"—" }}</td>
-                <td>{% if row.note %}<div class="data-table__note" title="{{ row.note }}">{{ row.note }}</div>{% else %}—{% endif %}</td>
+                <td>{% if row.note %}<div class="data-table__note">{{ row.note }}</div>{% else %}—{% endif %}</td>
                 <td>
                   {% if can_decide %}
                     <form method="post" class="row-form">
@@ -555,4 +567,12 @@ makes it sound otherwise.
   </div>
 
 </div>
+{% endblock %}
+
+{% block scripts %}
+  {% comment %}
+  The DID Copy buttons on the member panels. Progressive: the panels open and
+  every control works with this file blocked.
+  {% endcomment %}
+  <script src="{% static 'js/api.js' %}" defer></script>
 {% endblock %}

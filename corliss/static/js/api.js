@@ -1,4 +1,5 @@
-/* The only JavaScript in Corliss (used on /api, /notes and /tools/parascribe).
+/* The only JavaScript in Corliss (used on /api, /notes, /manage and
+ * /tools/parascribe).
  *
  * This app is server-rendered with no client router; base.html argues at some
  * length for CSS over state-in-an-attribute, and the Quickstart tabs are hidden

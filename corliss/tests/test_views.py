@@ -815,9 +815,6 @@ class ManageViewTests(NoRosterMixin, TestCase):
 
         self.assertContains(resp, "did:plc:applicant")
         self.assertContains(resp, "HEYO")
-        # The cell cuts a long note to one line, so the title is the only place
-        # the rest of it can be read.
-        self.assertContains(resp, 'title="HEYO"')
         self.assertContains(resp, "2026-08-17")
         self.assertContains(resp, "1 awaiting a decision")
 
@@ -875,6 +872,29 @@ class ManageViewTests(NoRosterMixin, TestCase):
         # Counted, not silently dropped: the same posture as `unreadable`.
         self.assertIn("1 awaiting a decision", queue)
         self.assertIn("2 already-decided applications are on file", queue)
+
+    def test_a_decided_application_note_is_still_on_the_members_panel(self):
+        """Approval takes the application out of the queue; the note it carried
+        must not leave the page with it."""
+        from corliss import membership
+
+        _grant("did:plc:member")
+        self._applications(
+            [
+                membership.Application(
+                    "did:plc:member", _at("2025-12-01T00:00:00Z"), "Met at the meetup"
+                ),
+            ]
+        )
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        html = " ".join(resp.content.decode().split())
+        panel = html.split('id="member-1"', 1)[1]
+        self.assertIn("Met at the meetup", panel)
 
     def test_applying_again_after_a_decision_puts_them_back_in_the_queue(self):
         """The case a "has a cache row, therefore handled" rule would drop: a

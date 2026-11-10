@@ -1468,21 +1468,19 @@ th.data-table__count {
 }
 
 /* The one free-text column: an applicant's note, which they wrote and which
-   can run to 300 characters. It is cut to one line with an ellipsis and the
-   whole note sits on the title, so the queue stays a row per applicant and
-   the Decide column never gets pushed out of the card.
+   can run to 300 characters. It wraps inside a fixed width, so the Decide
+   column never gets pushed out of the card and the whole note is read where
+   the decision is made. It used to be cut to one line with the rest on the
+   cell's title, which Safari never showed; an admin deciding on a note they
+   cannot read is the failure this avoids.
 
    The rule is on a block inside the cell, not on the td. A table cell ignores
-   max-width, so an ellipsis on the td itself never triggers. The first cut
-   also asked the td to wrap, which never happened either: `.data-table td`
-   sets nowrap and outranks a bare class, so long notes ran on one line and
-   scrolled the table sideways. */
+   max-width, and `.data-table td` sets nowrap, which this block overrides for
+   its own text. */
 .data-table__note {
   max-width: 38ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: help;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* State, not decoration: `active`/`current` is the only thing on these rows
@@ -1665,6 +1663,15 @@ th.data-table__count {
 .copy-btn:hover {
   border-color: var(--border-hover);
   color: var(--text);
+}
+
+/* Beside a value in running text rather than over a block's corner: the DID on
+   a member's panel, which links out and so cannot also be easy to select. */
+.copy-btn--inline {
+  position: static;
+  margin-left: 8px;
+  padding: 1px 8px;
+  vertical-align: 1px;
 }
 
 .copy-btn--done {
