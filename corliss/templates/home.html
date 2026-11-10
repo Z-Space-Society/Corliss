@@ -136,14 +136,17 @@ every page, so this page cannot drift from them.
           there's nothing to write an application to. Sign in with your
           Atmosphere handle to apply.</p>
         {% else %}
-          <p class="page-text">Applying writes a short, <strong>public</strong>
-          record to your own atproto repo — anyone can read it, and it stays
-          yours. Keep the note brief, and don't put contact details in it.</p>
+          <p class="page-text">Applying saves a short record to your PDS.</p>
           {% comment %}
-          One line, not a textarea. The lexicon caps the note at 300 graphemes
-          and it is world-readable, so the field should look like the small
-          public thing it is — a box the size of a paragraph invites an essay,
-          and invites putting something in it that shouldn't be public.
+          One line, not a textarea. The lexicon caps the note at 300 graphemes,
+          and the record is world-readable like anything in an atproto repo. A
+          box the size of a paragraph invites an essay, and invites putting
+          something in it that shouldn't be readable by anyone.
+
+          The label is "Note", not "Public note" (#56): the old label read as
+          though the note gets broadcast, when it only sits in the applicant's
+          own repo. The placeholder names no cluster because home.html is shared
+          by every theme.
 
           `.input-row` is the same shape login.html uses for the handle field,
           with the label sitting where the `@` prefix does there.
@@ -152,9 +155,9 @@ every page, so this page cannot drift from them.
             {% csrf_token %}
             <div class="input-row">
               <label class="input-row__prefix input-row__prefix--label"
-                     for="note">Public note:</label>
+                     for="note">Note:</label>
               <input id="note" name="note" type="text" maxlength="300"
-                     autocomplete="off" placeholder="optional">
+                     autocomplete="off" placeholder="optional: how you're connected">
             </div>
             <button type="submit" class="btn-primary">Apply for membership</button>
           </form>

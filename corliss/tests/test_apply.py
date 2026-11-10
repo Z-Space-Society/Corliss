@@ -496,7 +496,6 @@ class HomePageStateTests(ClearsCache):
         self.assertContains(resp, 'name="note" type="text"')
         self.assertContains(resp, 'maxlength="300"')
         self.assertNotContains(resp, "<textarea")
-        self.assertContains(resp, "public")
 
     def test_an_existing_application_shows_pending_and_hides_the_form(self):
         record = {"createdAt": "2026-08-17T13:44:05.472Z", "note": "HEYO"}
