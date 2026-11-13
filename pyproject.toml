@@ -18,14 +18,14 @@ requires-python = ">=3.14"
 # See the README's "Checking for updates" for the upgrade procedure.
 dependencies = [
     "django==6.1.3",           # current stable; 6.2 LTS lands Dec 2026
-    "psycopg[binary]==3.3.8",  # Postgres driver (psycopg 3)
+    "psycopg[binary]==3.3.9",  # Postgres driver (psycopg 3)
     "django-environ==0.14.0",  # 12-factor env-driven settings
     "pyjwt==2.15.1",           # JWT sign/verify for DPoP, client assertion, id_token
     "cryptography==50.0.2",    # EC (P-256) + RSA key handling, backs PyJWT
     "requests==2.34.2",        # HTTP to the PDS / DID resolution
-    "boto3==1.43.127",         # reads zai-ops' service manifests from Garage for /systems/
+    "boto3==1.44.2",         # reads zai-ops' service manifests from Garage for /systems/
     "dnspython==2.9.2",       # DNS TXT handle resolution (_atproto.<handle>) for make_admin
-    "gunicorn==27.0.0",        # production WSGI server (deployment; not used by runserver)
+    "gunicorn==27.0.1",        # production WSGI server (deployment; not used by runserver)
     "whitenoise==6.12.0",      # serves collected static straight from gunicorn
 ]
 
@@ -36,7 +36,7 @@ package = false
 
 [dependency-groups]
 dev = [
-    "ruff==0.17.4",
+    "ruff==0.17.5",
 ]
 
 # Lint and format with `uv run ruff check` and `uv run ruff format`. The rule
