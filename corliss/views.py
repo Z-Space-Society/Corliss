@@ -1145,6 +1145,8 @@ TEAM_HANDLES = {
     "jacob": "jacob.cascadia.social",
     "scott": "hadsie.com",
     "pouria": "pouriade.com",
+    "boris": "bmann.ca",
+    "ervin": "jacobervin.bsky.social",
 }
 
 

@@ -7,8 +7,9 @@
   <h1>The Team</h1>
 
   <p class="page-text about-lead">A small working group in Vancouver. Between
-  them: the space and the community it came out of, the hardware and the
-  operations, and the models the cluster actually serves.</p>
+  them: the hardware and the operations, the models the cluster actually
+  serves, and the agentic interface members reach them through. Two advisors
+  round it out.</p>
 
   <div class="card">
     <div class="about-person">
@@ -26,7 +27,7 @@
       </div>
     </div>
 
-    <p class="page-text">Technical Steward, the one who builds the cluster and
+    <p class="page-text">Jacob is the Technical Steward, the one who builds the cluster and
     keeps it running: the inference machines and the Proxmox host they answer
     to,
     <a href="https://github.com/Z-Space-Society/Corliss" target="_blank" rel="noopener">Corliss</a>
@@ -57,7 +58,7 @@
       </div>
     </div>
 
-    <p class="page-text">The man behind the models. Scott decides what actually runs on the
+    <p class="page-text">Scott is the man behind the models. He decides what actually runs on the
     nodes: which open weights are worth serving, at what quantisation and
     context, and which machine each one belongs on. That is the part of this
     system a member meets first and judges it by.</p>
@@ -83,19 +84,18 @@
     </div>
 
     <p class="page-text">Pouria is a designer and software engineer. He is the
-    lead on <a href="https://gel.chat">Gel.Chat</a> an agentic user chat integrated with atproto
+    lead on <a href="https://gel.chat" target="_blank" rel="noopener">Gel.Chat</a>, an agentic user chat integrated with atproto
     permissioned data. Gel is the default agentic interface for SCN, as well as being adopted by the atproto community.</p>
   </div>
 
-  {% comment %}
-  Advisors carry no picture: they are named and linked, not part of the
-  working group above, so the page does not fetch their avatars. The header
-  keeps the `about-person` wrapper anyway, for the same space under it.
-  {% endcomment %}
   <h2 class="section-title">Advisors</h2>
 
   <div class="card">
     <div class="about-person">
+      {% if avatars.boris %}
+        <img class="about-person__avatar" src="{{ avatars.boris }}" alt=""
+             width="64" height="64" loading="lazy" referrerpolicy="no-referrer">
+      {% endif %}
       <div>
         <h2 class="about-person__name">Boris Mann</h2>
         <p class="about-handle">
@@ -106,7 +106,7 @@
       </div>
     </div>
 
-    <p class="page-text">A driving force in the Atmosphere community,
+    <p class="page-text">Boris is a driving force in the Atmosphere community,
     <a href="https://dwebyvr.org/" target="_blank" rel="noopener">DWeb YVR</a>
     and <a href="https://z-space.ca" target="_blank" rel="noopener">Z-Space</a>, the coworking space this cluster physically lives in.</p>
 
@@ -117,23 +117,24 @@
 
   <div class="card">
     <div class="about-person">
+      {% if avatars.ervin %}
+        <img class="about-person__avatar" src="{{ avatars.ervin }}" alt=""
+             width="64" height="64" loading="lazy" referrerpolicy="no-referrer">
+      {% endif %}
       <div>
         <h2 class="about-person__name">Jacob Ervin</h2>
         <p class="about-handle">
           <a class="handle-link handle-link--out"
-             href="https://www.linkedin.com/in/jacobkyleervin/"
-             target="_blank" rel="noopener">LinkedIn</a>
+             href="https://bsky.app/profile/jacobervin.bsky.social"
+             target="_blank" rel="noopener">jacobervin.bsky.social</a>
         </p>
       </div>
     </div>
 
-    <p class="page-text">Director of New Product Development at Mozilla, and a
-    product and technical leader with 15+ years building platforms across AI
-    and emerging technologies. His focus is AI-native systems at the
-    intersection of AI and the web.</p>
-
-    <p class="page-text">He co-founded Active Replica, a platform for
-    distributed organizations that Mozilla acquired in 2022.</p>
+    <p class="page-text">Jacob is a Director of Product at Mozilla, where
+    his work focuses on the evolving web ecosystem and the role of artificial
+    intelligence in shaping its future. He works toward a sustainable web where
+    humans and AI coexist in ways that support a healthy online environment.</p>
   </div>
 
   <p class="about-more">Read on: <a href="{% url 'about' %}">what this is</a>,
