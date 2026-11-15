@@ -22,19 +22,27 @@ claim a fidelity we do not have; the record's text is honest about what it is.
   </p>
 
   {% if note.properties %}
-    <div class="card">
-      <h2 class="section-title">Properties</h2>
+    <details class="card" open>
+      <summary class="section-title">Properties
+        <span class="data-table__muted">({{ note.properties|length }})</span>
+      </summary>
       <table class="data-table">
         <tbody>
           {% for key, value in note.properties.items %}
             <tr>
               <th>{{ key }}</th>
-              <td class="data-table__muted">{{ value }}</td>
+              <td class="data-table__muted">
+                {% if value is iterable and value is not string %}
+                  {{ value|join:", " }}
+                {% else %}
+                  {{ value }}
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
-    </div>
+    </details>
   {% endif %}
 
   <div class="card">

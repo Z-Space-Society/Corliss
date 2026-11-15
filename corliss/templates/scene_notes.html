@@ -27,6 +27,8 @@ in may say something newer than the copy saved with the record.
   <div class="row-form">
     <a class="btn-row{% if selected == 'public' %} btn-row--active{% endif %}"
        href="{% url 'notes' %}">Public</a>
+    <a class="btn-row{% if selected == 'private' %} btn-row--active{% endif %}"
+       href="{% url 'notes' %}?workspace=private">Private</a>
     {% for workspace in workspaces %}
       <a class="btn-row{% if selected == workspace.pk|stringformat:'s' %} btn-row--active{% endif %}"
          href="{% url 'notes' %}?workspace={{ workspace.pk }}">{{ workspace.name }}</a>
@@ -38,6 +40,15 @@ in may say something newer than the copy saved with the record.
     <p class="alert" role="alert">
       <strong>Could not read your notes.</strong> Your PDS did not answer just
       now. The notes are unaffected — try again in a moment.
+    </p>
+  {% endif %}
+
+  {% if private %}
+    <p class="alert alert--notice" role="status">
+      <strong>Private</strong> will be a personal space: notes only you can
+      read, in a space whose authority is your own DID. It is not built. The
+      notes you write today are Public, because a public record in your own
+      repository is the whole of what this prototype does.
     </p>
   {% endif %}
 
@@ -78,12 +89,12 @@ in may say something newer than the copy saved with the record.
           </tbody>
         </table>
       </div>
-    {% elif not unreachable and not pending %}
+    {% elif not unreachable and not pending and not private %}
       <p class="hint-text">No notes yet. A note is one record, so the first one
         you write here is already the shape every later feature builds on.</p>
     {% endif %}
 
-    {% if not pending %}
+    {% if not pending and not private %}
       <div class="row-form row-form--add">
         <a class="btn-row" href="{% url 'note_new' %}">New note</a>
       </div>

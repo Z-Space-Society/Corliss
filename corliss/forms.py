@@ -103,6 +103,12 @@ class NoteForm(forms.Form):
         label="Title",
         widget=forms.TextInput(attrs={"placeholder": "A title", "autofocus": True}),
     )
+    properties = forms.CharField(
+        label="Properties",
+        required=False,
+        widget=forms.Textarea(attrs={"rows": 6, "spellcheck": "false"}),
+        help_text="YAML, one key per line. The fences are added for you.",
+    )
     body = forms.CharField(
         label="Text",
         required=False,

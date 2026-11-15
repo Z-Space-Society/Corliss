@@ -256,6 +256,42 @@ def _pds_for(did: str) -> str:
     return atproto.pds_endpoint_from_doc(doc)
 
 
+def properties_to_text(properties: dict) -> str:
+    """The YAML block back as text, for editing. No fences — the form supplies those.
+
+    Lists come back as block lists, which is what Obsidian writes. A value that
+    is already a plain string is written as-is; the round trip only has to be
+    legible, not byte-identical, because saving rewrites the note anyway.
+    """
+    lines: list[str] = []
+    for key, value in properties.items():
+        if isinstance(value, list):
+            if not value:
+                lines.append(f"{key}:")
+                continue
+            lines.append(f"{key}:")
+            lines.extend(f"  - {item}" for item in value)
+        else:
+            lines.append(f"{key}: {value}")
+    return "\n".join(lines)
+
+
+def compose(properties_text: str, body: str) -> str:
+    """`(front-matter, body)` back into one note, fences included.
+
+    Empty properties means no block at all — not an empty `--- ---`, which
+    would parse as front matter with nothing in it and look like a bug.
+    """
+    block = properties_text.strip()
+    if not block:
+        return body
+    if block.startswith("---"):
+        block = block[3:]
+    if block.endswith("---"):
+        block = block[:-3]
+    return f"---\n{block.strip()}\n---\n\n{body}"
+
+
 def _shape(rkey: str, entry: dict, value: dict) -> dict:
     """One view of a record for templates: title, tags and body already worked out.
 
@@ -327,16 +363,21 @@ def get_note(did: str, rkey: str) -> dict:
     return _shape(rkey, {}, value)
 
 
-def create_note(user, *, title: str, markdown: str) -> str:
+def create_note(user, *, title: str, markdown: str, properties_text: str = "") -> str:
     """Write a new note into the member's repo. Returns its rkey."""
     rkey = new_tid()
     record = build_record(
-        note_id=new_tid(), title=title, markdown=markdown, created_at=_now()
+        note_id=new_tid(),
+        title=title,
+        markdown=compose(properties_text, markdown),
+        created_at=_now(),
     )
     return _write(user, rkey, record)
 
 
-def update_note(user, rkey: str, *, title: str, markdown: str) -> str:
+def update_note(
+    user, rkey: str, *, title: str, markdown: str, properties_text: str = ""
+) -> str:
     """Replace a note's text, keeping its identity and creation time.
 
     `noteId` and `createdAt` come from the stored record, not from this call:
@@ -346,7 +387,7 @@ def update_note(user, rkey: str, *, title: str, markdown: str) -> str:
     record = build_record(
         note_id=existing.get("noteId") or new_tid(),
         title=title,
-        markdown=markdown,
+        markdown=compose(properties_text, markdown),
         created_at=existing.get("createdAt") or _now(),
     )
     return _write(user, rkey, record)

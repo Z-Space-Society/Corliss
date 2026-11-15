@@ -1540,10 +1540,16 @@ def notes(request):
     workspaces = list(request.user.workspaces.all())
     selected = request.GET.get("workspace", "public")
 
-    notes, unreachable, pending = [], False, None
+    notes, unreachable, pending, private = [], False, None, False
     current_name = scene_notes.PUBLIC_WORKSPACE
 
-    if selected == "public":
+    if selected == "private":
+        # A personal space, readable only by its owner. Not built: the relay's
+        # Private vault holds documents, not scene notes, and nothing here can
+        # read it.
+        private = True
+        current_name = "Private"
+    elif selected == "public":
         try:
             notes = scene_notes.list_notes(request.user.did)
         except scene_notes.SceneNotesError:
@@ -1567,6 +1573,7 @@ def notes(request):
             "selected": selected,
             "current_name": current_name,
             "pending": pending,
+            "private": private,
         },
     )
 
@@ -1582,6 +1589,7 @@ def note_new(request):
                 request.user,
                 title=form.cleaned_data["title"].strip(),
                 markdown=form.cleaned_data["body"],
+                properties_text=form.cleaned_data.get("properties", ""),
             )
         except scene_notes.SceneNotesError as exc:
             # A failed write keeps what the member typed: redirecting would
@@ -1624,7 +1632,11 @@ def note_edit(request, rkey):
 
     form = NoteForm(
         request.POST or None,
-        initial={"title": note["title"], "body": note["markdown"]},
+        initial={
+            "title": note["record"].get("title") or note["title"],
+            "properties": scene_notes.properties_to_text(note["properties"]),
+            "body": note["markdown"],
+        },
     )
     if request.method == "POST" and form.is_valid():
         try:
@@ -1633,6 +1645,7 @@ def note_edit(request, rkey):
                 rkey,
                 title=form.cleaned_data["title"].strip(),
                 markdown=form.cleaned_data["body"],
+                properties_text=form.cleaned_data.get("properties", ""),
             )
         except scene_notes.SceneNotesError as exc:
             form.add_error(None, str(exc))
