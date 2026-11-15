@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% comment %}
+One scene note. See `views.note_detail`.
+
+**The body is shown as raw markdown in a `<pre>`, on purpose.** Rendering OFM
+is a real piece of work — `[[wikilinks]]`, callouts, properties — and the
+candidate renderer is JavaScript. Autolinking or half-rendering here would
+claim a fidelity we do not have; the record's text is honest about what it is.
+{% endcomment %}
+
+{% block title %}{{ note.title }}{% endblock %}
+
+{% block content %}
+<div class="account-view console-view">
+  <h1>{{ note.title }}</h1>
+
+  <p class="page-text">
+    <code>{{ note.record.path }}</code>
+    {% if note.updated %}· updated {{ note.updated|slice:":16" }}{% endif %}
+    {% for tag in note.tags %}· #{{ tag }}{% endfor %}
+  </p>
+
+  <div class="card">
+    <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">{{ note.markdown }}</pre>
+  </div>
+
+  <div class="row-form row-form--add">
+    <a class="btn-row" href="{% url 'note_edit' rkey=note.rkey %}">Edit</a>
+    <a class="btn-row" href="{% url 'notes' %}">All notes</a>
+  </div>
+</div>
+{% endblock %}

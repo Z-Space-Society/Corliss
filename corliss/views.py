@@ -96,7 +96,8 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from corliss import atproto, health, litellm, membership, oidc, signing, sync_relay
-from corliss.forms import AccountForm, WorkspaceForm
+from corliss import scene_notes
+from corliss.forms import AccountForm, NoteForm, WorkspaceForm
 from corliss.models import (
     AtprotoToken,
     MembershipCache,
@@ -1096,7 +1097,7 @@ def _remove_workspace_member(request, workspace):
 
     if user.pk == request.user.pk:
         request.session[WORKSPACE_NOTICE_SESSION_KEY] = f"You left {workspace.name}."
-        return redirect("notes")
+        return redirect("notes_workspaces")
 
     request.session[WORKSPACE_NOTICE_SESSION_KEY] = f"Removed {user.username}."
     return redirect("workspace_edit", pk=workspace.pk)
@@ -1429,8 +1430,8 @@ def notes_disconnect(request):
 
 @member_required
 @require_http_methods(["GET", "POST"])
-def notes(request):
-    """The Notes page: the member's Private workspace, the workspaces they
+def notes_workspaces(request):
+    """Workspaces: the member's Private workspace, the workspaces they
     are in, and the form that makes a new one.
 
     **One relay call answers both halves.** The listing asks for the member's
@@ -1510,6 +1511,117 @@ def notes(request):
             "form": form,
             "notice": request.session.pop(WORKSPACE_NOTICE_SESSION_KEY, None),
         },
+    )
+
+
+@member_required
+@require_http_methods(["GET"])
+def notes(request):
+    """Recent notes: the member's own scene notes, newest first.
+
+    **Record-backed on purpose.** One `listRecords` against the member's PDS,
+    no relay: this is the loop the prototype is testing — write a note on one
+    device, read it on another, with the record shape a full implementation
+    will keep. Workspace management stays on `notes_workspaces`, which is the
+    relay's view of the world.
+
+    The list is sorted by `updatedAt` here rather than trusted from the PDS,
+    which orders by rkey: a note edited today belongs at the top however long
+    ago it was made.
+
+    No state of the PDS raises through this page. Unreachable reads as an alert
+    over an empty list, because "we could not ask" and "you have no notes" are
+    different answers and only one of them is the member's problem.
+    """
+    notes, unreachable = [], False
+    try:
+        notes = scene_notes.list_notes(request.user.did)
+    except scene_notes.SceneNotesError:
+        unreachable = True
+
+    return render(
+        request,
+        "notes_recent.html",
+        {
+            "notes_page": "recent",
+            "notes": notes,
+            "unreachable": unreachable,
+        },
+    )
+
+
+@member_required
+@require_http_methods(["GET", "POST"])
+def note_new(request):
+    """Write a new scene note into the member's own repo."""
+    form = NoteForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            rkey = scene_notes.create_note(
+                request.user,
+                title=form.cleaned_data["title"].strip(),
+                markdown=form.cleaned_data["body"],
+            )
+        except scene_notes.SceneNotesError as exc:
+            # A failed write keeps what the member typed: redirecting would
+            # drop it, and the only thing they can do is try again.
+            form.add_error(None, str(exc))
+        else:
+            return redirect("note_detail", rkey=rkey)
+
+    return render(
+        request,
+        "note_form.html",
+        {"notes_page": "recent", "form": form, "mode": "new"},
+    )
+
+
+@member_required
+@require_http_methods(["GET"])
+def note_detail(request, rkey):
+    """One scene note, as written."""
+    try:
+        note = scene_notes.get_note(request.user.did, rkey)
+    except scene_notes.SceneNotesError:
+        raise Http404("no such note") from None
+
+    return render(
+        request,
+        "note_detail.html",
+        {"notes_page": "recent", "note": note},
+    )
+
+
+@member_required
+@require_http_methods(["GET", "POST"])
+def note_edit(request, rkey):
+    """Edit a scene note's title and text, keeping its identity."""
+    try:
+        note = scene_notes.get_note(request.user.did, rkey)
+    except scene_notes.SceneNotesError:
+        raise Http404("no such note") from None
+
+    form = NoteForm(
+        request.POST or None,
+        initial={"title": note["title"], "body": note["markdown"]},
+    )
+    if request.method == "POST" and form.is_valid():
+        try:
+            scene_notes.update_note(
+                request.user,
+                rkey,
+                title=form.cleaned_data["title"].strip(),
+                markdown=form.cleaned_data["body"],
+            )
+        except scene_notes.SceneNotesError as exc:
+            form.add_error(None, str(exc))
+        else:
+            return redirect("note_detail", rkey=rkey)
+
+    return render(
+        request,
+        "note_form.html",
+        {"notes_page": "recent", "form": form, "mode": "edit", "rkey": rkey},
     )
 
 

@@ -129,7 +129,7 @@ class NotesCase(TestCase):
         self.client.force_login(self.user)
 
     def get(self, **params):
-        return self.client.get(reverse("notes"), params)
+        return self.client.get(reverse("notes_workspaces"), params)
 
 
 class RelayClientTests(NotesCase):
@@ -382,11 +382,11 @@ class ConnectPageTests(NotesCase):
     def test_the_nav_offers_the_page_to_a_member_and_closes_it_to_a_non_member(self):
         with Relay():
             html = self.get().content.decode()
-        self.assertIn(f'href="{reverse("notes")}"', html)
+        self.assertIn(f'href="{reverse("notes_workspaces")}"', html)
 
         MembershipCache.objects.filter(did=DID).update(active=False)
         html = self.client.get(reverse("home")).content.decode()
-        self.assertNotIn(f'href="{reverse("notes")}"', html)
+        self.assertNotIn(f'href="{reverse("notes_workspaces")}"', html)
         self.assertIn(">Notes</span>", html)
 
 

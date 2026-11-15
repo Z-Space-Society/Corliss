@@ -86,7 +86,13 @@ urlpatterns = [
     # workspaces they are in, and making one) and Connect (Obsidian, MCP and
     # connected apps). Named for what the nav calls them.
     path("notes/", views.notes, name="notes"),
+    path("notes/workspaces/", views.notes_workspaces, name="notes_workspaces"),
+    # Specific paths before the rkey pattern, or "new" and "connect" would
+    # match as rkeys.
+    path("notes/new/", views.note_new, name="note_new"),
     path("notes/connect/", views.notes_connect, name="notes_connect"),
+    path("notes/<str:rkey>/", views.note_detail, name="note_detail"),
+    path("notes/<str:rkey>/edit/", views.note_edit, name="note_edit"),
     path("notes/apps/disconnect", views.notes_disconnect, name="notes_disconnect"),
     path("api/", views.api, name="api"),
     path("tools/parascribe/", views.parascribe, name="parascribe"),

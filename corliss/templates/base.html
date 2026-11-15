@@ -106,14 +106,16 @@
               <div class="nav__menu">
                 <span class="nav__item nav__item--menu{% if notes_page %} is-active{% endif %}" tabindex="0">Notes</span>
                 <div class="nav__dropdown nav__dropdown--left">
+                  <a class="nav__dropdown-item{% if notes_page == 'recent' %} is-active{% endif %}"
+                     href="{% url 'notes' %}">Recent notes</a>
                   <a class="nav__dropdown-item{% if notes_page == 'workspaces' %} is-active{% endif %}"
-                     href="{% url 'notes' %}">Workspaces</a>
+                     href="{% url 'notes_workspaces' %}">Workspaces</a>
                   <a class="nav__dropdown-item{% if notes_page == 'connect' %} is-active{% endif %}"
                      href="{% url 'notes_connect' %}">Connect</a>
                 </div>
               </div>
             {% else %}
-              <a class="nav__item{% if notes_page %} is-active{% endif %}" href="{% url 'notes' %}">Workspaces</a>
+              <a class="nav__item{% if notes_page %} is-active{% endif %}" href="{% url 'notes' %}">Notes</a>
             {% endif %}
             {% if CHAT_URL %}<a class="nav__item" href="{{ CHAT_URL }}">Chat</a>{% endif %}
             <a class="nav__item" href="{% url 'api' %}">API</a>

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% comment %}
+The scene-note editor: new and edit share it. See `views.note_new` and
+`views.note_edit`.
+
+The textarea holds markdown and stores it verbatim — `corliss.scene_notes`
+puts it into `at.markpub.markdown` exactly as typed, and a renderer decides
+what it means. Nothing is preview-rendered here yet: the record is the point of
+this step, not the typography.
+{% endcomment %}
+
+{% block title %}{% if mode == "edit" %}Edit note{% else %}New note{% endif %}{% endblock %}
+
+{% block content %}
+<div class="account-view console-view">
+  <h1>{% if mode == "edit" %}Edit note{% else %}New note{% endif %}</h1>
+
+  <p class="page-text">
+    {% if mode == "edit" %}
+      Saving replaces the record's text and keeps its identity: the note's id
+      and creation time do not change because the title did.
+    {% else %}
+      This writes one <code>network.sharedcomputer.notes</code> record into your
+      own repository. Markdown, stored as written.
+    {% endif %}
+  </p>
+
+  <div class="card">
+    <form method="post" class="stacked-form"
+          action="{% if mode == 'edit' %}{% url 'note_edit' rkey=rkey %}{% else %}{% url 'note_new' %}{% endif %}">
+      {% csrf_token %}
+      {{ form }}
+      <div class="row-form">
+        <button type="submit" class="btn-primary">
+          {% if mode == "edit" %}Save{% else %}Write note{% endif %}
+        </button>
+        <a class="btn-row"
+           href="{% if mode == 'edit' %}{% url 'note_detail' rkey=rkey %}{% else %}{% url 'notes' %}{% endif %}">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

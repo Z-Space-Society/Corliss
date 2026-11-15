@@ -87,3 +87,28 @@ class WorkspaceForm(StackedForm):
                 }
             ),
         }
+
+
+class NoteForm(forms.Form):
+    """A scene note's title and text.
+
+    A plain `Form`, not a `ModelForm`: the note is a record in someone's PDS,
+    not a row here, and `corliss.scene_notes` owns its shape. The body is
+    markdown and is stored exactly as typed — no cleaning, because the record
+    carries it verbatim and the renderer decides what it means.
+    """
+
+    title = forms.CharField(
+        max_length=200,
+        label="Title",
+        widget=forms.TextInput(attrs={"placeholder": "A title", "autofocus": True}),
+    )
+    body = forms.CharField(
+        label="Text",
+        required=False,
+        widget=forms.Textarea(attrs={"rows": 18, "spellcheck": "true"}),
+    )
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("label_suffix", "")
+        super().__init__(*args, **kwargs)

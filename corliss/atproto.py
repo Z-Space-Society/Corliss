@@ -69,6 +69,12 @@ TIMEOUT = 10
 SCOPE = (
     "atproto transition:email "
     "repo:network.sharedcomputer.membership.request"
+    "?action=create&action=update&action=delete "
+    # Scene notes: the member's own notes, one collection, same narrow shape
+    # as the application record above. Prototype — the lexicon is a draft
+    # under `lexicons/network/sharedcomputer/notes.json`, and the collection
+    # is only written by a member's own session.
+    "repo:network.sharedcomputer.notes"
     "?action=create&action=update&action=delete"
 )
 

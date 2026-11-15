@@ -2,7 +2,7 @@
 
 {% comment %}
 Notes → Workspaces: one table of the member's workspaces, their Private one
-first, and the form that makes a new one. See `views.notes`. How to connect
+first, and the form that makes a new one. See `views.notes_workspaces`. How to connect
 Obsidian and MCP clients is on Notes → Connect (`notes_connect.html`).
 
 **The table is Corliss's, the figures are the relay's.** Every row comes from
@@ -98,14 +98,14 @@ it then goes to a fresh `/notes/`, since a class cannot be unset by a link.
     </div>
   </div>
 
-  {% if form.errors %}{% url 'notes' as close_to %}{% else %}{% firstof '#notes' as close_to %}{% endif %}
+  {% if form.errors %}{% url 'notes_workspaces' as close_to %}{% else %}{% firstof '#notes' as close_to %}{% endif %}
   <div class="modal{% if form.errors %} is-open{% endif %}" id="new-workspace" role="dialog"
        aria-modal="true" aria-labelledby="new-workspace-title">
     <a class="modal__scrim" href="{{ close_to }}" aria-label="Close" tabindex="-1"></a>
     <div class="modal__panel">
       <a class="modal__close" href="{{ close_to }}" aria-label="Close">×</a>
       <h3 class="modal__title" id="new-workspace-title">New workspace</h3>
-      <form method="post" class="stacked-form" action="{% url 'notes' %}">
+      <form method="post" class="stacked-form" action="{% url 'notes_workspaces' %}">
         {% csrf_token %}
         {{ form }}
         <button type="submit" class="btn-primary">Create workspace</button>

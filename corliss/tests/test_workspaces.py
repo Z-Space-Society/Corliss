@@ -111,7 +111,7 @@ class WorkspaceGateTests(NoRelayMixin, NoRosterMixin, TestCase):
         user = _member("gone.test", STRANGER, granted=False)
         _grant(STRANGER, active=False)
         self.client.force_login(user)
-        resp = self.client.get(reverse("notes"))
+        resp = self.client.get(reverse("notes_workspaces"))
         self.assertRedirects(resp, reverse("home"), fetch_redirect_response=False)
 
 
@@ -124,7 +124,7 @@ class WorkspaceCreateTests(NoRelayMixin, NoRosterMixin, TestCase):
     def test_creating_puts_the_creator_in_members(self):
         """Without this the maker is locked out on the very next request."""
         resp = self.client.post(
-            reverse("notes"),
+            reverse("notes_workspaces"),
             {"name": "Notes", "description": "Where the notes go."},
         )
         workspace = Workspace.objects.get(name="Notes")
@@ -135,13 +135,13 @@ class WorkspaceCreateTests(NoRelayMixin, NoRosterMixin, TestCase):
         self.assertEqual(workspace.created_by, self.alice)
 
     def test_the_new_workspace_is_on_the_list(self):
-        self.client.post(reverse("notes"), {"name": "Garden"})
-        resp = self.client.get(reverse("notes"))
+        self.client.post(reverse("notes_workspaces"), {"name": "Garden"})
+        resp = self.client.get(reverse("notes_workspaces"))
         self.assertEqual([w.name for w in resp.context["workspaces"]], ["Garden"])
 
     def test_a_blank_name_is_refused_and_redisplays_the_form(self):
         resp = self.client.post(
-            reverse("notes"), {"name": "   ", "description": "kept"}
+            reverse("notes_workspaces"), {"name": "   ", "description": "kept"}
         )
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(Workspace.objects.exists())
@@ -161,7 +161,7 @@ class WorkspaceCreateTests(NoRelayMixin, NoRosterMixin, TestCase):
         workspace = Workspace.objects.create(name="Notes", created_by=self.alice)
         workspace.members.add(self.alice, bob)
 
-        resp = self.client.get(reverse("notes"))
+        resp = self.client.get(reverse("notes_workspaces"))
         self.assertEqual(resp.context["workspaces"][0].member_count, 2)
 
 
@@ -183,7 +183,7 @@ class WorkspaceVisibilityTests(NoRelayMixin, NoRosterMixin, TestCase):
         self.client.force_login(self.alice)
 
     def test_the_list_shows_only_your_own(self):
-        resp = self.client.get(reverse("notes"))
+        resp = self.client.get(reverse("notes_workspaces"))
         self.assertContains(resp, "Alice&#x27;s place")
         self.assertNotContains(resp, "Bob&#x27;s place")
 
@@ -354,7 +354,7 @@ class WorkspaceEditTests(NoRelayMixin, NoRosterMixin, TestCase):
     def test_leaving_lands_on_the_list_not_the_page_you_just_left(self):
         self.workspace.members.add(self.bob)
         resp = self.client.post(self.url, {"action": "remove_member", "did": ALICE})
-        self.assertRedirects(resp, reverse("notes"))
+        self.assertRedirects(resp, reverse("notes_workspaces"))
         self.assertEqual(list(self.workspace.members.all()), [self.bob])
         # And it really is gone: the page she just left is now a 404.
         self.assertEqual(self.client.get(self.url).status_code, 404)
@@ -426,7 +426,7 @@ class WorkspaceNotesTests(NoRosterMixin, TestCase):
     def test_a_new_workspace_lands_on_a_page_that_makes_its_notes(self):
         with Relay() as relay:
             resp = self.client.post(
-                reverse("notes"), {"name": "Seed Library"}, follow=True
+                reverse("notes_workspaces"), {"name": "Seed Library"}, follow=True
             )
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(
