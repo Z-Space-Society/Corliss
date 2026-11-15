@@ -1,0 +1,17 @@
+{
+  "lexicon": 1,
+  "id": "network.sharedcomputer.workspace",
+  "defs": {
+    "main": {
+      "type": "space",
+      "key": "any",
+      "title": "SCN Workspace",
+      "title:lang": {
+        "fr": "Espace de travail SCN",
+        "es": "Espacio de trabajo SCN"
+      },
+      "description": "A shared workspace of notes, one space per Corliss Workspace.",
+      "collections": ["network.sharedcomputer.notes"]
+    }
+  }
+}

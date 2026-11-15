@@ -1,0 +1,98 @@
+{
+  "lexicon": 1,
+  "id": "network.sharedcomputer.notes",
+  "description": "A note in a Shared Computer Network workspace space: markdown for any atproto reader, an Automerge document for SCN clients to merge.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["noteId", "path", "title", "body", "createdAt"],
+        "properties": {
+          "noteId": {
+            "type": "string",
+            "minLength": 13,
+            "maxLength": 32,
+            "description": "Stable identity for the note. The same value in every author's copy and on every device. Generated once at creation, never changed."
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Path of the note within the workspace, ending in .md, e.g. 'Projects/Scene note draft.md'. Unique per workspace and per author."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxGraphemes": 200,
+            "maxLength": 2000,
+            "description": "Display title. Derived on every write from frontmatter title, else the first H1, else the filename."
+          },
+          "body": {
+            "type": "ref",
+            "ref": "at.markpub.markdown",
+            "description": "The note's text. Obsidian Flavored Markdown until markpub adds an 'ofm' flavor; see extensions and renderingRules."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When this snapshot was written. Records are replaced in place, so this is the only recency signal."
+          },
+          "docId": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Automerge document id (UUID). Present when the author's copy has a CRDT document."
+          },
+          "automerge": {
+            "type": "blob",
+            "accept": ["application/octet-stream"],
+            "maxSize": 5242880,
+            "description": "The Automerge document at 'heads'. Opaque to readers who are not SCN clients."
+          },
+          "heads": {
+            "type": "array",
+            "items": { "type": "string", "maxLength": 64 },
+            "maxLength": 16,
+            "description": "Automerge heads this snapshot represents. Lets a client see whether its local document is ahead, behind, or diverged without fetching the blob."
+          },
+          "textHash": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "SHA-256 of the markdown bytes, hex. Cheap equality check between a local .md file and this snapshot."
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string", "maxLength": 128 },
+            "maxLength": 32,
+            "description": "Projection of frontmatter tags and inline #tags for browsing. Not the source of truth; the body is."
+          },
+          "status": {
+            "type": "string",
+            "knownValues": ["live", "deleted"],
+            "description": "Absent means live. 'deleted' is a tombstone so an offline device cannot resurrect the note; it does not erase the record or the CRDT."
+          },
+          "blobs": {
+            "type": "array",
+            "items": {
+              "type": "blob",
+              "accept": ["image/jpeg", "image/png", "image/gif", "image/webp"],
+              "maxSize": 10485760
+            },
+            "maxLength": 16,
+            "description": "Images the body references, listed so they stay alive in the author's PDS."
+          },
+          "scene": {
+            "type": "string",
+            "format": "at-uri",
+            "description": "The space this note belongs to: at://{authority}/space/{spaceType}/{skey}. Redundant with the record URI, useful when a record travels."
+          }
+        }
+      }
+    }
+  }
+}
