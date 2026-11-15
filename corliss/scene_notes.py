@@ -114,6 +114,108 @@ def text_hash(markdown: str) -> str:
     return hashlib.sha256(markdown.encode("utf-8")).hexdigest()
 
 
+_FM_LINE = re.compile(r"^([A-Za-z0-9_.-]+):\s*(.*)$")
+_H1 = re.compile(r"^#\s+(.+)$", re.MULTILINE)
+
+
+def _parse_block(lines: list[str]) -> dict:
+    """`key: value`, `key: a, b`, and block lists, out of front-matter lines."""
+    properties: dict = {}
+    key = None
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith((" ", "\t")) and key:
+            item = line.strip().lstrip("-").strip().strip("'\"")
+            if item and isinstance(properties.get(key), list):
+                properties[key].append(item)
+            continue
+        match = _FM_LINE.match(line)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(2).strip()
+        properties[key] = value if value else []
+    return properties
+
+
+def split_frontmatter(text: str) -> tuple[dict, str]:
+    """(properties, body) — a tolerant YAML front-matter split.
+
+    Hand-rolled rather than a YAML dependency, and deliberately shallow: the
+    cases that matter are `key: value`, `key: a, b` and a block list under a
+    key. Anything it does not understand is ignored, and a file with no
+    front-matter comes back as `({}, text)` — the note is never lost because
+    its metadata was odd.
+
+    **It also recovers a block that lost its opening fence.** Pasting from
+    somewhere that ate the first line is ordinary, and the shape is
+    unmistakable: nothing but `key: value` lines, then `---`. Requiring the
+    fence would show that metadata as prose, which is wrong twice — it is not
+    what the author wrote, and it buries the title.
+
+    CRLF is normalised first: notes arrive from a Windows clipboard and from a
+    textarea alike, and `---\r\n` must split the same as `---\n`.
+    """
+    normalised = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    if normalised.startswith("---\n"):
+        end = normalised.find("\n---", 4)
+        if end == -1:
+            return {}, text
+        body = normalised[end + 4 :]
+        return _parse_block(normalised[4:end].split("\n")), body.lstrip("\n")
+
+    # No opening fence: accept a block of `key: value` lines closed by `---`.
+    lines = normalised.split("\n")
+    for index, line in enumerate(lines[:40]):
+        if line.strip() != "---":
+            continue
+        candidate = lines[:index]
+        if not candidate:
+            break
+        if all(
+            not item.strip()
+            or _FM_LINE.match(item)
+            or item.startswith((" ", "\t"))
+            for item in candidate
+        ) and any(_FM_LINE.match(item) for item in candidate):
+            return _parse_block(candidate), "\n".join(lines[index + 1 :]).lstrip("\n")
+        break
+
+    return {}, text
+
+
+def _as_list(value) -> list[str]:
+    """A front-matter list, whether written `a, b` or as a YAML block list."""
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, str):
+        items = value.split(",")
+    else:
+        return []
+    return [item.strip().strip("'\"#") for item in items if item.strip().strip("'\"#")]
+
+
+def display_title(properties: dict, body: str, fallback: str = "") -> str:
+    """Front-matter `title`, then the first H1, then whatever the record says."""
+    value = properties.get("title")
+    if isinstance(value, str) and value.strip():
+        return value.strip().strip("'\"")
+    match = _H1.search(body)
+    if match:
+        return match.group(1).strip()
+    return fallback or "Untitled"
+
+
+def tags_of(properties: dict, body: str) -> list[str]:
+    """Front-matter tags plus inline `#tags`, deduped, in that order."""
+    seen: list[str] = []
+    for tag in _as_list(properties.get("tags")) + tags_in(body):
+        if tag and tag not in seen:
+            seen.append(tag)
+    return seen[:32]
+
+
 def body_of(note: dict) -> str:
     """The markdown out of an `at.markpub.markdown`, defensively.
 
@@ -154,6 +256,31 @@ def _pds_for(did: str) -> str:
     return atproto.pds_endpoint_from_doc(doc)
 
 
+def _shape(rkey: str, entry: dict, value: dict) -> dict:
+    """One view of a record for templates: title, tags and body already worked out.
+
+    The record's own `title` and `tags` are projections written at save time;
+    the note it holds may have front-matter that says something newer, because
+    it was pasted in rather than saved through this app. **The body wins**:
+    front-matter `title`, then the first H1, then the record. Same for tags.
+    """
+    raw = body_of(value)
+    properties, body = split_frontmatter(raw)
+    return {
+        "rkey": rkey,
+        "uri": entry.get("uri"),
+        "cid": entry.get("cid"),
+        "title": display_title(properties, body, value.get("title") or ""),
+        "markdown": body,
+        "raw": raw,
+        "properties": properties,
+        "tags": tags_of(properties, body) or (value.get("tags") or []),
+        "updated": value.get("updatedAt") or value.get("createdAt") or "",
+        "created": value.get("createdAt") or "",
+        "record": value,
+    }
+
+
 def list_notes(did: str, limit: int = 100) -> list[dict]:
     """The member's scene notes, newest first by `updatedAt`.
 
@@ -184,19 +311,7 @@ def list_notes(did: str, limit: int = 100) -> list[dict]:
             continue
         if value.get("status") == "deleted":
             continue
-        notes.append(
-            {
-                "rkey": entry.get("uri", "").rsplit("/", 1)[-1],
-                "uri": entry.get("uri"),
-                "cid": entry.get("cid"),
-                "title": value.get("title") or "Untitled",
-                "markdown": body_of(value),
-                "tags": value.get("tags") or [],
-                "updated": value.get("updatedAt") or value.get("createdAt") or "",
-                "created": value.get("createdAt") or "",
-                "record": value,
-            }
-        )
+        notes.append(_shape(entry.get("uri", "").rsplit("/", 1)[-1], entry, value))
     notes.sort(key=lambda n: n["updated"], reverse=True)
     return notes
 
@@ -209,15 +324,7 @@ def get_note(did: str, rkey: str) -> dict:
         raise SceneNotesError("could not read that note") from exc
     if value is None:
         raise SceneNotesError("no such note")
-    return {
-        "rkey": rkey,
-        "title": value.get("title") or "Untitled",
-        "markdown": body_of(value),
-        "tags": value.get("tags") or [],
-        "updated": value.get("updatedAt") or value.get("createdAt") or "",
-        "created": value.get("createdAt") or "",
-        "record": value,
-    }
+    return _shape(rkey, {}, value)
 
 
 def create_note(user, *, title: str, markdown: str) -> str:

@@ -21,6 +21,22 @@ claim a fidelity we do not have; the record's text is honest about what it is.
     {% for tag in note.tags %}· #{{ tag }}{% endfor %}
   </p>
 
+  {% if note.properties %}
+    <div class="card">
+      <h2 class="section-title">Properties</h2>
+      <table class="data-table">
+        <tbody>
+          {% for key, value in note.properties.items %}
+            <tr>
+              <th>{{ key }}</th>
+              <td class="data-table__muted">{{ value }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
   <div class="card">
     <pre style="white-space: pre-wrap; font-family: inherit; margin: 0;">{{ note.markdown }}</pre>
   </div>

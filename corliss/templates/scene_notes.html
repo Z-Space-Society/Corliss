@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% comment %}
+Scene Notes: one workspace at a time, Public by default. See `views.notes`.
+
+**The switcher is links, not a select.** Pages here work without scripts, and
+a select box would need one. Public is the default and maps to the scene notes
+that are public in the member's own repo; a Corliss Workspace is a real group
+with a roster and, until spaces land, no notes of its own — which the empty
+state says in words rather than leaving a blank table.
+
+Notes are shaped in `corliss.scene_notes._shape`: front-matter `title`, then
+the first H1, then the record's own title. The body wins because a note pasted
+in may say something newer than the copy saved with the record.
+{% endcomment %}
+
+{% block title %}Scene Notes{% endblock %}
+
+{% block content %}
+<div class="account-view console-view">
+  <h1>Scene Notes</h1>
+  <p class="page-text">Your notes, one workspace at a time. Each note is a
+    single <code>network.sharedcomputer.notes</code> record in your own
+    repository: yours, readable by any atproto client, and it travels with your
+    account.</p>
+
+  <div class="row-form">
+    <a class="btn-row{% if selected == 'public' %} btn-row--active{% endif %}"
+       href="{% url 'notes' %}">Public</a>
+    {% for workspace in workspaces %}
+      <a class="btn-row{% if selected == workspace.pk|stringformat:'s' %} btn-row--active{% endif %}"
+         href="{% url 'notes' %}?workspace={{ workspace.pk }}">{{ workspace.name }}</a>
+    {% endfor %}
+    <a class="btn-row" href="{% url 'notes_workspaces' %}">Manage</a>
+  </div>
+
+  {% if unreachable %}
+    <p class="alert" role="alert">
+      <strong>Could not read your notes.</strong> Your PDS did not answer just
+      now. The notes are unaffected — try again in a moment.
+    </p>
+  {% endif %}
+
+  {% if pending %}
+    <p class="alert alert--notice" role="status">
+      <strong>{{ pending.name }}</strong> is a real workspace with
+      {{ pending.members.count }} member{{ pending.members.count|pluralize }},
+      and it has no notes of its own yet. A workspace's notes live in a space,
+      which is not built — the notes you write today are Public, in your own
+      repository.
+    </p>
+  {% endif %}
+
+  <div class="card">
+    {% if notes %}
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Title</th>
+              <th>Tags</th>
+              <th>Last change</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for note in notes %}
+              <tr>
+                <td>
+                  <a href="{% url 'note_detail' rkey=note.rkey %}">{{ note.title }}</a>
+                  <div class="data-table__sub"><code>{{ note.record.path }}</code></div>
+                </td>
+                <td class="data-table__muted">
+                  {% for tag in note.tags %}#{{ tag }}{% if not forloop.last %} {% endif %}{% empty %}—{% endfor %}
+                </td>
+                <td class="data-table__muted">{{ note.updated|slice:":16"|default:"—" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% elif not unreachable and not pending %}
+      <p class="hint-text">No notes yet. A note is one record, so the first one
+        you write here is already the shape every later feature builds on.</p>
+    {% endif %}
+
+    {% if not pending %}
+      <div class="row-form row-form--add">
+        <a class="btn-row" href="{% url 'note_new' %}">New note</a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

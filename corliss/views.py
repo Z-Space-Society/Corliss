@@ -1521,41 +1521,52 @@ def notes_workspaces(request):
 @member_required
 @require_http_methods(["GET"])
 def notes(request):
-    """The Public workspace: the member's own scene notes, newest first.
+    """Scene Notes: one workspace at a time, Public by default.
 
-    **Public is a workspace with nothing behind it.** There is no record for
-    it, no roster and no credential: it is the name for the scene notes that are
-    public in the member's own repo, which is every note this prototype writes.
-    Real workspaces — spaces, with a member list — will be something else
-    entirely, and this page is where the default one lives until they arrive.
+    **Public is a workspace with nothing behind it.** No record, no roster, no
+    credential: it is the name for the scene notes that are public in the
+    member's own repo, which is every note this prototype writes. A Corliss
+    Workspace is a real group with a member list — and, until spaces land, no
+    notes of its own, which the page says rather than pretending otherwise.
 
-    **Record-backed on purpose.** One `listRecords` against the member's PDS,
-    no relay: this is the loop the prototype is testing — write a note on one
-    device, read it on another, with the record shape a full implementation
-    will keep. Workspace management stays on `notes_workspaces`, which is the
-    relay's view of the world and now lists Public alongside it.
+    The switcher is plain links, not a script: `?workspace=<pk>` or nothing for
+    Public. The site's rule is that pages work without scripts, and a select
+    box would need one.
 
-    The list is sorted by `updatedAt` here rather than trusted from the PDS,
-    which orders by rkey: a note edited today belongs at the top however long
-    ago it was made.
-
-    No state of the PDS raises through this page. Unreachable reads as an alert
+    Reading the PDS cannot take this page down. An unreachable PDS is an alert
     over an empty list, because "we could not ask" and "you have no notes" are
     different answers and only one of them is the member's problem.
     """
-    notes, unreachable = [], False
-    try:
-        notes = scene_notes.list_notes(request.user.did)
-    except scene_notes.SceneNotesError:
-        unreachable = True
+    workspaces = list(request.user.workspaces.all())
+    selected = request.GET.get("workspace", "public")
+
+    notes, unreachable, pending = [], False, None
+    current_name = scene_notes.PUBLIC_WORKSPACE
+
+    if selected == "public":
+        try:
+            notes = scene_notes.list_notes(request.user.did)
+        except scene_notes.SceneNotesError:
+            unreachable = True
+    else:
+        pending = next((w for w in workspaces if str(w.pk) == selected), None)
+        if pending is None:
+            # A workspace the member is not in must not be distinguishable from
+            # one that does not exist.
+            raise Http404("no such workspace")
+        current_name = pending.name
 
     return render(
         request,
-        "notes_recent.html",
+        "scene_notes.html",
         {
             "notes_page": "recent",
             "notes": notes,
             "unreachable": unreachable,
+            "workspaces": workspaces,
+            "selected": selected,
+            "current_name": current_name,
+            "pending": pending,
         },
     )
 
