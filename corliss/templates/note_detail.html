@@ -16,7 +16,7 @@ claim a fidelity we do not have; the record's text is honest about what it is.
   <h1>{{ note.title }}</h1>
 
   <p class="page-text">
-    <code>{{ note.record.path }}</code>
+    Public · <code>{{ note.record.path }}</code>
     {% if note.updated %}· updated {{ note.updated|slice:":16" }}{% endif %}
     {% for tag in note.tags %}· #{{ tag }}{% endfor %}
   </p>

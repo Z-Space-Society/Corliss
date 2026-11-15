@@ -107,7 +107,7 @@
                 <span class="nav__item nav__item--menu{% if notes_page %} is-active{% endif %}" tabindex="0">Notes</span>
                 <div class="nav__dropdown nav__dropdown--left">
                   <a class="nav__dropdown-item{% if notes_page == 'recent' %} is-active{% endif %}"
-                     href="{% url 'notes' %}">Recent notes</a>
+                     href="{% url 'notes' %}">Public</a>
                   <a class="nav__dropdown-item{% if notes_page == 'workspaces' %} is-active{% endif %}"
                      href="{% url 'notes_workspaces' %}">Workspaces</a>
                   <a class="nav__dropdown-item{% if notes_page == 'connect' %} is-active{% endif %}"

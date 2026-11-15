@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% comment %}
-Notes → recent scene notes. See `views.notes`.
+Notes → the Public workspace: the member's own scene notes. See `views.notes`.
 
 **Record-backed.** One `listRecords` against the member's PDS, not
 `corliss.sync_relay`: this is the prototype loop, where a note is a record in
@@ -12,15 +12,16 @@ Newest first by `updatedAt`, sorted in the view: `listRecords` orders by rkey,
 which is creation order, and an old note edited today belongs at the top.
 {% endcomment %}
 
-{% block title %}Notes{% endblock %}
+{% block title %}Public{% endblock %}
 
 {% block content %}
 <div class="account-view console-view">
-  <h1>Notes</h1>
-  <p class="page-text">Your notes, newest first. Each one is a single
+  <h1>Public</h1>
+  <p class="page-text"><strong>The default workspace.</strong> These are your
+    scene notes that are public: each one a single
     <code>network.sharedcomputer.notes</code> record in your own repository, so
-    it is yours: readable by any atproto client, and it travels with your
-    account.</p>
+    anyone can read it, it travels with your account, and no server of ours sits
+    between the two. Newest first.</p>
 
   {% if unreachable %}
     <p class="alert" role="alert">

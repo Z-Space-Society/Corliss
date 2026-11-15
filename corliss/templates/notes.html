@@ -12,8 +12,10 @@ relay did not give reads "—": all of them when it is not configured or did not
 answer, which an alert above the table says in words, and a group's until its
 notes exist, which its own page makes on first render.
 
-**Private is a row, not a link.** It has no page of its own and no roster: it
-is one member's, so Members reads "—".
+**Public and Private are rows, not workspaces you join.** Public is a link (it
+has a page: the member's own scene notes, read from their PDS rather than the
+relay) and Private is not, because it has no page of its own yet. Neither has a
+roster: they are one member's, so Members reads "—".
 
 **New workspace is a modal**, opened by `:target` with no script, the markup
 `/manage/`'s member panels use. A form that fails validation renders here with
@@ -59,6 +61,16 @@ it then goes to a fresh `/notes/`, since a class cannot be unset by a link.
           </tr>
         </thead>
         <tbody>
+          <tr>
+            <td>
+              <a href="{% url 'notes' %}">Public</a>
+              <div class="data-table__sub">Notes anyone can read, in your own repository. The default workspace.</div>
+            </td>
+            <td class="data-table__count">—</td>
+            <td class="data-table__count">{{ public.count|default_if_none:"—" }}</td>
+            <td class="data-table__count">—</td>
+            <td class="data-table__muted">{{ public.last_change|slice:":16"|default:"—" }}</td>
+          </tr>
           <tr>
             <td>
               Private

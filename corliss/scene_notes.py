@@ -48,6 +48,28 @@ class SceneNotesError(Exception):
     """A scene note could not be read or written."""
 
 
+#: The default workspace. There is no record for it and nothing to join: it is
+#: the name for the scene notes that are public in a member's own repo, which is
+#: every note this prototype writes. Real workspaces — spaces, with a roster and
+#: a credential — come later and will look nothing like this one.
+PUBLIC_WORKSPACE = "Public"
+
+
+def public_summary(did: str) -> dict:
+    """Count and last change for the Public workspace, or None-ish if unreachable.
+
+    The workspaces page shows this in the same shape as the relay's rows, so it
+    returns `{"count": int | None, "last_change": str | None}` rather than
+    raising: a PDS that is down should grey out one row, not break the page.
+    """
+    try:
+        notes = list_notes(did)
+    except SceneNotesError:
+        return {"count": None, "last_change": None}
+    last = notes[0]["updated"] if notes else None
+    return {"count": len(notes), "last_change": last}
+
+
 def new_tid() -> str:
     """A TID: 13 base32-sortable characters, sortable by creation time.
 

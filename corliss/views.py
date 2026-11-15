@@ -1503,6 +1503,10 @@ def notes_workspaces(request):
         "notes.html",
         {
             "notes_page": "workspaces",
+            # The Public workspace is not a row in any table: it is the name for
+            # the scene notes that are public in the member's own repo, read
+            # from the PDS rather than the relay.
+            "public": scene_notes.public_summary(request.user.did),
             "configured": configured,
             # None when the relay did not answer.
             "private": private,
@@ -1517,13 +1521,19 @@ def notes_workspaces(request):
 @member_required
 @require_http_methods(["GET"])
 def notes(request):
-    """Recent notes: the member's own scene notes, newest first.
+    """The Public workspace: the member's own scene notes, newest first.
+
+    **Public is a workspace with nothing behind it.** There is no record for
+    it, no roster and no credential: it is the name for the scene notes that are
+    public in the member's own repo, which is every note this prototype writes.
+    Real workspaces — spaces, with a member list — will be something else
+    entirely, and this page is where the default one lives until they arrive.
 
     **Record-backed on purpose.** One `listRecords` against the member's PDS,
     no relay: this is the loop the prototype is testing — write a note on one
     device, read it on another, with the record shape a full implementation
     will keep. Workspace management stays on `notes_workspaces`, which is the
-    relay's view of the world.
+    relay's view of the world and now lists Public alongside it.
 
     The list is sorted by `updatedAt` here rather than trusted from the PDS,
     which orders by rkey: a note edited today belongs at the top however long
