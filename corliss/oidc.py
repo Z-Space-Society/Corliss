@@ -182,6 +182,49 @@ def plugin_client_metadata() -> dict:
     }
 
 
+def local_client_id() -> str:
+    """The `client_id` of a browser app on loopback: the URL of its document.
+
+    A browser cannot serve a metadata document — there is no https origin to
+    serve it from — so the document lives here, beside the plugin's, and the
+    client id is this URL. That is the whole reason CIMD works for a local app:
+    the *document* is public and https, while the *redirect* is `http` on
+    loopback, which `redirect_uri_matches` already accepts with the port ignored.
+    """
+    return base_url() + reverse("local_client_metadata")
+
+
+def local_client_metadata() -> dict:
+    """The metadata document for a local browser app, which Corliss hosts.
+
+    `redirect_uris` names one loopback origin and covers every port, because the
+    port is ignored on both sides when a redirect is checked. `localhost` and
+    `127.0.0.1` are *not* interchangeable here — they are different hosts — so
+    the document names the one the dev server is pinned to.
+
+    `client_name` is what a member reads on the consent screen, so it names the
+    app rather than the machine: "SCN Local", matching "SCN Sync".
+    """
+    return {
+        "client_id": local_client_id(),
+        "client_name": "SCN Local",
+        "client_uri": base_url(),
+        "redirect_uris": ["http://127.0.0.1:5173/"],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    }
+
+
+def own_document(client_id) -> dict | None:
+    """The document Corliss serves for one of its own clients, or None."""
+    if client_id == plugin_client_id():
+        return plugin_client_metadata()
+    if client_id == local_client_id():
+        return local_client_metadata()
+    return None
+
+
 def _client_from_document(document) -> Client:
     return Client(
         client_id=document["client_id"],
@@ -203,8 +246,9 @@ def resolve_client(client_id) -> Client:
     client = confidential_client(client_id)
     if client is not None:
         return client
-    if is_own_document(client_id):
-        return _client_from_document(plugin_client_metadata())
+    own = own_document(client_id)
+    if own is not None:
+        return _client_from_document(own)
     if isinstance(client_id, str) and client_id.startswith("https://"):
         # This fetches. `authorize` calls it for a URL `client_id` only once a
         # member has signed in and passed GATE; see `is_fetched_client`.
@@ -213,7 +257,13 @@ def resolve_client(client_id) -> Client:
 
 
 def is_own_document(client_id) -> bool:
-    return bool(client_id) and client_id == plugin_client_id()
+    """Whether Corliss serves this client's document itself.
+
+    Both of them: the plugin's, whose redirect is a custom scheme, and the local
+    browser app's, whose redirect is loopback. Neither is fetched over HTTP —
+    with two gunicorn workers, a request to our own origin can wait on itself.
+    """
+    return own_document(client_id) is not None
 
 
 def is_fetched_client(client_id) -> bool:
