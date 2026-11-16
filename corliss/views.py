@@ -2514,6 +2514,16 @@ def plugin_client_metadata(request):
     return JsonResponse(oidc.plugin_client_metadata())
 
 
+def local_client_metadata(request):
+    """Serve a local browser app's client metadata at its `client_id` URL.
+
+    The document a browser cannot serve itself: the client id has to be https,
+    and a page on `127.0.0.1` has no such origin. Its redirect is loopback `http`,
+    which `oidc.redirect_uri_matches` accepts with the port ignored.
+    """
+    return JsonResponse(oidc.local_client_metadata())
+
+
 def _error(error, description, status=400):
     return JsonResponse(
         {"error": error, "error_description": description}, status=status

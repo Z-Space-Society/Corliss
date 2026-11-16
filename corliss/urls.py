@@ -57,6 +57,14 @@ urlpatterns = [
         views.plugin_client_metadata,
         name="plugin_client_metadata",
     ),
+    # The same arrangement for a browser app on loopback, which cannot serve a
+    # document of its own. Its redirect is `http` on 127.0.0.1; the port is
+    # ignored when a redirect is checked, so one document covers every dev port.
+    path(
+        "clients/scn-local.json",
+        views.local_client_metadata,
+        name="local_client_metadata",
+    ),
     path("oidc/authorize", views.authorize, name="authorize"),
     # Where the consent screen posts. Reached only from `authorize`.
     path("oidc/consent", views.consent, name="consent"),
