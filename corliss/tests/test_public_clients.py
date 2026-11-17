@@ -117,6 +117,50 @@ class ResolveClientTests(TestCase):
         self.assertEqual(doc["token_endpoint_auth_method"], "none")
         self.assertEqual(doc["grant_types"], ["authorization_code", "refresh_token"])
 
+    def test_the_local_app_document_is_served_at_its_client_id(self):
+        resp = self.client.get("/clients/scn-local.json")
+        self.assertEqual(resp.status_code, 200)
+        doc = resp.json()
+        self.assertEqual(doc["client_id"], f"{BASE}/clients/scn-local.json")
+        self.assertEqual(doc["client_name"], "SCN Local")
+        self.assertEqual(doc["redirect_uris"], ["http://127.0.0.1:5173/"])
+        self.assertEqual(doc["token_endpoint_auth_method"], "none")
+        self.assertEqual(doc["grant_types"], ["authorization_code", "refresh_token"])
+
+    def test_the_local_app_resolves_as_a_public_client(self):
+        client = oidc.resolve_client(f"{BASE}/clients/scn-local.json")
+        self.assertTrue(client.is_public)
+        self.assertEqual(client.name, "SCN Local")
+        self.assertEqual(client.redirect_uris, ("http://127.0.0.1:5173/",))
+        self.assertEqual(client.host, "auth.zai.test")
+        self.assertIn("refresh_token", client.grant_types)
+
+    def test_the_local_app_is_known_by_its_own_document(self):
+        """Without fetching, as the token endpoint and Connected apps ask."""
+        client = oidc.known_client(f"{BASE}/clients/scn-local.json")
+        self.assertEqual(client.client_id, f"{BASE}/clients/scn-local.json")
+        self.assertEqual(client.redirect_uris, ("http://127.0.0.1:5173/",))
+
+    def test_a_loopback_redirect_matches_on_any_port(self):
+        """One document covers every dev port, which is the point of it."""
+        registered = ["http://127.0.0.1:5173/"]
+        for port in ("5173", "8000", "49152"):
+            with self.subTest(port=port):
+                self.assertTrue(
+                    oidc.redirect_uri_matches(f"http://127.0.0.1:{port}/", registered)
+                )
+
+    def test_localhost_is_not_127_0_0_1(self):
+        """Different hosts, so a client that uses both declares both."""
+        self.assertFalse(
+            oidc.redirect_uri_matches("http://localhost:5173/", ["http://127.0.0.1:5173/"])
+        )
+
+    def test_an_off_loopback_http_redirect_never_matches(self):
+        self.assertFalse(
+            oidc.redirect_uri_matches("http://example.test:5173/", ["http://127.0.0.1:5173/"])
+        )
+
     def test_open_webui_is_the_confidential_client_from_settings(self):
         client = oidc.resolve_client(OWUI)
         self.assertEqual(client.kind, oidc.CONFIDENTIAL)

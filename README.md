@@ -396,6 +396,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | OIDC discovery | `/.well-known/openid-configuration` |
 | The same discovery document, where OAuth and MCP clients look first | `/.well-known/oauth-authorization-server` |
 | SCN Sync plugin client metadata (**is** the plugin's `client_id`) | `/clients/scn-obsidian.json` |
+| Local browser app client metadata (**is** its `client_id`) | `/clients/scn-local.json` |
 | JWKS | `/.well-known/jwks.json` |
 | OIDC authorize (members) / token | `/oidc/authorize`, `/oidc/token` |
 | Consent — allow or refuse a public client (POST, members; reached from authorize) | `/oidc/consent` |
@@ -1393,6 +1394,12 @@ where the member's notes live. The design is in
   That path is the plugin's identity, the same way the atproto `client_id` is
   Corliss's own. Move it and every install becomes a new client whose refresh
   tokens no longer work.
+- **Corliss also hosts one for local browser apps** at
+  `/clients/scn-local.json`, because a page on `127.0.0.1` has no https origin
+  to serve its own. Its redirect is `http://127.0.0.1:5173/`, and loopback
+  redirects are compared with the port ignored, so it covers every dev port.
+  `localhost` is a different host and does not match. The same identity rule
+  applies to its path.
 - **Corliss never fetches its own document over HTTP.** `oidc.resolve_client`
   reads the function that builds it. With two gunicorn workers a request to
   our own origin can wait on itself.
