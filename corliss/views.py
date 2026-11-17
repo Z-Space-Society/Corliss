@@ -85,6 +85,7 @@ from django.db import transaction
 from django.db.models import Count, OuterRef, Subquery
 from django.http import (
     Http404,
+    HttpResponse,
     HttpResponseBadRequest,
     HttpResponseRedirect,
     JsonResponse,
@@ -2351,23 +2352,78 @@ def _register_registry_session(user, token_data, pending):
 
 
 # --- OIDC provider endpoints -----------------------------------------------
+#
+# A browser app reads these cross-origin, and a browser refuses to hand it a
+# response that does not name its origin. Two levels, and only two:
+#
+# - A public document (discovery, JWKS, client documents) is readable by any
+#   origin. It is already public, and the request carries no cookie.
+# - The token endpoint answers loopback origins only, by name, never `*`.
+#   Its redirect can only land on loopback, so that is the only origin a
+#   browser client of ours can be.
+#
+# Nothing that runs on the Corliss session cookie gets either, and neither
+# ever sends `Access-Control-Allow-Credentials`.
 
 
+def _public_document(view):
+    """Let any origin read this document."""
+
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        response = view(request, *args, **kwargs)
+        response["Access-Control-Allow-Origin"] = "*"
+        return response
+
+    return wrapped
+
+
+def _loopback_cors(view):
+    """Let a page on loopback call this endpoint, including its preflight.
+
+    Any other origin gets no CORS headers, and its preflight falls through to
+    the view, which refuses the method.
+    """
+
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        origin = request.headers.get("Origin", "")
+        allowed = oidc.is_loopback_origin(origin)
+        if allowed and request.method == "OPTIONS":
+            response = HttpResponse(status=204)
+            response["Access-Control-Allow-Methods"] = "POST"
+            response["Access-Control-Allow-Headers"] = "Content-Type"
+            response["Access-Control-Max-Age"] = "600"
+        else:
+            response = view(request, *args, **kwargs)
+        if allowed:
+            response["Access-Control-Allow-Origin"] = origin
+        # The answer depends on the Origin, so a cache must not reuse it.
+        response["Vary"] = "Origin"
+        return response
+
+    return wrapped
+
+
+@_public_document
 def jwks(request):
     """Publish the public halves of the signing keys (ES256 + RS256)."""
     return JsonResponse(signing.jwks())
 
 
+@_public_document
 def openid_configuration(request):
     """The provider's discovery document, served at two well-known paths."""
     return JsonResponse(oidc.discovery_document())
 
 
+@_public_document
 def plugin_client_metadata(request):
     """Serve the SCN Sync plugin's client metadata at its `client_id` URL."""
     return JsonResponse(oidc.plugin_client_metadata())
 
 
+@_public_document
 def local_client_metadata(request):
     """Serve a local browser app's client metadata at its `client_id` URL.
 
@@ -2959,6 +3015,7 @@ def _token_public(request, cid):
     return _error("unsupported_grant_type", "only authorization_code and refresh_token")
 
 
+@_loopback_cors
 @csrf_exempt  # machine-to-machine: a client secret, or a PKCE verifier
 @require_http_methods(["POST"])
 def token(request):

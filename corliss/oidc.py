@@ -782,6 +782,30 @@ def is_loopback_redirect(uri) -> bool:
     return _loopback_parts(uri) is not None
 
 
+def is_loopback_origin(origin) -> bool:
+    """Whether a browser `Origin` header names a page on this machine.
+
+    The same hosts a loopback redirect may use, on any port, and nothing else:
+    an origin is scheme, host and port, so a path or credentials mean it is not
+    one. The `null` origin a sandboxed page sends is refused.
+    """
+    if not origin or not isinstance(origin, str):
+        return False
+    try:
+        parts = urlsplit(origin)
+        _ = parts.port  # raises on a port that is not a number
+    except ValueError:
+        return False
+    return (
+        parts.scheme == "http"
+        and parts.hostname in _LOOPBACK_HOSTS
+        and parts.username is None
+        and not parts.path
+        and not parts.query
+        and not parts.fragment
+    )
+
+
 # An S256 challenge is the base64url of a SHA-256 digest: 43 characters.
 _CODE_CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}")
 # RFC 7636: 43 to 128 characters from the unreserved set.
