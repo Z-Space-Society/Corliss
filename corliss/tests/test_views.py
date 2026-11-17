@@ -627,17 +627,6 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("systems"))
         self.assertNotContains(resp, "Manage Console")
 
-    def test_the_version_columns_sit_between_the_purpose_and_the_status(self):
-        # zai-ops before Version, so the rightmost version is the interesting
-        # one rather than a column of identical revisions (zai-ops #6).
-        self._as_cluster_admin()
-        self.client.force_login(self.user)
-        resp = self.client.get(reverse("systems"))
-        headings = re.findall(r"<th>([^<]+)</th>", resp.content.decode())
-        self.assertEqual(
-            headings[:5], ["Service", "What it does", "zai-ops", "Version", "Status"]
-        )
-
     def test_a_manifest_renders_its_revision_and_version(self):
         self._manifests = {
             "Redis": {

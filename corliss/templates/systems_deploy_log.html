@@ -20,7 +20,7 @@ as markup.
       {% if record.succeeded %}Succeeded{% else %}Failed{% endif %}
     </span>{% if record.failed_task %} at <span class="inline-code">{{ record.failed_task }}</span>{% endif %}.
     Started {{ record.started_at }}{% if record.finished_at %}, finished {{ record.finished_at }}{% endif %},
-    {{ record.trigger }} trigger, zai-ops {{ record.zai_ops }}{% if record.version %}, installed {{ record.version }}{% endif %}.
+    {{ record.trigger }} trigger, ops {{ record.zai_ops }}{% if record.version %}, installed {{ record.version }}{% endif %}.
   </p>
 
   {% if log %}
