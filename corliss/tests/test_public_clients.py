@@ -135,6 +135,12 @@ class ResolveClientTests(TestCase):
         self.assertEqual(client.host, "auth.zai.test")
         self.assertIn("refresh_token", client.grant_types)
 
+    def test_the_local_app_is_known_by_its_own_document(self):
+        """Without fetching, as the token endpoint and Connected apps ask."""
+        client = oidc.known_client(f"{BASE}/clients/scn-local.json")
+        self.assertEqual(client.client_id, f"{BASE}/clients/scn-local.json")
+        self.assertEqual(client.redirect_uris, ("http://127.0.0.1:5173/",))
+
     def test_a_loopback_redirect_matches_on_any_port(self):
         """One document covers every dev port, which is the point of it."""
         registered = ["http://127.0.0.1:5173/"]

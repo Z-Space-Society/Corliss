@@ -576,9 +576,10 @@ def known_client(client_id):
     comes from the function that builds it, anyone else's from the row
     `authorize` cached when the member signed in. None when there is neither.
     """
-    if is_own_document(client_id):
-        return _client_from_document(plugin_client_metadata())
-    row = OidcClientDocument.objects.filter(client_id=client_id).first()
+    own = own_document(client_id)
+    if own is not None:
+        return _client_from_document(own)
+    row =OidcClientDocument.objects.filter(client_id=client_id).first()
     if row is not None and row.document:
         return _client_from_document(row.document)
     return None
