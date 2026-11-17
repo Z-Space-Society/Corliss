@@ -1394,6 +1394,13 @@ where the member's notes live. The design is in
   That path is the plugin's identity, the same way the atproto `client_id` is
   Corliss's own. Move it and every install becomes a new client whose refresh
   tokens no longer work.
+- **Browser apps get CORS at two levels, and only two.** The discovery
+  documents, the JWKS and the client documents send
+  `Access-Control-Allow-Origin: *`: they are already public and the request
+  carries no cookie. `/oidc/token` answers loopback origins only, by name,
+  including the preflight, because a public client's redirect can only land on
+  loopback. No page that runs on the session cookie answers cross-origin, and
+  nothing sends `Access-Control-Allow-Credentials`.
 - **Corliss also hosts one for local browser apps** at
   `/clients/scn-local.json`, because a page on `127.0.0.1` has no https origin
   to serve its own. Its redirect is `http://127.0.0.1:5173/`, and loopback

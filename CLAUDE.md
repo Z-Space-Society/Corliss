@@ -342,6 +342,11 @@ must not drift.
 - **`/clients/scn-obsidian.json` is the plugin's identity.** Same rule as the
   atproto `client_id` above: move the path or the origin and every install is
   a new client whose refresh tokens are dead. Nothing errors.
+- **CORS is `*` on public documents and loopback-only on `/oidc/token`,
+  and nowhere else.** Never on a page that runs on the session cookie, and
+  never with `Access-Control-Allow-Credentials`. A cross-origin read of a
+  cookie page is the hole CORS exists to keep closed. The decorators in
+  `views.py` are opt-in per view for the same reason the gates are.
 - **Corliss never fetches its own client document over HTTP.** Two workers
   can deadlock on a request to their own origin.
 - **Only a signed-in member who passes GATE can make Corliss fetch a client
