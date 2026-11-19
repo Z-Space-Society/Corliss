@@ -83,6 +83,7 @@ urlpatterns = [
     path("about/system/", views.about_system, name="about_system"),
     path("about/team/", views.about_team, name="about_team"),
     path("about/supporters/", views.about_supporters, name="about_supporters"),
+    path("about/mozilla.mp4", views.about_video, name="about_video"),
     # The member's own name and email. Signed-in rather than member-gated —
     # see `views.account`.
     path("account/", views.account, name="account"),
