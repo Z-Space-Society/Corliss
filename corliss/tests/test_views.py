@@ -259,6 +259,11 @@ class AboutViewTests(NoRosterMixin, TestCase):
                 resp = self.client.get(reverse(name))
                 self.assertEqual(resp.status_code, 200)
 
+    def test_the_video_redirects_a_signed_out_visitor_to_the_static_file(self):
+        resp = self.client.get(reverse("about_video"))
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(resp["Location"].startswith("/static/mozilla"))
+
     def test_a_signed_out_visitor_is_offered_the_menu(self):
         # On the home page, which is where somebody who has not signed in lands.
         resp = self.client.get(reverse("home"))

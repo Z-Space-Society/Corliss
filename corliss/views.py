@@ -91,10 +91,11 @@ from django.http import (
     JsonResponse,
 )
 from django.shortcuts import get_object_or_404, redirect, render
+from django.templatetags.static import static
 from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
+from django.views.decorators.http import require_http_methods, require_safe
 
 from corliss import atproto, health, litellm, membership, oidc, signing, sync_relay
 from corliss.forms import AccountForm, WorkspaceForm
@@ -1187,6 +1188,17 @@ def about_supporters(request):
         "about_supporters.html",
         {"about_page": "supporters", "avatars": _team_avatars()},
     )
+
+
+@require_safe
+def about_video(request):
+    """The Mozilla application video, at the URL the application names.
+
+    A redirect to the static file rather than a FileResponse, because whitenoise
+    answers Range requests and Django does not; Safari will not play an MP4
+    whose server can't seek.
+    """
+    return redirect(static("mozilla.mp4"))
 
 
 @require_http_methods(["GET", "POST"])

@@ -421,6 +421,10 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
+    # Ahead of staticfiles so runserver hands /static/ to whitenoise, as
+    # gunicorn does in production. Django's own dev handler ignores Range
+    # requests, and Safari loops a video from a server that can't seek.
+    "whitenoise.runserver_nostatic",
     "django.contrib.staticfiles",
     # Corliss is a single app: four models, one URL table, the atproto client
     # and OIDC provider as plain modules beside them. A future subsystem earns
