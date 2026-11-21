@@ -1,0 +1,114 @@
+{
+  "lexicon": 1,
+  "id": "network.sharedcomputer.canvas",
+  "description": "A canvas in a Shared Computer Network workspace: JSON Canvas for any atproto reader, an Automerge document for SCN clients to merge. Sibling of network.sharedcomputer.notes — a canvas is a file in the same vault, so the identity, CRDT, hash and tombstone fields are the same fields.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["canvasId", "path", "title", "body", "createdAt"],
+        "properties": {
+          "canvasId": {
+            "type": "string",
+            "minLength": 13,
+            "maxLength": 32,
+            "description": "Stable identity for the canvas. The same value in every author's copy and on every device, so two members drawing the same canvas agree on what it is. Generated once at creation, never changed."
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Path of the canvas within the workspace, ending in .canvas, e.g. 'Projects/Architecture.canvas'. Unique per workspace and per author, the same rule as a note."
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxGraphemes": 200,
+            "maxLength": 2000,
+            "description": "Display title. Derived on every write from the document's name, else the filename without its extension."
+          },
+          "body": {
+            "type": "ref",
+            "ref": "network.sharedcomputer.canvas#jsonCanvas",
+            "description": "The canvas itself, as JSON Canvas text. Text rather than a modeled graph on purpose: JSON Canvas is Obsidian's standard and it is versioned, so a record that froze its nodes and edges would need a lexicon release every time the spec moves."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "datetime"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "datetime",
+            "description": "When this snapshot was written. Records are replaced in place, so this is the only recency signal."
+          },
+          "docId": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "Automerge document id (UUID). Present when the author's copy has a CRDT document."
+          },
+          "automerge": {
+            "type": "blob",
+            "accept": ["application/octet-stream"],
+            "maxSize": 5242880,
+            "description": "The Automerge document at 'heads' — the lossless form, and the only complete copy when a canvas is too large to carry inline. Opaque to readers who are not SCN clients."
+          },
+          "heads": {
+            "type": "array",
+            "items": { "type": "string", "maxLength": 64 },
+            "maxLength": 16,
+            "description": "Automerge heads this snapshot represents. Lets a client see whether its local document is ahead, behind, or diverged without fetching the blob."
+          },
+          "textHash": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "SHA-256 of the JSON Canvas text in body.json, hex. A cheap equality check between a local .canvas file and this snapshot — the same field, computed the same way, as a note's textHash."
+          },
+          "thumb": {
+            "type": "blob",
+            "accept": ["image/webp"],
+            "maxSize": 2000000,
+            "description": "Optional WebP preview. Without one, a canvas is legible only to a client that parses JSON Canvas: this is what lets a link preview, a feed or a gallery show it."
+          },
+          "blobs": {
+            "type": "array",
+            "items": {
+              "type": "blob",
+              "accept": ["image/jpeg", "image/png", "image/gif", "image/webp"],
+              "maxSize": 10485760
+            },
+            "maxLength": 16,
+            "description": "Images the canvas references — a group's background, a file node pointing at an image — listed so they stay alive in the author's PDS. Not the source of truth: the paths in the JSON Canvas are."
+          },
+          "scene": {
+            "type": "string",
+            "format": "at-uri",
+            "description": "The space this canvas belongs to: at://{authority}/space/{spaceType}/{skey}. Redundant with the record URI, useful when a record travels."
+          },
+          "status": {
+            "type": "string",
+            "knownValues": ["live", "deleted"],
+            "description": "Absent means live. 'deleted' is a tombstone so an offline device cannot resurrect the canvas; it does not erase the record or the CRDT."
+          }
+        }
+      }
+    },
+    "jsonCanvas": {
+      "type": "object",
+      "description": "A JSON Canvas document, carried as the text of a .canvas file. The text is the file exactly — nothing normalised, no fields reordered — so a client can write it to disk and hand it to Obsidian, and read an Obsidian canvas back into a record, without either side noticing.",
+      "required": ["version", "json"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "maxLength": 16,
+          "description": "The JSON Canvas specification version the text claims to be, e.g. '1.0'. Deliberately not a closed list: a 1.1 file must be storable without a lexicon release, and a reader that does not know the version can still show the text or the thumbnail. See https://jsoncanvas.org/spec/."
+        },
+        "json": {
+          "type": "string",
+          "description": "The JSON Canvas document as text: an object with 'nodes' and 'edges' arrays, per the spec version above. Parsed and validated by the client, not by the lexicon, for the same reason markdown is not modeled by at.markpub.markdown."
+        }
+      }
+    }
+  }
+}
