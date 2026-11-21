@@ -2370,9 +2370,10 @@ def _register_registry_session(user, token_data, pending):
 #
 # - A public document (discovery, JWKS, client documents) is readable by any
 #   origin. It is already public, and the request carries no cookie.
-# - The token endpoint answers loopback origins only, by name, never `*`.
-#   Its redirect can only land on loopback, so that is the only origin a
-#   browser client of ours can be.
+# - The token endpoint answers browser clients by name, never `*`: loopback
+#   over `http` on any port, and any well-formed `https` origin. CORS is not
+#   the access control here — the code and its PKCE verifier are — and a client
+#   may bring its own https deployment rather than only a page on loopback.
 #
 # Nothing that runs on the Corliss session cookie gets either, and neither
 # ever sends `Access-Control-Allow-Credentials`.
@@ -2390,17 +2391,18 @@ def _public_document(view):
     return wrapped
 
 
-def _loopback_cors(view):
-    """Let a page on loopback call this endpoint, including its preflight.
+def _browser_cors(view):
+    """Let a browser client call this endpoint, including its preflight.
 
-    Any other origin gets no CORS headers, and its preflight falls through to
-    the view, which refuses the method.
+    A browser client is loopback over `http` or any well-formed `https` origin.
+    Anything else gets no CORS headers, and its preflight falls through to the
+    view, which refuses the method.
     """
 
     @wraps(view)
     def wrapped(request, *args, **kwargs):
         origin = request.headers.get("Origin", "")
-        allowed = oidc.is_loopback_origin(origin)
+        allowed = oidc.is_browser_origin(origin)
         if allowed and request.method == "OPTIONS":
             response = HttpResponse(status=204)
             response["Access-Control-Allow-Methods"] = "POST"
@@ -3027,7 +3029,7 @@ def _token_public(request, cid):
     return _error("unsupported_grant_type", "only authorization_code and refresh_token")
 
 
-@_loopback_cors
+@_browser_cors
 @csrf_exempt  # machine-to-machine: a client secret, or a PKCE verifier
 @require_http_methods(["POST"])
 def token(request):
