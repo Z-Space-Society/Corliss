@@ -579,7 +579,7 @@ def known_client(client_id):
     own = own_document(client_id)
     if own is not None:
         return _client_from_document(own)
-    row =OidcClientDocument.objects.filter(client_id=client_id).first()
+    row = OidcClientDocument.objects.filter(client_id=client_id).first()
     if row is not None and row.document:
         return _client_from_document(row.document)
     return None

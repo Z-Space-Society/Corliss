@@ -43,12 +43,29 @@ class LoginViewTests(TestCase):
         self.assertEqual(resp.status_code, 200)
         self.assertContains(resp, 'name="handle"')
 
-    @patch("corliss.views.atproto.authorization_url", return_value="https://auth.example/authorize")
-    @patch("corliss.views.atproto.pushed_authorization_request", return_value=("urn:req", "nonce"))
-    @patch("corliss.views._dpop_key_for", side_effect=lambda did: (atproto.generate_key(), {}))
-    @patch("corliss.views.atproto.discover_auth_server",
-           return_value={"issuer": "https://auth.example", "token_endpoint": "https://auth.example/token"})
-    @patch("corliss.views.atproto.pds_endpoint_from_doc", return_value="https://pds.example.com")
+    @patch(
+        "corliss.views.atproto.authorization_url",
+        return_value="https://auth.example/authorize",
+    )
+    @patch(
+        "corliss.views.atproto.pushed_authorization_request",
+        return_value=("urn:req", "nonce"),
+    )
+    @patch(
+        "corliss.views._dpop_key_for",
+        side_effect=lambda did: (atproto.generate_key(), {}),
+    )
+    @patch(
+        "corliss.views.atproto.discover_auth_server",
+        return_value={
+            "issuer": "https://auth.example",
+            "token_endpoint": "https://auth.example/token",
+        },
+    )
+    @patch(
+        "corliss.views.atproto.pds_endpoint_from_doc",
+        return_value="https://pds.example.com",
+    )
     @patch("corliss.views.atproto.fetch_did_document", return_value={})
     @patch("corliss.views.atproto.resolve_handle_to_did", return_value=DID)
     def test_a_leading_at_is_dropped_before_the_pds_sees_it(self, resolve, *_mocks):
