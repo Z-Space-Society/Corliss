@@ -153,12 +153,16 @@ class ResolveClientTests(TestCase):
     def test_localhost_is_not_127_0_0_1(self):
         """Different hosts, so a client that uses both declares both."""
         self.assertFalse(
-            oidc.redirect_uri_matches("http://localhost:5173/", ["http://127.0.0.1:5173/"])
+            oidc.redirect_uri_matches(
+                "http://localhost:5173/", ["http://127.0.0.1:5173/"]
+            )
         )
 
     def test_an_off_loopback_http_redirect_never_matches(self):
         self.assertFalse(
-            oidc.redirect_uri_matches("http://example.test:5173/", ["http://127.0.0.1:5173/"])
+            oidc.redirect_uri_matches(
+                "http://example.test:5173/", ["http://127.0.0.1:5173/"]
+            )
         )
 
     def test_open_webui_is_the_confidential_client_from_settings(self):
