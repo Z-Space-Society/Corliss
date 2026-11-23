@@ -782,28 +782,54 @@ def is_loopback_redirect(uri) -> bool:
     return _loopback_parts(uri) is not None
 
 
-def is_loopback_origin(origin) -> bool:
-    """Whether a browser `Origin` header names a page on this machine.
+def _origin_parts(origin):
+    """The parts of a bare origin, or None when this is not one.
 
-    The same hosts a loopback redirect may use, on any port, and nothing else:
-    an origin is scheme, host and port, so a path or credentials mean it is not
-    one. The `null` origin a sandboxed page sends is refused.
+    An origin is scheme, host and port and nothing more: a path, a query, a
+    fragment or credentials mean the header is not an origin. A port that is not
+    a number raises, which is also not an origin.
     """
     if not origin or not isinstance(origin, str):
-        return False
+        return None
     try:
         parts = urlsplit(origin)
         _ = parts.port  # raises on a port that is not a number
     except ValueError:
-        return False
+        return None
+    if parts.username is not None or parts.path or parts.query or parts.fragment:
+        return None
+    return parts
+
+
+def is_loopback_origin(origin) -> bool:
+    """Whether a browser `Origin` header names a page on this machine.
+
+    The same hosts a loopback redirect may use, on any port, and nothing else.
+    The `null` origin a sandboxed page sends is refused.
+    """
+    parts = _origin_parts(origin)
     return (
-        parts.scheme == "http"
+        parts is not None
+        and parts.scheme == "http"
         and parts.hostname in _LOOPBACK_HOSTS
-        and parts.username is None
-        and not parts.path
-        and not parts.query
-        and not parts.fragment
     )
+
+
+def is_browser_origin(origin) -> bool:
+    """Whether a browser `Origin` header is one of our clients.
+
+    **Loopback over `http`, or any well-formed `https` origin.** CORS is not the
+    access control on these endpoints — the bearer token, or a code and its PKCE
+    verifier, is — so this answers "could this be a browser client of ours",
+    not "may this page call". A client that serves its own client metadata
+    document over https is exactly the case that is not on loopback.
+    """
+    parts = _origin_parts(origin)
+    if parts is None:
+        return False
+    if parts.scheme == "http":
+        return parts.hostname in _LOOPBACK_HOSTS
+    return parts.scheme == "https" and bool(parts.hostname)
 
 
 # An S256 challenge is the base64url of a SHA-256 digest: 43 characters.
