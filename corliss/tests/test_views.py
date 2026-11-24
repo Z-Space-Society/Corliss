@@ -609,7 +609,6 @@ class SystemsViewTests(NoRosterMixin, TestCase):
             "Caddy",
             "HappyView",
             "LiteLLM",
-            "Sync relay",
             "PDS",
             "Corliss",
             "Open WebUI",
@@ -707,7 +706,7 @@ class SystemsViewTests(NoRosterMixin, TestCase):
         self.assertEqual(resp.status_code, 200)
         # Corliss served it and Postgres answered, whatever else is unreachable.
         self.assertContains(resp, "status__dot--up")
-        for service in ("Garage", "Redis", "Sync relay", "Open WebUI"):
+        for service in ("Garage", "Redis", "Open WebUI"):
             self.assertContains(resp, service)
 
 

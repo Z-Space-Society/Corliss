@@ -577,7 +577,8 @@ class CheckAllTests(TestCase):
         states = {s["name"]: s["state"] for g in groups for s in g["services"]}
         self.assertEqual(states["Corliss"], health.UP)
         self.assertEqual(states["PostgreSQL"], health.UP)
-        self.assertEqual(states["Sync relay"], health.DOWN)
+        by_host = {s["host"]: s["state"] for g in groups for s in g["services"]}
+        self.assertEqual(by_host["scn-notes"], health.DOWN)
 
     @override_settings(MANIFEST_BUCKET="")
     def test_without_manifest_settings_every_row_has_blank_versions(self):

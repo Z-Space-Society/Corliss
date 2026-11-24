@@ -740,7 +740,7 @@ any one service, and nothing else in Corliss has business knowing Garage exists.
 | Caddy | `GET /healthz` on its `:80` health site. |
 | HappyView | `GET /`, carrying `MEMBERSHIP_REGISTRY_HOST` — see below. |
 | LiteLLM | `GET /health/liveliness`. |
-| Sync relay | `GET /health`. |
+| SCN Notes | `GET /health`. |
 | PDS | `GET /xrpc/_health`, its readiness endpoint: "up" means its storage answered too. |
 | Open WebUI | `GET /health`. |
 | scn-chat | `GET /api/health`, which runs `select 1` against its database: "up" means its storage answered too. |

@@ -309,7 +309,7 @@ def _litellm():
 def _sync_relay():
     """`/health` — liveness only, narrower than it reads. See the docstring."""
     origin = _origin(settings.SYNC_RELAY_URL)
-    return _http("sync-relay", origin + "/health" if origin else "")
+    return _http("scn-notes", origin + "/health" if origin else "")
 
 
 def _pds():
@@ -480,7 +480,7 @@ STACK = [
                 _happyview,
             ),
             Probe("litellm", "LiteLLM", "API gateway in front of the models", _litellm),
-            Probe("sync-relay", "Sync relay", "Automerge sync server", _sync_relay),
+            Probe("scn-notes", "SCN Notes", "Shared notes: Automerge sync, the notes API and MCP", _sync_relay),
             Probe(
                 "pds",
                 "PDS",
