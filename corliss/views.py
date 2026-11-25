@@ -1812,7 +1812,7 @@ def manage(request):
     # `_heal_admin_flags` and written alongside the roster by `appoint_admin`, and
     # reading it here costs one join instead of a network read.
     #
-    # `display_name` rides along in the same subquery pass, and deliberately
+    # `display_name` and `email` ride along in the same subquery pass, and deliberately
     # **not** through `membership.handles_for`: that helper falls back to a
     # DID-document fetch for anyone it does not know, and a name is not worth a
     # network call per row on the page that has to render when things are
@@ -1826,6 +1826,9 @@ def manage(request):
             ),
             display_name=Subquery(
                 User.objects.filter(did=OuterRef("did")).values("display_name")[:1]
+            ),
+            email=Subquery(
+                User.objects.filter(did=OuterRef("did")).values("email")[:1]
             ),
         )
         .order_by("did")
@@ -1852,8 +1855,18 @@ def manage(request):
         + [m.author_did for m in members]
         + [a.did for a in admins]
     )
+    # The applicant's email, for saying hello before deciding. The application
+    # record is public and carries no contact details by design; this is what
+    # their PDS shared at sign-in (applying needs one), read off the `User` row
+    # in one query. Blank when they declined to share it.
+    emails = dict(
+        User.objects.filter(
+            did__in=[row["did"] for row in applications["rows"]]
+        ).values_list("did", "email")
+    )
     for row in applications["rows"]:
         row["handle"] = handles.get(row["did"], row["did"])
+        row["email"] = emails.get(row["did"], "")
     for member in members:
         member.handle = handles.get(member.did, member.did)
         member.author_handle = handles.get(member.author_did, member.author_did)
