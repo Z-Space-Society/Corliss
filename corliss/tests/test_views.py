@@ -927,6 +927,46 @@ class ManageViewTests(NoRosterMixin, TestCase):
         panel = html.split('id="member-1"', 1)[1]
         self.assertIn("Met at the meetup", panel)
 
+    def test_an_applicants_email_is_in_the_queue(self):
+        """Applying needs a sign-in, which is where the PDS shares an email;
+        the public application record carries none."""
+        from corliss import membership
+
+        User.objects.create_user(
+            username="violet.test", did="did:plc:applicant", email="v@example.test"
+        )
+        self._applications(
+            [membership.Application("did:plc:applicant", _at("2026-11-20T00:00:00Z"))]
+        )
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        html = " ".join(resp.content.decode().split())
+        queue = next(
+            section
+            for section in html.split('<h2 class="section-title"')
+            if section.startswith(">Applications</h2>")
+        )
+        self.assertIn('href="mailto:v@example.test"', queue)
+
+    def test_a_members_email_is_on_their_panel(self):
+        _grant("did:plc:member")
+        User.objects.create_user(
+            username="member.test", did="did:plc:member", email="m@example.test"
+        )
+        self._as_cluster_admin()
+        self.client.force_login(self.user)
+
+        with self._roster():
+            resp = self.client.get(reverse("manage"))
+
+        html = " ".join(resp.content.decode().split())
+        panel = html.split('id="member-1"', 1)[1]
+        self.assertIn('href="mailto:m@example.test"', panel)
+
     def test_applying_again_after_a_decision_puts_them_back_in_the_queue(self):
         """The case a "has a cache row, therefore handled" rule would drop: a
         revoked member asking to come back writes a fresh record at the same

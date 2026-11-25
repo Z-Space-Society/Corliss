@@ -312,7 +312,8 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
   because a `title` cannot be copied and there is no column of them to keep
   narrow. It links to the member's Bluesky profile, and a Copy button beside
   it stands in for the selecting a link makes awkward. **Tables stay handles-only** — that is what the rule is protecting.
-- **A name is a second line under the handle, never a column.** It is annotated
+- **A name is a second line under the handle, never a column.** So is an
+  applicant's email in the queue; a member's email is on their panel. It is annotated
   off the `User` row in the same subquery pass as `is_admin` — never through
   `membership.handles_for`, whose fallback is a DID-document fetch per unknown
   DID. This page has to render when the network does not.

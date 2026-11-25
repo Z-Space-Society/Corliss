@@ -229,6 +229,10 @@ makes it sound otherwise.
                 </div>
               {% endif %}
               <div class="modal__fact">
+                <dt>Email</dt>
+                <dd>{% if m.email %}<a class="handle-link" href="mailto:{{ m.email }}">{{ m.email }}</a>{% else %}<span class="data-table__muted">Not shared</span>{% endif %}</dd>
+              </div>
+              <div class="modal__fact">
                 <dt>DID</dt>
                 <dd class="data-table__did"><a class="handle-link handle-link--out"
                    id="member-{{ forloop.counter }}-did"
@@ -395,6 +399,9 @@ makes it sound otherwise.
                      target="_blank" rel="noopener">{{ row.handle }}</a>
                   {% if row.reapplied %}
                     <span class="pill" title="Has a membership history and has applied again since it last changed">asked again</span>
+                  {% endif %}
+                  {% if row.email %}
+                    <div class="data-table__sub"><a class="handle-link" href="mailto:{{ row.email }}">{{ row.email }}</a></div>
                   {% endif %}
                 </td>
                 <td class="data-table__muted">{{ row.created_at|date:"Y-m-d H:i"|default:"—" }}</td>

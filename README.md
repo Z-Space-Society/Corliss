@@ -668,6 +668,14 @@ grant is written, so a member is named from the moment they are admitted rather
 than from their first sign-in. That resolution is **display only**: handles are
 mutable, so nothing may key, compare, or store what comes out of it.
 
+**An email is on the member's panel and under an applicant's handle.** It is
+how an admin says hello, and the application record cannot carry one: it is
+public, so it holds no contact details by design. Applying needs a sign-in, and
+sign-in is where the PDS shares the address, so the `User` row usually has it.
+Read off that row in the same pass as the name, never fetched. A member who
+declined to share one shows "Not shared"; an applicant without one shows
+nothing extra.
+
 **A member's name sits under their handle, never beside it.** It is what an
 admin recognises, but it is not what they match on and not everyone has one —
 it is annotated off the `User` row, so an invited member who has never signed in
