@@ -301,9 +301,10 @@ def admin_required(view_func):
     page is there, and the nav never offers it to them.
 
     **This opens a page. It never authorizes a write.** The check is
-    `User.is_cluster_admin`, the property, which passes `is_superuser` as well
-    as the roster — that clause exists so `did:local:admin` can reach the
-    reconcile button when the roster itself is unreadable. Every path that
+    `User.is_cluster_admin`, the property, which passes a *local* superuser as
+    well as the roster — that clause exists so `did:local:admin` can reach the
+    reconcile button when the roster itself is unreadable. A roster admin's own
+    `is_superuser` is a copy of the roster and is not what lets them in. Every path that
     *writes* re-asks `membership.is_cluster_admin(did)`, the module function
     with no superuser clause, at action time, because the roster is live and an
     admin may have been dismissed while the page sat open. Those two spellings
@@ -724,7 +725,7 @@ def _apply_dev_superuser(user):
     settings file and then running `createsuperuser` by hand, which is exactly
     the kind of second setup step a development bypass exists to remove.
 
-    **Mirrored, not merely set**, the way `_heal_staff_flag` mirrors the roster:
+    **Mirrored, not merely set**, the way `_heal_admin_flags` mirrors the roster:
     dropping a DID from `DEV_ADMIN_DIDS` clears the flag at the next dev login
     rather than leaving a superuser behind that nothing will ever take back.
 
@@ -1808,7 +1809,7 @@ def manage(request):
     #
     # `is_staff` is annotated from the `User` row by DID rather than resolved
     # from the roster per render. It is a mirror, kept true at every login by
-    # `_heal_staff_flag` and written alongside the roster by `appoint_admin`, and
+    # `_heal_admin_flags` and written alongside the roster by `appoint_admin`, and
     # reading it here costs one join instead of a network read.
     #
     # `display_name` rides along in the same subquery pass, and deliberately
@@ -2242,6 +2243,7 @@ def _upsert_member(
     display-only by invariant, so that is cheap — DID is the only thing anything
     keys on.
     """
+    is_admin = membership.is_cluster_admin(did)
     user, created = User.objects.get_or_create(
         did=did,
         defaults={
@@ -2250,7 +2252,8 @@ def _upsert_member(
             "email": email,
             "email_confirmed": email_confirmed,
             "display_name": display_name,
-            "is_staff": membership.is_cluster_admin(did),
+            "is_staff": is_admin,
+            "is_superuser": is_admin,
         },
     )
     if not created:
@@ -2270,33 +2273,34 @@ def _upsert_member(
                 "display_name",
             ]
         )
-        _heal_staff_flag(user)
+        _heal_admin_flags(user)
     return user
 
 
-def _heal_staff_flag(user):
-    """Re-derive `is_staff` from the roster, which is the authority.
+def _heal_admin_flags(user):
+    """Re-derive `is_staff` and `is_superuser` from the roster, which is the
+    authority.
 
-    `membership.appoint_admin` writes both halves together, so this normally
-    finds nothing to do. It exists for when they come apart: the roster write
-    succeeded and the local flag update did not, an admin was removed while
-    signed in, or the row predates the two being one operation. Doing it at
-    login means the local mirror is never more than one sign-in stale.
+    One kind of admin: a current place on the roster makes you a Django
+    superuser, and nothing else does. `membership.appoint_admin` writes both
+    flags with the roster entry, so this normally finds nothing to do. It
+    exists for when they come apart: the roster write succeeded and the local
+    update did not, an admin was removed outside the console, or the row
+    predates the two being one operation. Doing it at login means the local
+    copy is never more than one sign-in stale, and the Django admin does not
+    wait even that long: `admin_site` asks the roster on every request.
 
-    **Superusers are skipped in both directions.** Django's admin needs
-    `is_staff` as well as `is_superuser`, so clearing it here would lock out an
-    account somebody deliberately escalated — a surprise worse than a stale
-    flag. `--superuser` is opt-in and stays opt-out of this.
-
-    Never touches the break-glass row: `did:local:admin` signs in through
-    `/admin/login/` and never reaches this path.
+    Skips the local accounts (`membership.LOCAL_DID_PREFIXES`): the break-glass
+    row signs in through `/admin/login/` and never reaches this path anyway,
+    and a `did:dev:` row's flag is `_apply_dev_superuser`'s to set.
     """
-    if user.is_superuser:
+    if not membership.is_roster_governed(user.did):
         return
     should_be = membership.is_cluster_admin(user.did)
-    if user.is_staff != should_be:
+    if user.is_staff != should_be or user.is_superuser != should_be:
         user.is_staff = should_be
-        user.save(update_fields=["is_staff"])
+        user.is_superuser = should_be
+        user.save(update_fields=["is_staff", "is_superuser"])
 
 
 def _store_tokens(user, token_data, dpop_key, nonce, pending):

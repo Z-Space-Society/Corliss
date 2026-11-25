@@ -61,7 +61,7 @@ class UserAdminTests(TestCase):
 
     def setUp(self):
         self.superuser = User.objects.create_superuser(
-            username="root.bsky.social", did="did:plc:rootrootrootrootrootroot"
+            username="root.bsky.social", did="did:local:root"
         )
         self.client.force_login(self.superuser)
 
@@ -116,7 +116,7 @@ class UserAdminTests(TestCase):
 class MembershipCacheAdminTests(TestCase):
     def setUp(self):
         self.superuser = User.objects.create_superuser(
-            username="root.bsky.social", did="did:plc:rootrootrootrootrootroot"
+            username="root.bsky.social", did="did:local:root"
         )
         self.client.force_login(self.superuser)
 
@@ -177,7 +177,7 @@ class PublicClientAdminTests(TestCase):
 
     def setUp(self):
         self.superuser = User.objects.create_superuser(
-            username="root.bsky.social", did="did:plc:rootrootrootrootrootroot"
+            username="root.bsky.social", did="did:local:root"
         )
         self.client.force_login(self.superuser)
         self.member = User.objects.create_user(username="alice.bsky.social", did=DID)
@@ -331,17 +331,34 @@ class MakeAdminCommandTests(RosterWriteMixin, TestCase):
         with self.assertRaisesMessage(CommandError, "authenticate"):
             self._run("alice.bsky.social", did=DID)
 
-    def test_superuser_is_granted_only_when_asked_for(self):
+    def test_appointing_makes_them_a_superuser(self):
+        """One kind of admin: on the roster means Django superuser too."""
+        User.objects.create_user(username="alice.bsky.social", did=DID)
+
         self._run("alice.bsky.social", did=DID)
-        self.assertFalse(User.objects.filter(did=DID, is_superuser=True).exists())
 
-        self.grant(STRANGER)
-        self._run("bob.bsky.social", did=STRANGER, superuser=True)
-        self.assertTrue(User.objects.get(did=STRANGER).is_superuser)
+        user = User.objects.get(did=DID)
+        self.assertTrue(user.is_staff)
+        self.assertTrue(user.is_superuser)
 
-    def test_the_superuser_row_cannot_authenticate_with_a_password(self):
+    def test_removing_clears_both_flags(self):
+        User.objects.create_user(
+            username="alice.bsky.social", did=DID, is_staff=True, is_superuser=True
+        )
+        self.roster_entries = [
+            {"did": DID, "addedAt": "2026-01-01T00:00:00Z"},
+            {"did": STRANGER, "addedAt": "2026-01-01T00:00:00Z"},
+        ]
+
+        self._run("alice.bsky.social", did=DID, remove=True)
+
+        user = User.objects.get(did=DID)
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
+
+    def test_an_appointed_row_cannot_authenticate_with_a_password(self):
         """It only ever signs in through ATProto OAuth."""
-        self._run("alice.bsky.social", did=DID, superuser=True)
+        self._run("alice.bsky.social", did=DID)
         self.assertFalse(User.objects.get(did=DID).has_usable_password())
 
     def test_it_writes_no_membership_event(self):
@@ -477,7 +494,7 @@ class ListAdminsCommandTests(RosterWriteMixin, TestCase):
 
 @override_settings(SCN_SERVICE_DID=SERVICE_DID)
 class SyncAdminsCommandTests(RosterWriteMixin, TestCase):
-    """`manage.py sync_admins` — the `is_staff` mirror, re-derived for everyone."""
+    """`manage.py sync_admins` — the admin flags, re-derived for everyone."""
 
     def setUp(self):
         super().setUp()
@@ -517,15 +534,35 @@ class SyncAdminsCommandTests(RosterWriteMixin, TestCase):
 
         self.assertFalse(self._staff(DID))
 
-    def test_superusers_are_left_alone(self):
-        """Which is also what keeps the break-glass row out of this."""
+    def test_a_current_admin_is_a_superuser_too(self):
+        self._run()
+
+        self.assertTrue(User.objects.get(did=OTHER).is_superuser)
+
+    def test_a_superuser_who_was_never_on_the_roster_loses_both_flags(self):
         User.objects.create_user(
-            username="admin", did="did:local:admin", is_staff=True, is_superuser=True
+            username="stray.test", did=DID, is_staff=True, is_superuser=True
         )
 
         self._run()
 
-        self.assertTrue(self._staff("did:local:admin"))
+        user = User.objects.get(did=DID)
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
+
+    def test_the_local_accounts_are_left_alone(self):
+        """The break-glass row and dev rows have no roster entry to copy."""
+        for did in ("did:local:admin", "did:dev:alice"):
+            User.objects.create_user(
+                username=did, did=did, is_staff=True, is_superuser=True
+            )
+
+        self._run()
+
+        for did in ("did:local:admin", "did:dev:alice"):
+            user = User.objects.get(did=did)
+            self.assertTrue(user.is_staff)
+            self.assertTrue(user.is_superuser)
 
     def test_a_second_run_changes_nothing(self):
         self._run()
@@ -555,3 +592,61 @@ class SyncAdminsCommandTests(RosterWriteMixin, TestCase):
 
         self.assertEqual(self.written, [])
         self.set_space_access.assert_not_called()
+
+
+class AdminSiteTests(TestCase):
+    """Django's admin answers to the roster, and its password form is only
+    served on the tunnel host."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="alice.bsky.social", did=DID, is_staff=True, is_superuser=True
+        )
+
+    def _roster_says(self, value):
+        patcher = patch("corliss.membership.is_cluster_admin", return_value=value)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_roster_admin_opens_the_admin(self):
+        self._roster_says(True)
+        self.client.force_login(self.user)
+
+        self.assertEqual(self.client.get("/admin/").status_code, 200)
+        self.assertEqual(self.client.get("/admin/corliss/user/").status_code, 200)
+
+    def test_flags_left_behind_after_a_dismissal_open_nothing(self):
+        """The flags are a copy; the roster is asked on every request."""
+        self._roster_says(False)
+        self.client.force_login(self.user)
+
+        resp = self.client.get("/admin/corliss/user/")
+
+        self.assertNotEqual(resp.status_code, 200)
+
+    def test_signed_out_goes_to_handle_sign_in_and_back(self):
+        resp = self.client.get("/admin/", follow=True)
+
+        self.assertEqual(resp.redirect_chain[-1][0], "/auth/login?next=%2Fadmin%2F")
+        self.assertEqual(self.client.session["post_login_redirect"], "/admin/")
+
+    def test_the_password_form_is_not_served_off_the_tunnel(self):
+        admin_row = User.objects.create_user(
+            username="admin", did="did:local:admin", is_staff=True, is_superuser=True
+        )
+        admin_row.set_password("break-glass-pw")
+        admin_row.save()
+
+        resp = self.client.post(
+            "/admin/login/", {"username": "admin", "password": "break-glass-pw"}
+        )
+
+        self.assertTrue(resp["Location"].startswith("/auth/login"))
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_a_signed_in_non_admin_gets_a_404(self):
+        self._roster_says(False)
+        stranger = User.objects.create_user(username="bob.test", did=STRANGER)
+        self.client.force_login(stranger)
+
+        self.assertEqual(self.client.get("/admin/login/").status_code, 404)

@@ -197,19 +197,15 @@
         {% endif %}
 
         {% comment %}
-        Two different authorities, deliberately not merged: the console answers
-        to the atproto admin roster (user.is_cluster_admin), the Django admin to
-        Django's own permissions (is_superuser). A roster edit must not hand out
-        the Django admin, where the session and OIDC client tables live.
+        One kind of admin: a current place on the roster (user.is_cluster_admin)
+        opens the console and Django's admin alike. The break-glass account
+        passes the same property through its local superuser clause.
 
-        So the outer condition is each link's own condition OR'd together, not a
-        looser "is some kind of admin" — otherwise an admin whose only entry
-        would have been a link that isn't configured gets a Manage menu that
-        opens onto nothing. `Membership` is unconditional for a cluster admin
-        because it is served by this app: there is no setting that can leave it
-        pointing nowhere.
+        `Membership` and `Django` are unconditional for a cluster admin because
+        both are served by this app: there is no setting that can leave them
+        pointing nowhere, so the menu never opens onto nothing.
         {% endcomment %}
-        {% if user.is_cluster_admin or user.is_superuser %}
+        {% if user.is_cluster_admin %}
           <div class="nav__menu">
             <span class="nav__item nav__item--menu" tabindex="0">Manage</span>
 
@@ -254,7 +250,7 @@
               {% if user.is_cluster_admin and BESZEL_URL %}
                 <a class="nav__dropdown-item" href="{{ BESZEL_URL }}" target="_blank" rel="noopener">Beszel</a>
               {% endif %}
-              {% if user.is_superuser %}
+              {% if user.is_cluster_admin %}
                 <a class="nav__dropdown-item" href="{% url 'admin:index' %}" target="_blank" rel="noopener">Django</a>
               {% endif %}
             </div>

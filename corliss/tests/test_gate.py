@@ -531,15 +531,18 @@ class GateDoesNotCoverTheRecoveryDoorsTests(NoRosterMixin, TestCase):
         admin.set_password("break-glass-pw")
         admin.save()
 
-        self.assertEqual(self.client.get("/admin/login/").status_code, 200)
+        # Through the tunnel, which is the only host the password form is on.
+        tunnel = {"HTTP_HOST": "127.0.0.1"}
+        self.assertEqual(self.client.get("/admin/login/", **tunnel).status_code, 200)
         self.assertFalse(membership.may_enter("did:local:admin"))
 
         resp = self.client.post(
             "/admin/login/",
             {"username": "admin", "password": "break-glass-pw", "next": "/admin/"},
+            **tunnel,
         )
         self.assertRedirects(resp, "/admin/", fetch_redirect_response=False)
-        self.assertEqual(self.client.get("/admin/").status_code, 200)
+        self.assertEqual(self.client.get("/admin/", **tunnel).status_code, 200)
 
     def test_manage_opens_for_an_admin_with_an_empty_cache(self):
         """The recovery path, asserted from GATE's side.

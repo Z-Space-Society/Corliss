@@ -54,12 +54,21 @@ class CorlissUserAdmin(UserAdmin):
     # member edits their email at `/account/`.
     # `username` holds the atproto handle, refreshed from the PDS at every
     # login — an edit here survives until then and no longer.
+    #
+    # `is_staff` and `is_superuser` are copies of the admin roster, written by
+    # `membership.appoint_admin` and re-derived at every sign-in, so an edit
+    # here would be undone at the subject's next login. Shown, not editable:
+    # making someone an admin is the console's Make Admin, which writes the
+    # roster. Groups and per-user permissions are gone from the form because
+    # nothing uses them: an admin can do everything, and nobody else gets in.
     readonly_fields = (
         "did",
         "email_confirmed",
         "last_seen",
         "last_login",
         "date_joined",
+        "is_staff",
+        "is_superuser",
     )
 
     fieldsets = (
@@ -74,8 +83,6 @@ class CorlissUserAdmin(UserAdmin):
                     "is_active",
                     "is_staff",
                     "is_superuser",
-                    "groups",
-                    "user_permissions",
                 )
             },
         ),

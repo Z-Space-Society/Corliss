@@ -61,6 +61,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from jwt.algorithms import ECAlgorithm
 from jwt.exceptions import InvalidKeyError
@@ -359,10 +360,13 @@ def is_active_member(did):
 # - **ELEVATE never depends on the cache.** A Corliss rebuilt with an empty
 #   database can still answer "is this DID an admin?" from a cold start. That
 #   is the recovery path that makes closing GATE safe.
-# - **Admin-ness is read, never stored.** Nothing here writes a Django flag.
-#   Mapping cluster admin onto `is_superuser` would hand a roster edit the
-#   power to bypass every permission check in Django and open the admin, where
-#   this app's OIDC client config and session tables live.
+# - **Admin-ness is read, and the flags only copy it.** There is one kind of
+#   admin: a current place on this roster makes you a Django superuser too,
+#   because "an admin can do everything" is simpler than two authorities that
+#   have to be kept apart. The flags are a mirror (see `_set_admin_flags`), and
+#   nothing that decides anything trusts the mirror on its own: the Django
+#   admin re-asks the roster on every request (`admin_site`), and every write
+#   asks `is_cluster_admin` at action time.
 
 ROSTER_COLLECTION = "network.sharedcomputer.admin.list"
 ROSTER_RKEY = "self"  # the lexicon pins it: "key": "literal:self"
@@ -636,8 +640,9 @@ def may_enter(did):
 # compromised.
 #
 # **Both halves of "make an admin" happen together.** The roster entry is the
-# authority; `is_staff` is a local mirror of it so that "admin" means one thing
-# in this app rather than two. The roster is written first: if that fails,
+# authority; `is_staff` and `is_superuser` are a local mirror of it so that
+# "admin" means one thing in this app rather than two. The roster is written
+# first: if that fails,
 # nothing has changed and the caller gets an error naming the fix, rather than
 # a half-admin who holds a Django flag the registry has never heard of.
 
@@ -849,24 +854,46 @@ def _is_current(entry):
     return entry.get("removedAt") is None
 
 
-def _set_staff(did, value):
-    """Mirror roster membership onto the local `is_staff` flag.
+# Rows the roster can never name, so the mirror never touches them: the
+# break-glass account `ensure_admin` writes (`did:local:admin`), and the
+# development bypass's `did:dev:` rows, which `views._apply_dev_superuser`
+# mirrors from `DEV_ADMIN_DIDS` instead. Neither is a DID method a PDS can
+# hold, so no roster entry can collide with one.
+LOCAL_DID_PREFIXES = ("did:local:", "did:dev:")
+
+
+def is_roster_governed(did):
+    """Whether this row's admin flags are a copy of the roster. False only for
+    the local accounts above, whose flags are set by the command or bypass that
+    made them."""
+    return bool(did) and not did.startswith(LOCAL_DID_PREFIXES)
+
+
+def _roster_rows():
+    rows = User.objects.all()
+    for prefix in LOCAL_DID_PREFIXES:
+        rows = rows.exclude(did__startswith=prefix)
+    return rows
+
+
+def _set_admin_flags(did, value):
+    """Mirror roster membership onto the local `is_staff` and `is_superuser`.
+
+    Both, always together: an admin is a Django superuser, and Django's admin
+    needs `is_staff` as well to open at all. One kind of admin, so one value.
 
     Best-effort and deliberately after the roster write: the roster is the
-    authority, and `views._heal_staff_flag` re-derives this at every login, so
+    authority, and `views._heal_admin_flags` re-derives this at every login, so
     a failure here self-corrects rather than needing a rollback.
-
-    Superusers are left alone — Django's admin needs `is_staff` too, so
-    clearing it would lock out an account somebody deliberately escalated.
     """
-    User.objects.filter(did=did, is_superuser=False).update(is_staff=value)
+    _roster_rows().filter(did=did).update(is_staff=value, is_superuser=value)
 
 
-def sync_staff_mirror():
-    """Make every local `is_staff` flag agree with the roster. Returns
-    `(granted, cleared)`, the DIDs whose flag changed in each direction.
+def sync_admin_flags():
+    """Make every local admin flag agree with the roster. Returns
+    `(granted, cleared)`, the DIDs whose flags changed in each direction.
 
-    `_heal_staff_flag` does this for one person at their next sign-in. This
+    `_heal_admin_flags` does this for one person at their next sign-in. This
     does it for everyone at once, without waiting for anybody to sign in: the
     case is a database restored from before an appointment, or a rebuilt one,
     where the console would otherwise show the wrong people as admins until
@@ -877,8 +904,8 @@ def sync_staff_mirror():
     record at all the service account is the sole admin, the same bootstrap
     rule `is_cluster_admin` applies.
 
-    Superusers are skipped in both directions, as everywhere else — which is
-    also what leaves the break-glass row alone.
+    The local accounts (`LOCAL_DID_PREFIXES`) are skipped in both directions,
+    which is what leaves the break-glass row alone.
 
     Raises `RosterError` rather than guessing: clearing every flag because the
     PDS was unreachable would be the wrong answer written to disk.
@@ -891,14 +918,15 @@ def sync_staff_mirror():
 
     for did in current:
         ensure_user(did)
-    grant = User.objects.filter(did__in=current, is_staff=False, is_superuser=False)
-    clear = User.objects.filter(is_staff=True, is_superuser=False).exclude(
-        did__in=current
+    rows = _roster_rows()
+    grant = rows.filter(did__in=current).exclude(is_staff=True, is_superuser=True)
+    clear = rows.exclude(did__in=current).filter(
+        Q(is_staff=True) | Q(is_superuser=True)
     )
     granted = sorted(grant.values_list("did", flat=True))
     cleared = sorted(clear.values_list("did", flat=True))
-    User.objects.filter(did__in=granted).update(is_staff=True)
-    User.objects.filter(did__in=cleared).update(is_staff=False)
+    User.objects.filter(did__in=granted).update(is_staff=True, is_superuser=True)
+    User.objects.filter(did__in=cleared).update(is_staff=False, is_superuser=False)
     return granted, cleared
 
 
@@ -984,7 +1012,7 @@ def appoint_admin(actor_did, subject_did):
     """Make `subject_did` a cluster admin. Returns a note for the caller.
 
     Both halves, in the order that fails safely: the roster record first, then
-    the local `is_staff` mirror, then registry space write access — which is
+    the local admin flags, then registry space write access — which is
     what actually lets the new admin author a grant, and is reported rather
     than raised when it fails (see below).
     """
@@ -1029,7 +1057,7 @@ def appoint_admin(actor_did, subject_did):
     # `is_staff`, so a member with no local row would appear not to be an admin
     # however correct the roster is.
     ensure_user(subject_did)
-    _set_staff(subject_did, True)
+    _set_admin_flags(subject_did, True)
     return _sync_space_access(subject_did, "write")
 
 
@@ -1076,7 +1104,7 @@ def dismiss_admin(actor_did, subject_did):
             entry["removedAt"] = stamped
             entry["removedBy"] = actor_did
     _write_roster(entries)
-    _set_staff(subject_did, False)
+    _set_admin_flags(subject_did, False)
     return _sync_space_access(subject_did, "none")
 
 

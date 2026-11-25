@@ -1,5 +1,6 @@
 from django.apps import AppConfig
 from django.conf import settings
+from django.contrib.admin import apps as admin_apps
 from django.core.checks import Error, register
 
 
@@ -144,3 +145,14 @@ class CorlissConfig(AppConfig):
         register(check_explicit_theme_exists)
         register(check_oidc_resources_parse)
         register(check_confidential_client_ids_differ)
+
+
+class CorlissAdminConfig(admin_apps.AdminConfig):
+    """Django's admin, with `corliss.admin_site.CorlissAdminSite` as the site:
+    the roster re-asked on every request, and the password form on the tunnel
+    host only. Listed in `INSTALLED_APPS` in place of `django.contrib.admin`."""
+
+    # Not this module's default: `"corliss"` in `INSTALLED_APPS` still means
+    # `CorlissConfig`.
+    default = False
+    default_site = "corliss.admin_site.CorlissAdminSite"
