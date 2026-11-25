@@ -76,43 +76,37 @@ class User(AbstractUser):
         `corliss.membership`'s roster section — a stored flag would drift from
         the record and could not be revoked by editing it.
 
-        **`is_superuser` opens the door anyway, and the rule that makes that
-        safe is: a superuser sees, the roster acts.** This property is only ever
-        asked "may I open this page" — by `views.manage`, `views.systems`,
-        `views.manage_unlock` and the nav. Every path that *writes* asks
-        `membership.is_cluster_admin(did)` instead, the module function with no
-        such clause: `_edit_roster`, approve/revoke, `_scope_for`,
-        `_heal_staff_flag`. So a superuser reaches the console and the reconcile
-        button — which spends the shared read token and needs no authority — and
-        still cannot author a grant or a roster entry, because those are signed
-        by the acting admin's own registry session and no Django flag can forge
-        one. Keep that split: widening this property into the write paths for
-        consistency's sake is what it is guarding against.
+        **One kind of admin, and the roster is what says so.** A roster admin
+        is also a Django superuser, but that flag is a *copy* of this answer
+        (`membership.appoint_admin` writes it, `views._heal_admin_flags`
+        re-derives it at every login), so it is never read as the answer
+        here. Read the copy and taking somebody off the roster would stop
+        ending their access until they next happened to sign in.
 
-        The clause exists for `ensure_admin`'s `did:local:admin`, which is not
-        on the roster and never will be. Without it the break-glass account
-        opens Django's `/admin/` and not the page holding the recovery button —
+        **The one superuser that does open the door is a local one**, outside
+        the roster: `ensure_admin`'s `did:local:admin` (and a `did:dev:` row
+        in development). Without the clause the break-glass account opens
+        Django's `/admin/` and not the page holding the recovery button,
         backwards for the account that exists for when the normal way in is
         broken.
 
-        **`is_staff` is deliberately not here.** It looks like the same kind of
-        flag and is not: `membership.appoint_admin` writes it and
-        `views._heal_staff_flag` re-derives it at every login, so it is a
-        *cache* of this answer. Read it and the cache becomes the authority —
-        taking somebody off the roster would stop ending their access until they
-        next happened to sign in. `is_superuser` nothing writes on its own;
-        `ensure_admin` sets it on the break-glass row and `make_admin`
-        makes you ask for `--superuser` by name.
+        **A superuser sees, the roster acts.** This property is only ever
+        asked "may I open this page", by `views.manage`, `views.systems`,
+        `views.manage_unlock` and the nav. Every path that *writes* asks
+        `membership.is_cluster_admin(did)` instead, the module function with
+        no such clause: `_edit_roster`, approve/revoke, `_scope_for`,
+        `_heal_admin_flags`. Grants and roster entries are signed by the acting
+        admin's own registry session, and no Django flag can forge one. Keep
+        that split.
 
         `cached_property` so the nav asking on every render costs one lookup per
         request rather than one per mention. `membership` itself imports this
         module, so the import is local to the call.
         """
-        if self.is_superuser:
-            return True
-
         from corliss import membership
 
+        if self.is_superuser and not membership.is_roster_governed(self.did):
+            return True
         return membership.is_cluster_admin(self.did)
 
     @cached_property

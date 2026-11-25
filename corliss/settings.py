@@ -416,7 +416,10 @@ DEV_ADMIN_DIDS = env.list("DEV_ADMIN_DIDS", default=[])
 # --- Applications ---------------------------------------------------------
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
+    # Django's admin on Corliss's own site class: it asks the roster rather
+    # than the flags, and serves the password form only through the tunnel.
+    # See `corliss/admin_site.py`.
+    "corliss.apps.CorlissAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",

@@ -368,14 +368,13 @@ class NavMenuTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("home"))
         self.assertNotContains(resp, ">Manage<")
 
-    def test_cluster_admin_sees_the_console_but_not_the_django_admin(self):
-        # The roster grants the console alone. Handing it the Django admin as
-        # well would let a roster edit reach the session and OIDC client tables.
+    def test_cluster_admin_sees_the_console_and_the_django_admin(self):
+        # One kind of admin: the roster opens both.
         self._as_cluster_admin()
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
         self.assertContains(resp, reverse("manage"))
-        self.assertNotContains(resp, ">Django<")
+        self.assertContains(resp, reverse("admin:index"))
 
     def test_console_link_survives_an_empty_membership_cache(self):
         # The recovery path. The roster is read from the service DID's repo and
@@ -387,13 +386,16 @@ class NavMenuTests(NoRosterMixin, TestCase):
         resp = self.client.get(reverse("home"))
         self.assertContains(resp, reverse("manage"))
 
-    def test_superuser_sees_the_django_admin_without_being_on_the_roster(self):
+    def test_a_superuser_flag_off_the_roster_opens_nothing(self):
+        # A roster row's flag is a copy of the roster, not the authority: one
+        # left behind after a dismissal must not keep the menu open.
+        self.user.is_staff = True
         self.user.is_superuser = True
-        self.user.save(update_fields=["is_superuser"])
+        self.user.save(update_fields=["is_staff", "is_superuser"])
         self.client.force_login(self.user)
         resp = self.client.get(reverse("home"))
-        self.assertContains(resp, reverse("admin:index"))
-        self.assertNotContains(resp, "Manage Console")
+        self.assertNotContains(resp, reverse("admin:index"))
+        self.assertNotContains(resp, reverse("manage"))
 
     def test_cluster_admin_always_gets_the_corliss_console(self):
         # The Corliss console is served by this app, so a cluster admin always
@@ -1902,6 +1904,50 @@ class CallbackViewTests(TestCase):
         self.assertEqual(User.objects.get(did=DID).display_name, "Alice Example")
         # Asked about the authenticated DID, never the pre-resolved one.
         mock_name.assert_called_once_with(DID)
+
+    def _sign_in_as_alice(self, mock_exchange, mock_email, mock_name, state):
+        mock_exchange.return_value = (
+            {"sub": DID, "access_token": "AT", "refresh_token": "RT"},
+            "n2",
+        )
+        mock_email.return_value = ("", False)
+        mock_name.return_value = ""
+        _seed_pending(self.client, state)
+        self.client.get(
+            reverse("callback"),
+            {"state": state, "code": "code", "iss": "https://auth.example"},
+        )
+        return User.objects.get(did=DID)
+
+    @patch("corliss.views.atproto.fetch_display_name")
+    @patch("corliss.views.atproto.fetch_session_email")
+    @patch("corliss.views.atproto.exchange_code")
+    def test_a_roster_admin_signs_in_as_a_superuser(
+        self, mock_exchange, mock_email, mock_name
+    ):
+        """One kind of admin: both flags copied from the roster at sign-in."""
+        with patch("corliss.membership.is_cluster_admin", return_value=True):
+            user = self._sign_in_as_alice(
+                mock_exchange, mock_email, mock_name, "state_admin"
+            )
+        self.assertTrue(user.is_staff)
+        self.assertTrue(user.is_superuser)
+
+    @patch("corliss.views.atproto.fetch_display_name")
+    @patch("corliss.views.atproto.fetch_session_email")
+    @patch("corliss.views.atproto.exchange_code")
+    def test_signing_in_off_the_roster_clears_both_flags(
+        self, mock_exchange, mock_email, mock_name
+    ):
+        User.objects.create_user(
+            username="alice.bsky.social", did=DID, is_staff=True, is_superuser=True
+        )
+        with patch("corliss.membership.is_cluster_admin", return_value=False):
+            user = self._sign_in_as_alice(
+                mock_exchange, mock_email, mock_name, "state_gone"
+            )
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
 
     @patch("corliss.views.atproto.fetch_display_name")
     @patch("corliss.views.atproto.fetch_session_email")

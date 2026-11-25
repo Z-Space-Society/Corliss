@@ -121,20 +121,27 @@ left blank, which simply hides what it feeds. The `LITELLM_*` trio is what makes
 `/api/` able to issue keys rather than only describe them — see
 [API keys](#api-keys-api).
 
-The nav's admin links answer to **one authority**: the atproto admin roster
-(`user.is_cluster_admin`). Making someone an admin writes the roster entry *and*
-sets Django's `is_staff`, from one operation — `manage.py make_admin`, or the
-button on `/manage/`. The roster is the authority and `is_staff` is a mirror of
-it, re-derived at every login so the two cannot drift.
+There is **one kind of admin**: a current entry on the atproto admin roster
+(`user.is_cluster_admin`), and an admin can do everything, Django's `/admin/`
+included. Making someone an admin writes the roster entry *and* sets Django's
+`is_staff` and `is_superuser`, from one operation — `manage.py make_admin`, or
+the button on `/manage/`. The roster is the authority and the two flags are a
+copy of it, re-derived at every login so they cannot drift, and read-only in
+the User admin.
 
-`is_superuser` is **not** part of that pair. It bypasses every permission check,
-so `--superuser` has to be asked for by name; plain `is_staff` opens the admin
-index with no model permissions at all, which is what made merging it
-affordable. It does open `/manage/` and `/systems/`, for the break-glass account
-— see [The console](#the-console-manage) for why that costs nothing. What it
-never does is grant `is_staff`'s authority in reverse: `is_staff` stays a mirror
-of the roster, and nothing reads it to decide who is an admin. See
+Nothing reads the copy as the answer. The Django admin asks the roster on every
+request (`corliss/admin_site.py`), so an admin dismissed outside the console
+loses `/admin/` at once, not at their next sign-in. The only superusers off the
+roster are the local accounts, the break-glass `did:local:admin` and dev
+`did:dev:` rows, which the copy never touches. See
 [Membership](docs/membership.md).
+
+**Signing in to `/admin/` is handle sign-in.** Signed out, `/admin/` sends you
+to `/auth/login` and back. The stock password form at `/admin/login/` is served
+only on the tunnel host (`127.0.0.1` or `localhost`), where the break-glass
+account uses it; on any other host it redirects to handle sign-in, or answers a
+signed-in non-admin with a 404, for GET and POST alike. That is what lets the
+edge publish `/admin/` without putting the break-glass password on the internet.
 
 ### Why atproto login can't work over localhost
 
@@ -337,15 +344,15 @@ be correct.
 ### Admin
 
 ```bash
-manage.py make_admin alice.bsky.social   # cluster admin: roster entry + is_staff.
-                                         #   --remove reverses it; --superuser opts in
-                                         #   to the flag that bypasses every check.
+manage.py make_admin alice.bsky.social   # cluster admin: roster entry, which makes
+                                         #   them a Django superuser too.
+                                         #   --remove reverses it.
                                          #   Needs the service account's session.
                                          #   --admit [--tier level-N] first grants
                                          #   membership to someone who has none.
 manage.py list_admins                    # the current admins, and the service
                                          #   session, as JSON for tooling
-manage.py sync_admins                    # re-derive every is_staff flag from the
+manage.py sync_admins                    # re-derive every admin flag from the
                                          #   roster; changes no admins, needs no
                                          #   service session
 manage.py ensure_admin                   # idempotent break-glass local admin;
@@ -410,7 +417,7 @@ without a shell. Corliss clears it itself when a member edits their email at
 | Systems — the stack, with live health checks and each service's provisioned version (cluster admins) | `/systems/` |
 | Deploys: each service's last provision run, its history, and each run's log, as zai-ops recorded them (cluster admins) | `/systems/deploys/`, `/systems/deploys/<host>/`, `/systems/deploys/<host>/<stamp>/` |
 | Notes: every notes workspace on scn-notes, and how much each member holds, counts and sizes only (cluster admins) | `/systems/notes/` |
-| Django admin | `/admin/` |
+| Django admin (cluster admins; signed out, redirects to `/auth/login`; the password form only on the tunnel host) | `/admin/` |
 
 The parenthesised audiences above are the four access levels, and each is one
 decorator in [`corliss/views.py`](corliss/views.py): nothing (signed out),
@@ -587,7 +594,7 @@ the registry, this re-derives LiteLLM from the cache.
 ## The console: `/manage/`
 
 Members, admins, and reconciliation, for cluster admins. Gated on
-`user.is_cluster_admin` — a live roster read, **or** `is_superuser`. The roster
+`user.is_cluster_admin` — a live roster read, **or** a local superuser. The roster
 clause is what keeps it reachable on a cluster rebuilt from nothing: the roster
 needs no database and no cache, so an admin can arrive with `MembershipCache`
 empty and every member locked out, and press the button that fills it. The
@@ -597,7 +604,9 @@ recovered.
 The superuser clause covers the case one step worse — the roster unreadable, or
 the service session lapsed — where the break-glass `did:local:admin` is the only
 way in. It is never on the roster, so without the clause it opens Django's
-`/admin/` and not the page holding the recovery button.
+`/admin/` and not the page holding the recovery button. The clause applies to the
+local accounts only: a roster admin's `is_superuser` is a copy of the roster and
+is never what lets them in.
 
 **A superuser sees; the roster acts.** That is the whole safety argument, and it
 is structural rather than a policy: reconcile spends the shared read token and
@@ -1737,7 +1746,7 @@ second confidential client, and **only roster admins may complete it**.
   `access_denied` page and no code: home would tell them they are a member,
   which they already know.
 - **It asks `membership.is_cluster_admin`, never `User.is_cluster_admin`.**
-  The property lets a Django superuser see the admin pages here. Handing a
+  The property lets the break-glass superuser see the admin pages here. Handing a
   session into another system is an action, and actions answer to the roster.
 - **No back-channel logout.** PocketBase implements none, so a dismissed
   admin keeps their hub session until its auth token expires. zai-ops sets

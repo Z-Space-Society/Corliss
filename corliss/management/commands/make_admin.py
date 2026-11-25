@@ -6,21 +6,16 @@
   manage.py make_admin alice.bsky.social --admit            # not a member yet
   manage.py make_admin alice.bsky.social --admit --tier level-2
 
-**One "admin", two halves, written together.** Being an admin means a current
-entry on the registry's public roster — that is the authority, the thing
-scn-member-registry's Lua checks before it will accept a grant — and
-`is_staff`, which opens Django's `/admin/`. This command writes both, and so
-does the button on `/manage/`; both call `membership.appoint_admin`. Making
-them one operation is the point: two ways to be an admin was one too many.
+**One kind of admin.** Being an admin means a current entry on the
+registry's public roster — that is the authority, the thing
+scn-member-registry's Lua checks before it will accept a grant — and an admin
+can do everything, Django's `/admin/` included. So appointing also sets
+`is_staff` and `is_superuser` on their row, as copies of the roster; the
+Django admin still asks the roster on every request (`corliss.admin_site`).
+This command and the button on `/manage/` both call `membership.appoint_admin`.
 
 The roster is written **first**. If that fails nothing has changed, rather than
 leaving somebody holding a Django flag the registry has never heard of.
-
-`is_superuser` is **not** granted, and `--superuser` exists only for the
-operator who means it. That flag bypasses every permission check, so setting it
-on an ATProto identity means a compromised ATProto session opens the Django
-admin with nothing left to stop it. Plain `is_staff` opens the admin with
-whatever model permissions the row has, which by default is none.
 
 This command needs the **service account's stored session**, because the roster
 lives in that account's own repo and atproto has no cross-repo write. Sign in
@@ -65,7 +60,8 @@ User = get_user_model()
 class Command(BaseCommand):
     help = (
         "Make an ATProto handle a cluster admin: a current entry on the "
-        "registry roster, plus Django's is_staff. --remove reverses it."
+        "registry roster, which makes them a Django superuser too. --remove "
+        "reverses it."
     )
 
     def add_arguments(self, parser):
@@ -98,14 +94,6 @@ class Command(BaseCommand):
             help=(
                 "The tier --admit grants. Ignored for someone who is already "
                 f"a member. Default: {membership.DEFAULT_TIER}."
-            ),
-        )
-        parser.add_argument(
-            "--superuser",
-            action="store_true",
-            help=(
-                "Also set is_superuser, which bypasses every permission check. "
-                "Rarely what you want."
             ),
         )
 
@@ -146,8 +134,6 @@ class Command(BaseCommand):
         if note:
             self.stdout.write(self.style.WARNING(f"  {note}"))
 
-        if opts["superuser"] and not opts["remove"]:
-            self._grant_superuser(did, handle)
         self._report_scope(did)
 
     def _resolve(self, handle, given):
@@ -165,32 +151,6 @@ class Command(BaseCommand):
                 f"in alsoKnownAs (found {resolved_handle!r})"
             )
         return did
-
-    def _grant_superuser(self, did, handle):
-        """Escalate an existing row, or create one carrying the flag.
-
-        Separate from the roster write above because it is a different
-        authority with a different blast radius, asked for explicitly. Never
-        *withdrawn* here: a command that silently demoted the account an
-        operator is currently using would be a worse surprise than the one it
-        is fixing.
-        """
-        user, created = User.objects.get_or_create(
-            did=did,
-            defaults={"username": handle, "is_staff": True, "is_superuser": True},
-        )
-        if created:
-            user.set_unusable_password()
-            user.save(update_fields=["password"])
-        elif not user.is_superuser:
-            user.is_superuser = True
-            user.save(update_fields=["is_superuser"])
-        self.stdout.write(
-            self.style.WARNING(
-                "  is_superuser is set: this row bypasses every permission "
-                "check in Django."
-            )
-        )
 
     def _report_scope(self, did):
         """Say what the registry will actually accept, which can lag."""

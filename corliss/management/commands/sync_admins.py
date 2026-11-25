@@ -4,7 +4,8 @@
 
 `make_admin` changes who is an admin and writes every half as it goes. This
 changes nobody: it re-asserts, for the roster as it stands, the one thing
-Corliss keeps a copy of — the `is_staff` mirror (`membership.sync_staff_mirror`).
+Corliss keeps a copy of — the `is_staff` and `is_superuser` flags
+(`membership.sync_admin_flags`).
 It exists for zai-ops' `scn-config`, whose Cluster Admins entry applies the
 roster to everything that holds a copy of it, and Corliss is one of those.
 
@@ -25,11 +26,11 @@ from corliss import membership
 
 
 class Command(BaseCommand):
-    help = "Re-derive every is_staff flag from the admin roster. Changes no admins."
+    help = "Re-derive every admin flag from the admin roster. Changes no admins."
 
     def handle(self, *args, **opts):
         try:
-            granted, cleared = membership.sync_staff_mirror()
+            granted, cleared = membership.sync_admin_flags()
         except membership.RosterError as exc:
             raise CommandError(str(exc)) from exc
 

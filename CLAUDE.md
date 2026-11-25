@@ -173,7 +173,7 @@ so widening one cannot widen the other.
   the reconcile button), and `/` (where every refusal lands). The rule is about
   *default coverage*; do not read it as a rule about decorators.
 - **`@admin_required` opens a page and never authorizes a write.** It asks
-  `User.is_cluster_admin`, the property, whose `is_superuser` clause is what
+  `User.is_cluster_admin`, the property, whose local-superuser clause is what
   lets `did:local:admin` reach the reconcile button. Every write re-asks
   `membership.is_cluster_admin(did)` at action time. See the split below.
 - **Gate at `/oidc/authorize`, not at login.** Only the exchange is reached every
@@ -184,8 +184,8 @@ so widening one cannot widen the other.
   form instead of `unauthorized_client`.
 - **The Beszel client is admins-only, and that is asked of
   `membership.is_cluster_admin`, the module function.** Never the
-  `User.is_cluster_admin` property, whose `is_superuser` clause would hand a
-  Django superuser a session in another system. The gate lives in code on the
+  `User.is_cluster_admin` property, whose local-superuser clause would hand the
+  break-glass account a session in another system. The gate lives in code on the
   client table (`oidc.confidential_clients`), never in a setting.
 - **The resume after login does not gate; the target does.** `/auth/login` is
   never gated and neither is the hop back — a refused member is refused by the
@@ -199,39 +199,40 @@ so widening one cannot widen the other.
 
 ## One admin, and the roster is what says so
 
-Corliss used to hold these apart — a roster admin and a Django staff member were
-different people by design. They are now one thing, deliberately merged: "who is
-an admin" having two answers was a confusion that cost more than the separation
-bought, and `is_staff` was referenced *nowhere* in this app's own logic. It only
-ever opened Django's `/admin/`.
+There is one kind of admin: a current place on the atproto roster, and an admin
+can do everything, Django's `/admin/` included. Corliss used to keep a roster
+admin and a Django superuser apart; two answers to "who is an admin" cost more
+than the separation bought, so they were collapsed.
 
 - **`is_cluster_admin` is the authority**, and it is a live read of the atproto
-  roster record. It governs `/manage/` and `/systems/`, and it is never stored.
-- **`is_staff` is a mirror of it, never a second source.** `membership.appoint_admin`
-  writes both halves; `views._heal_staff_flag` re-derives it at every login, so a
-  half-failed write self-corrects rather than drifting. `User.is_cluster_admin`
-  still never consults `is_staff` — the mirror must not become the authority.
-- **`is_superuser` stays a separate, explicit opt-in.** `is_staff` alone opens the
-  admin index with no model permissions, which is why merging it was affordable;
-  `--superuser` bypasses every permission check and has to be asked for by name.
-  `_heal_staff_flag` skips superusers in both directions, so it can never lock out
-  an account somebody deliberately escalated.
-- **A superuser sees; the roster acts.** `User.is_cluster_admin` — the property,
-  asked only by `/manage/`, `/systems/`, `manage_unlock` and the nav — returns
-  true for `is_superuser`, so `ensure_admin`'s `did:local:admin` can reach the
-  recovery button instead of only Django's `/admin/`. Every path that *writes*
-  asks `membership.is_cluster_admin(did)`, the module function, which has no such
-  clause. **That split is the entire safety argument, so do not "unify" the two
-  spellings.** It holds structurally as well as by convention: reconcile spends
-  the shared read token and needs no authority, while a grant or a roster entry
-  is signed by the acting admin's own registry session, and no Django flag can
-  forge a DPoP proof.
-- **The clause is `is_superuser` and must never become `is_staff`.** They look
-  alike and are not: `is_staff` is written by `appoint_admin` and re-derived by
-  `_heal_staff_flag`, so it is a *cache* of the roster's answer, and reading it
-  here would make the cache the authority — dismissing an admin would stop
-  taking effect until they next signed in. `is_superuser` is written by nothing
-  automatic. This was tried and reverted; do not re-propose it.
+  roster record. It governs `/manage/`, `/systems/` and Django's `/admin/`, and
+  it is never stored.
+- **`is_staff` and `is_superuser` are a copy of it, never a second source.**
+  `membership.appoint_admin` and `dismiss_admin` write both flags with the
+  roster entry; `views._heal_admin_flags` re-derives them at every login and
+  `sync_admins` for everyone at once. Nothing reads the copy as the answer:
+  `User.is_cluster_admin` ignores a roster row's `is_superuser`, and the
+  Django admin (`admin_site.CorlissAdminSite.has_permission`) asks the roster
+  on every request, so an admin dismissed outside the console loses `/admin/`
+  at once rather than at their next sign-in. In the User admin the two flags
+  are read-only; Make Admin on `/manage/` is how they change.
+- **The local accounts are the only superusers off the roster.**
+  `membership.LOCAL_DID_PREFIXES`: `ensure_admin`'s `did:local:admin` and the
+  dev bypass's `did:dev:` rows. The mirror never touches them, and the
+  property's superuser clause applies to them alone, so the break-glass account
+  reaches the reconcile button when the roster is unreadable.
+- **The password form is served on the tunnel host only.**
+  `CorlissAdminSite.login` answers `/admin/login/` on any other host by sending
+  a signed-out visitor to handle sign-in (`/auth/login?next=`) and a signed-in
+  non-admin to a 404, GET and POST alike. The edge publishes `/admin/` so roster
+  admins can reach it; the break-glass password still never meets the
+  internet. Do not "simplify" this into serving the stock form everywhere.
+- **A superuser sees; the roster acts.** Every path that *writes* asks
+  `membership.is_cluster_admin(did)`, the module function, at action time:
+  reconcile spends the shared read token and needs no authority, while a grant
+  or a roster entry is signed by the acting admin's own registry session, and
+  no Django flag can forge a DPoP proof. Do not widen the property into the
+  write paths.
 - **Authority is asked at the event's timestamp** (`Roster.was_admin_at`), never
   "is this DID an admin now". Removing an admin ends their authority going
   forward; it must not un-write what they already approved.
@@ -316,7 +317,7 @@ account's stored session. The actor's DID is recorded in the entry (`addedBy` /
   `membership.handles_for`, whose fallback is a DID-document fetch per unknown
   DID. This page has to render when the network does not.
 - **Admin status renders from `is_staff`**, the local mirror, not a roster read
-  per request. The roster stays the authority; `_heal_staff_flag` re-derives the
+  per request. The roster stays the authority; `_heal_admin_flags` re-derives the
   mirror at every login and `appoint_admin` writes both together.
 - **Revoking a member who is an admin cascades, admin first.** That order is the
   one whose half-done state is safe: a member who is not an admin, rather than a
@@ -406,7 +407,7 @@ must not drift.
 - **A `DEV_ADMIN_DIDS` account gets Django `is_superuser` at dev login**
   (`views._apply_dev_superuser`), because `is_staff` alone opens the admin index
   with no model permissions and the point of a bypass is not needing a second
-  setup step. Mirrored rather than set, the way `_heal_staff_flag` mirrors the
+  setup step. Mirrored rather than set, the way `_heal_admin_flags` mirrors the
   roster, so dropping a DID from the list clears the flag at the next dev login.
   Same three guards, and reachable only from `dev_login`.
 - **atproto login genuinely cannot work over localhost**, and the protocol's
