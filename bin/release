@@ -25,8 +25,8 @@ set -euo pipefail
 # The deploy checklist below is specific to the Z-Space AI cluster (the only
 # place Corliss is deployed today). Nothing else in this script — or in the app —
 # assumes it.
-CONTROL_NODE_CT=100         # zai-ops' Ansible control node, entered with `pct enter`
-ZAI_OPS_DIR=/opt/zai-ops    # where the blueprint lives on that node
+CONTROL_NODE_CT=100         # corliss-ops' Ansible control node, entered with `pct enter`
+OPS_DIR=/opt/corliss-ops    # where the blueprint lives on that node
 SITE_URL=https://sharedcomputer.network
 
 # Run from the repo root no matter the caller's CWD, self-located off this
@@ -50,7 +50,7 @@ Remaining steps to deploy $tag:
      trigger "timer", and its log if it failed. A cluster pinned to a tag
      doesn't move; deploy there by hand from the control node:
        pct enter $CONTROL_NODE_CT
-       cd $ZAI_OPS_DIR/ansible && ansible-playbook provision.yml --limit corliss
+       cd $OPS_DIR/ansible && ansible-playbook provision.yml --limit corliss
 
   2. Confirm it landed. The live footer should now read $tag
        curl -s $SITE_URL/auth/login | grep -o 'v[0-9][^<]*'
